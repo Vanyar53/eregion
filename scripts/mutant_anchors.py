@@ -5,7 +5,8 @@ places a mutant is written are read: the harness's own blocks, and each lot's fi
 scripts/mutants/<lot>.py, which the harness loads (CI5, #512). An id two places take is a fault
 naming them; so is a lot's file without a mutant, or whose TESTS names another's mutant; so is
 a reason (a mutant's sixth field) whose mark the harness does not read (CI6e, #553): its mutant
-would be taken for an unknown survivor; so is a TIMING reason that names no race test (test_…).
+would be taken for an unknown survivor; so is a TIMING reason that names no race test (test_…); so is an entry of
+scripts/mutants/narrowed.json that no longer applies, or names a test its file lost (CI10a).
 
     python scripts/mutant_anchors.py            # the checkout this script is in
     python scripts/mutant_anchors.py /path/to/a/worktree
@@ -24,6 +25,7 @@ from __future__ import annotations
 import ast
 import collections
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -87,6 +89,7 @@ def after_guard(source: str, rel: str = "scripts/mutation_check.py") -> list[str
 
 
 HARNESS = "scripts/mutation_check.py"
+NARROWED = "scripts/mutants/narrowed.json"     # the narrowed targets (CI10a)
 
 
 def places(mutants: list, lots: dict) -> dict[str, list[str]]:
@@ -139,6 +142,31 @@ def reason_faults(mutants: list, marks: tuple) -> list[str]:
     return faults
 
 
+def narrowed_faults(mc, root: Path) -> list[str]:
+    """CI10a: an entry of scripts/mutants/narrowed.json that no longer applies (its mutant gone, or
+    its lot's target no longer the whole file it was measured on: `--narrow` it again), or a node
+    of it that its file no longer defines — the harness would run a test that is not there."""
+    load = getattr(mc, "load_narrowed", None)
+    if load is None:
+        return []
+    whole, faults = getattr(mc, "WHOLE", {}), []
+    for mid, entry in sorted(load(root / NARROWED).items()):
+        if mid not in whole:
+            faults.append(f"{mid}: its narrowed.json entry no longer applies (its mutant gone, or its target "
+                          f"no longer {entry['whole']}): run --narrow {entry['whole']} again")
+            continue
+        for node in entry["tests"].split():
+            path, _, rest = node.partition("::")
+            name = rest.split("::")[-1].split("[")[0]
+            try:
+                text = (root / path).read_text(encoding="utf-8")
+            except OSError:
+                text = ""
+            if not name or not re.search(rf"^\s*(?:async\s+)?def\s+{re.escape(name)}\s*\(", text, re.M):
+                faults.append(f"{mid}: its narrowed test {node} is not defined in {path}: run --narrow again")
+    return faults
+
+
 def check(root: Path) -> list[str]:
     spec = importlib.util.spec_from_file_location("mutation_check", root / HARNESS)
     mc = importlib.util.module_from_spec(spec)
@@ -153,6 +181,9 @@ def check(root: Path) -> list[str]:
     faults += [f for m in mutants if (f := _fault(m, getattr(mc, "RENAME", None), root, tracked))]
     faults += after_guard((root / "scripts/mutation_check.py").read_text())
     faults += reason_faults(mutants, tuple(getattr(mc, "KNOWN_MARKS", ())))
+    faults += narrowed_faults(mc, root)
+    if (root / NARROWED).exists() and NARROWED not in tracked:
+        faults.append(f"{NARROWED}: not tracked by git: the gate would measure the whole files")
     print(f"{len(mc.MUTANTS)} mutants and {len(mutants) - len(mc.MUTANTS)} of the control set "
           f"({len(lots)} lot file(s) in scripts/mutants/), {len(faults)} fault(s)")
     return faults

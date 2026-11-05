@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -148,7 +149,8 @@ def test_every_lot_s_mutants_are_measured_by_the_harness_run_as_a_script():
         assert ids, path.name
         assert sorted(ids - as_a_script) == [], path.name
         assert sorted(ids - {m[0] for m in imported.MUTANTS + imported.CONTROL}) == [], path.name
-        assert {mid: imported.TESTS[mid] for mid in tests} == tests, path.name
+        # A target narrowed by scripts/mutants/narrowed.json (CI10a) keeps its lot's in WHOLE.
+        assert {mid: imported.WHOLE.get(mid, imported.TESTS[mid]) for mid in tests} == tests, path.name
     assert {"M3580", "M3586"} <= _lot_file_ids(LOTS_DIR / "CI5.py")[0]
 
 
@@ -300,3 +302,28 @@ def test_the_tree_s_meta_test_skips_in_a_copy_the_harness_mutates_and_says_why(m
         test_every_mutant_of_the_tree_applies_and_says_a_reason_it_reads()
     mc = _load(HARNESS, "mutation_check_mark")
     assert mc.MUTANT_RUN == MUTANT_RUN
+
+
+# ── CI10a (#580): scripts/mutants/narrowed.json, read as the harness reads it ─────────────────
+
+def test_a_narrowed_entry_that_no_longer_applies_or_names_a_lost_test_is_a_fault(tmp_path):
+    """An entry whose mutant's target moved (or whose mutant went), or a node its file no longer
+    defines: the gate would measure a mutant on a test that is not there — said, never run."""
+    import types
+    mc = _load(HARNESS, "mutation_check_ci10a")
+    (tmp_path / "scripts" / "mutants").mkdir(parents=True)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_cd.py").write_text("def test_here():\n    pass\n\nasync def test_too():\n    pass\n")
+    entries = {"M1": {"whole": "tests/test_cd.py", "tests": "tests/test_cd.py::test_here[x-1] tests/test_cd.py::test_too"},
+               "M2": {"whole": "tests/test_cd.py", "tests": "tests/test_cd.py::test_gone"},
+               "M3": {"whole": "tests/test_cd.py", "tests": "tests/test_cd.py::test_here"}}
+    (tmp_path / "scripts" / "mutants" / "narrowed.json").write_text(json.dumps({"mutants": entries}))
+    fake = types.SimpleNamespace(load_narrowed=mc.load_narrowed, WHOLE={"M1": "tests/test_cd.py", "M2": "tests/test_cd.py"})
+    faults = anchors.narrowed_faults(fake, tmp_path)
+    assert len(faults) == 2
+    assert faults[0].startswith("M2: its narrowed test tests/test_cd.py::test_gone is not defined")
+    assert faults[1].startswith("M3: its narrowed.json entry no longer applies")
+
+
+def test_the_tree_s_narrowed_entries_all_apply():
+    assert anchors.narrowed_faults(_load(HARNESS, "mutation_check_ci10a_tree"), ROOT) == []

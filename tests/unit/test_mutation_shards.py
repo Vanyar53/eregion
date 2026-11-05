@@ -556,8 +556,9 @@ def test_a_shard_s_json_says_each_mutant_s_seconds_and_each_target_s(tmp_path, m
 
 
 def test_a_shard_runs_its_heaviest_first(tmp_path, monkeypatch):
-    """The unmutated runs, then the mutants, each pool the heaviest first by the durations measured:
-    a long run started last would make the shard's tail."""
+    """The unmutated runs and the mutants in one pool (CI10a, L4), the heaviest first by the durations
+    measured: a long run started last would make the shard's tail, and a long unmutated run no longer
+    holds every worker before the first mutant."""
     mutants = [(f"M{i}", f"bug {i}", "code.py", f"line {i}\n", f"LINE {i}\n") for i in range(4)]
     monkeypatch.setattr(mc, "MUTANTS", mutants)
     monkeypatch.setattr(mc, "CONTROL", [])
@@ -575,10 +576,10 @@ def test_a_shard_runs_its_heaviest_first(tmp_path, monkeypatch):
         return copy.name != "base"
     monkeypatch.setattr(mc, "_run", run)
     assert mc.main(["--rounds", "1", "--jobs", "1"]) == 0
-    assert order == [("base", "tests/unit/test_M0.py"), ("base", "tests/unit/test_M2.py"),
-                     ("base", "tests/unit/test_M1.py"), ("base", "tests/unit/test_M3.py"),
-                     ("mutant", "tests/unit/test_M3.py"), ("mutant", "tests/unit/test_M1.py"),
-                     ("mutant", "tests/unit/test_M2.py"), ("mutant", "tests/unit/test_M0.py")]
+    assert order == [("mutant", "tests/unit/test_M3.py"), ("base", "tests/unit/test_M0.py"),
+                     ("mutant", "tests/unit/test_M1.py"), ("base", "tests/unit/test_M2.py"),
+                     ("mutant", "tests/unit/test_M2.py"), ("base", "tests/unit/test_M1.py"),
+                     ("mutant", "tests/unit/test_M0.py"), ("base", "tests/unit/test_M3.py")]
 
 
 @pytest.mark.parametrize("n", ["0", "-3", "x", "1.5"])
@@ -892,3 +893,377 @@ def test_every_run_of_a_copy_carries_the_harness_s_mark(tmp_path, monkeypatch):
     monkeypatch.delenv(mc.MUTANT_RUN, raising=False)
     assert mc._run(tmp_path, 60, target="tests/unit/test_x.py") is False
     assert seen[0][mc.MUTANT_RUN] == "1" and mc.MUTANT_RUN == "EREGION_MUTANT_RUN"
+
+
+# ── CI10a (#580): the levers of the CI9 study ────────────────────────────────────────────────
+# L1: a mutant whose target is a heavy file whole, on the fastest tests of it that catch it
+# (scripts/mutants/narrowed.json, `--narrow FILE`). L2: one round where no chance plays. L3: the
+# machines' unmutated run left to the gate's invariants job (`--skip-machine-baseline`). L4: the
+# unmutated runs and the mutants in one pool. `--machines`: the mutants of the machines only.
+
+def _files(monkeypatch, tmp_path, files: dict) -> None:
+    """Test files the rules read, in a tree of the test's own."""
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    monkeypatch.setattr(mc, "REPO", tmp_path)
+    monkeypatch.setattr(mc, "_SOURCES", {})
+
+
+_PLAIN = "def test_x():\n    assert True\n"
+_DRAWS = "from hypothesis import given\n\n" + _PLAIN
+_MACHINE = ("from hypothesis.stateful import RuleBasedStateMachine\n\n"
+            "class World(RuleBasedStateMachine):\n    pass\n")
+
+
+def test_a_target_no_chance_moves_has_one_round(monkeypatch, tmp_path):
+    """L2: a second round replays the same test on the same code — one round, whatever is asked."""
+    _files(monkeypatch, tmp_path, {"tests/unit/test_plain.py": _PLAIN, "tests/unit/test_other.py": _PLAIN})
+    m = ("M1", "bug", "code.py", "a", "b")
+    assert mc.rounds_of(m, "tests/unit/test_plain.py", 2) == 1
+    assert mc.rounds_of(m, "tests/unit/test_plain.py::test_x tests/unit/test_other.py -k x", 3) == 1
+    assert mc.rounds_of(m, "tests/unit/test_plain.py", 1) == 1
+
+
+def test_a_target_that_draws_keeps_its_rounds(monkeypatch, tmp_path):
+    """L2: one file importing Hypothesis in the target — the machines, a property test — and every
+    round draws new seeds: the rounds asked."""
+    _files(monkeypatch, tmp_path, {"tests/unit/test_plain.py": _PLAIN, "tests/unit/test_prop.py": _DRAWS,
+                                   "tests/unit/test_db.py": "import hypothesis.database\n" + _PLAIN})
+    m = ("M1", "bug", "code.py", "a", "b")
+    assert mc.rounds_of(m, "tests/unit/test_plain.py tests/unit/test_prop.py::test_x", 2) == 2
+    assert mc.rounds_of(m, "tests/unit/test_db.py", 3) == 3
+    # An unreadable file keeps the rounds: never one round guessed.
+    assert mc.rounds_of(m, "tests/unit/test_gone.py", 2) == 2
+
+
+def test_the_rule_on_this_tree_keeps_the_rounds_where_chance_plays():
+    """L2 on the tree: the machines, the property tests, the races keep two rounds; the CD, one."""
+    m = ("M1", "bug", "code.py", "a", "b")
+    for drawn in ("tests/unit/test_invariants.py", "tests/unit/test_invariants_aws.py", "tests/unit/test_arm_urls.py",
+                  "tests/unit/test_entries_calls.py", "tests/unit/test_unexpected_decision.py",
+                  "tests/unit/test_locks.py -k concurrent", "tests/unit/test_exercise.py"):
+        assert mc.rounds_of(m, drawn, 2) == 2, drawn
+    for plain in ("tests/unit/test_host_cd.py", "tests/unit/test_invariant_regressions.py",
+                  "tests/unit/test_console.py", "tests/unit/test_release.py"):
+        assert mc.rounds_of(m, plain, 2) == 1, plain
+
+
+def test_a_target_that_races_keeps_its_rounds(monkeypatch, tmp_path):
+    """L2: the races (TIMED: real processes, real clocks) draw no seed, yet a round may not see the
+    race the other does."""
+    _files(monkeypatch, tmp_path, {rel: _PLAIN for rel in mc.TIMED})
+    assert set(mc.TIMED) == {"tests/unit/test_locks.py", "tests/unit/test_exercise.py"}
+    for rel in mc.TIMED:
+        assert mc.rounds_of(("M1", "bug", "code.py", "a", "b"), f"{rel}::test_x", 2) == 2, rel
+
+
+def test_a_timing_mutant_keeps_its_rounds(monkeypatch, tmp_path):
+    _files(monkeypatch, tmp_path, {"tests/unit/test_plain.py": _PLAIN})
+    m = ("M1", "bug", "code.py", "a", "b", "TIMING: tests/unit/test_plain.py::test_x sees it at times")
+    assert mc.rounds_of(m, "tests/unit/test_plain.py", 2) == 2
+
+
+def test_main_measures_a_deterministic_target_once(tmp_path, monkeypatch):
+    """L2 in main(): its rounds per mutant, said in its row and in its --json."""
+    _files(monkeypatch, tmp_path, {"tests/unit/test_plain.py": _PLAIN, "tests/unit/test_prop.py": _DRAWS})
+    mutants = [("M1", "bug 1", "code.py", "line 1\n", "LINE 1\n"), ("M2", "bug 2", "code.py", "line 2\n", "LINE 2\n")]
+    monkeypatch.setattr(mc, "MUTANTS", mutants)
+    monkeypatch.setattr(mc, "CONTROL", [])
+    monkeypatch.setattr(mc, "TESTS", {"M1": "tests/unit/test_plain.py", "M2": "tests/unit/test_prop.py"})
+    monkeypatch.setattr(mc, "_copy_repo", lambda dest: (dest.mkdir(parents=True), (dest / "code.py").write_text(
+        "line 1\nline 2\n")))
+    runs: list = []
+
+    def run(copy, examples, show=False, target=mc.INVARIANTS):
+        runs.append((copy.name, target))
+        return copy.name != "base"
+    monkeypatch.setattr(mc, "_run", run)
+    out = tmp_path / "m.json"
+    assert mc.main(["--rounds", "2", "--jobs", "1", "--json", str(out)]) == 0
+    assert runs.count(("M1", "tests/unit/test_plain.py")) == 1 and runs.count(("M2", "tests/unit/test_prop.py")) == 2
+    doc = json.loads(out.read_text())
+    assert doc["mutant_rounds"] == {"M1": 1, "M2": 2} and doc["rounds"] == 2
+    assert doc["mutant_targets"] == {"M1": "tests/unit/test_plain.py", "M2": "tests/unit/test_prop.py"}
+    assert [r[2] for r in doc["rows"]] == ["CAUGHT", "CAUGHT"]
+    assert doc["rows"][0][3].startswith("1/1 ") and doc["rows"][1][3].startswith("2/2 ")
+
+
+def test_the_machines_are_the_files_that_define_one(monkeypatch, tmp_path):
+    """A machine: a file defining a RuleBasedStateMachine — on this tree, the two."""
+    assert mc.machine("tests/unit/test_invariants.py") and mc.machine("tests/unit/test_invariants_aws.py")
+    assert mc.machine("tests/unit/test_invariant_regressions.py tests/unit/test_invariants.py")
+    assert not mc.machine("tests/unit/test_invariant_regressions.py")
+    assert not mc.machine("tests/unit/test_arm_urls.py") and not mc.machine("tests/unit/test_host_cd.py")
+    _files(monkeypatch, tmp_path, {"tests/unit/test_m.py": _MACHINE, "tests/unit/test_p.py": _DRAWS})
+    assert mc.machine("tests/unit/test_m.py::World") and not mc.machine("tests/unit/test_p.py")
+
+
+def _two_kinds(monkeypatch, tmp_path):
+    """Three mutants: one on a machine alone, one on a machine and a plain file, one plain."""
+    _files(monkeypatch, tmp_path, {"tests/unit/test_m.py": _MACHINE, "tests/unit/test_plain.py": _PLAIN})
+    mutants = [(f"M{i}", f"bug {i}", "code.py", f"line {i}\n", f"LINE {i}\n") for i in range(3)]
+    monkeypatch.setattr(mc, "MUTANTS", mutants)
+    monkeypatch.setattr(mc, "CONTROL", [("C1", "control", "code.py", "line 0\n", "LINE 0\n")])
+    monkeypatch.setattr(mc, "TESTS", {"M0": "tests/unit/test_m.py",
+                                      "M1": "tests/unit/test_plain.py::test_x tests/unit/test_m.py",
+                                      "M2": "tests/unit/test_plain.py", "C1": "tests/unit/test_plain.py"})
+    monkeypatch.setattr(mc, "_copy_repo", lambda dest: (dest.mkdir(parents=True), (dest / "code.py").write_text(
+        "line 0\nline 1\nline 2\n")))
+    baselines: list = []
+
+    def run(copy, examples, show=False, target=mc.INVARIANTS):
+        if copy.name == "base":
+            baselines.append(target)
+            return False
+        return True
+    monkeypatch.setattr(mc, "_run", run)
+    return mutants, baselines
+
+
+def test_skip_machine_baseline_leaves_the_machines_out_and_says_it(tmp_path, monkeypatch, capsys):
+    """L3: the shard runs no machine unmutated — the rest of a target still runs — and says so;
+    without the flag (the Monday, a local run), each target unmutated as before."""
+    _mutants, baselines = _two_kinds(monkeypatch, tmp_path)
+    assert mc.main(["--rounds", "1", "--jobs", "1"]) == 0
+    assert sorted(baselines) == sorted(mc.TESTS[m] for m in ("M0", "M1", "M2"))
+    assert "--skip-machine-baseline" not in capsys.readouterr().out
+    baselines.clear()
+    out = tmp_path / "m.json"
+    assert mc.main(["--rounds", "1", "--jobs", "1", "--skip-machine-baseline", "--json", str(out)]) == 0
+    assert sorted(baselines) == ["tests/unit/test_plain.py", "tests/unit/test_plain.py::test_x"]
+    said = capsys.readouterr().out
+    assert "--skip-machine-baseline: 2 target(s) run unmutated without their invariant machines (1 not at all)" in said
+    doc = json.loads(out.read_text())
+    assert doc["machine_baseline"] is False and set(doc["targets"]) == set(baselines)
+    assert [r[2] for r in doc["rows"]] == ["CAUGHT"] * 3               # each mutant still measured
+
+
+def test_a_plan_weighs_no_machine_run_left_to_the_gate(monkeypatch, tmp_path):
+    """L3 in the model: with skip, a machine's unmutated run weighs nothing in its shard."""
+    mutants, _ = _two_kinds(monkeypatch, tmp_path)
+    durations = {"mutants": {"M0": 10.0, "M1": 10.0, "M2": 10.0},
+                 "targets": {"tests/unit/test_m.py": 600.0, mc.TESTS["M1"]: 600.0,
+                             "tests/unit/test_plain.py::test_x": 5.0, "tests/unit/test_plain.py": 5.0}}
+    full = mc.plan(mutants, 1, 1, tests=mc.TESTS, durations=durations)
+    left = mc.plan(mutants, 1, 1, tests=mc.TESTS, durations=durations, skip=True)
+    assert full[0][2] == pytest.approx(30 + 600 + 600 + 5)
+    assert left[0][2] == pytest.approx(30 + 5 + 5)
+
+
+def test_machines_selects_the_mutants_of_the_machines(tmp_path, monkeypatch):
+    """`--machines`: the mutants whose target runs a machine, in shards and --json; the control set
+    keeps its own."""
+    mutants, _ = _two_kinds(monkeypatch, tmp_path)
+    assert [m[0] for m in mc.selected(mutants, machines=True)] == ["M0", "M1"]
+    assert [m[0] for m in mc.selected(mutants)] == ["M0", "M1", "M2"]
+    assert [m[0] for m in mc.selected(mc.CONTROL, control=True, machines=True)] == ["C1"]
+    out = tmp_path / "res"
+    out.mkdir()
+    for k in (1, 2):
+        assert mc.main(["--rounds", "1", "--jobs", "1", "--machines", "--shard", f"{k}/2",
+                        "--json", str(out / f"m{k}.json")]) == 0
+    docs = [json.loads((out / f"m{k}.json").read_text()) for k in (1, 2)]
+    assert sorted(r[0] for d in docs for r in d["rows"]) == ["M0", "M1"] and all(d["machines"] for d in docs)
+    assert mc.main(["--rounds", "1", "--jobs", "1", "--control", "--machines", "--json", str(tmp_path / "c.json")]) == 0
+    assert [r[0] for r in json.loads((tmp_path / "c.json").read_text())["rows"]] == ["C1"]
+
+
+def test_total_machines_judges_those_only(tmp_path, monkeypatch, capsys):
+    """`--total DIR --machines`: the selected mutants measured once each, the others never said
+    unmeasured; without it, as before, every mutant of the tree."""
+    _two_kinds(monkeypatch, tmp_path)
+    out = tmp_path / "res"
+    out.mkdir()
+    assert mc.main(["--rounds", "1", "--jobs", "1", "--machines", "--json", str(out / "m1.json")]) == 0
+    assert mc.main(["--rounds", "1", "--jobs", "1", "--control", "--json", str(out / "c1.json")]) == 0
+    capsys.readouterr()
+    total = ["--total", str(out), "--shards", "1", "--control-shards", "1", "--rounds", "1"]
+    assert mc.main([*total, "--machines"]) == 0
+    said = capsys.readouterr().out
+    assert "never measured" not in said and "mutants: 2/2 caught" in said and "(--machines)" in said
+    assert mc.main(total) == 1
+    assert "mutants: 1 never measured: M2" in capsys.readouterr().out
+
+
+def test_total_machines_refuses_a_shard_measured_otherwise(tmp_path, monkeypatch, capsys):
+    """A shard of every mutant read by `--total --machines`, or the reverse: no total of those."""
+    _two_kinds(monkeypatch, tmp_path)
+    out = tmp_path / "res"
+    out.mkdir()
+    assert mc.main(["--rounds", "1", "--jobs", "1", "--json", str(out / "m1.json")]) == 0
+    capsys.readouterr()
+    assert mc.main(["--total", str(out), "--shards", "1", "--control-shards", "0", "--rounds", "1",
+                    "--machines"]) == 1
+    assert "m1.json: mutants measured without --machines, not with" in capsys.readouterr().out
+
+
+def test_unmutated_runs_write_nowhere_a_mutant_reads(tmp_path, monkeypatch):
+    """L4: the unmutated runs share the mutants' pool, in a copy of their own — what they write (a
+    Hypothesis database, a cache) never reaches a mutant's copy, made while they run."""
+    mutants = [(f"M{i}", f"bug {i}", "code.py", f"line {i}\n", f"LINE {i}\n") for i in range(3)]
+    monkeypatch.setattr(mc, "MUTANTS", mutants)
+    monkeypatch.setattr(mc, "CONTROL", [])
+    monkeypatch.setattr(mc, "TESTS", {m[0]: "tests/unit/test_gone.py" for m in mutants})
+    monkeypatch.setattr(mc, "load_durations", lambda path=None, say=print: {
+        "mutants": {"M0": 1.0, "M1": 2.0, "M2": 3.0}, "targets": {"tests/unit/test_gone.py": 100.0}})
+    monkeypatch.setattr(mc, "_copy_repo", lambda dest: (dest.mkdir(parents=True), (dest / "code.py").write_text(
+        "line 0\nline 1\nline 2\n")))
+    seen: list = []
+
+    def run(copy, examples, show=False, target=mc.INVARIANTS):
+        if copy.name == "base":
+            (copy / ".hypothesis").mkdir(exist_ok=True)
+            return False
+        seen.append((copy / ".hypothesis").exists())
+        return True
+    monkeypatch.setattr(mc, "_run", run)
+    assert mc.main(["--rounds", "1", "--jobs", "1"]) == 0
+    assert seen and not any(seen)
+
+
+def test_a_narrowed_entry_applies_only_while_its_lot_targets_the_whole_file():
+    """L1: an entry gives its nodes to a mutant whose target is still the whole file it was
+    measured on — never to one whose lot has moved it, nor to an id nobody defines."""
+    entries = {"M1": {"whole": "tests/unit/test_cd.py", "tests": "tests/unit/test_cd.py::test_a"},
+               "M2": {"whole": "tests/unit/test_cd.py", "tests": "tests/unit/test_cd.py::test_b"},
+               "M9": {"whole": "tests/unit/test_cd.py", "tests": "tests/unit/test_cd.py::test_c"}}
+    tests = {"M1": "tests/unit/test_cd.py", "M2": "tests/unit/test_cd.py::test_z"}
+    assert mc.narrowed(tests, entries) == {"M1": "tests/unit/test_cd.py"}
+    assert tests == {"M1": "tests/unit/test_cd.py::test_a", "M2": "tests/unit/test_cd.py::test_z"}
+
+
+def test_narrowed_json_unreadable_narrows_nothing(tmp_path):
+    assert mc.load_narrowed(tmp_path / "absent.json") == {}
+    (tmp_path / "n.json").write_text("{not json")
+    assert mc.load_narrowed(tmp_path / "n.json") == {}
+    (tmp_path / "n.json").write_text(json.dumps({"mutants": {"M1": {"whole": "a.py", "tests": " "},
+                                                             "M2": {"whole": "a.py", "tests": "a.py::t"}}}))
+    assert mc.load_narrowed(tmp_path / "n.json") == {"M2": {"whole": "a.py", "tests": "a.py::t"}}
+
+
+def test_the_tree_s_narrowed_targets_are_its_cd_mutants_nodes():
+    """L1 on the tree: each narrowed target is at most NARROW nodes of the whole file it replaces;
+    M1014 keeps its target."""
+    assert mc.NARROW == 2
+    for mid, whole in mc.WHOLE.items():
+        nodes = mc.TESTS[mid].split()
+        assert 1 <= len(nodes) <= mc.NARROW and all(n.startswith(whole + "::") for n in nodes), mid
+    assert "M1014" not in mc.WHOLE and mc.TESTS["M1014"].startswith("tests/unit/test_host_cd.py ")
+
+
+def _junit(path: Path, cases: list) -> None:
+    body = "".join(
+        f'<testcase classname="{c}" name="{n}" time="{t}">' + (f"<{kind} message='x'/>" if kind else "") + "</testcase>"
+        for c, n, t, kind in cases)
+    path.write_text(f'<?xml version="1.0"?><testsuites><testsuite>{body}</testsuite></testsuites>')
+
+
+def test_failures_of_reads_failures_and_errors_fastest_first(tmp_path):
+    xml = tmp_path / "r.xml"
+    _junit(xml, [("tests.unit.test_cd", "test_slow", 3.0, "failure"),
+                 ("tests.unit.test_cd", "test_ok", 0.1, ""),
+                 ("tests.unit.test_cd", "test_setup[a b]", 0.1, "error"),          # a space: left out
+                 ("tests.unit.test_cd.TestKind", "test_in_class", 0.5, "error"),
+                 ("tests.unit.test_cd", "test_fast[x-1]", 0.2, "failure"),
+                 ("tests.unit.test_other", "test_elsewhere", 0.01, "failure")])
+    assert mc.failures_of(xml, "tests/unit/test_cd.py") == [
+        (0.2, "tests/unit/test_cd.py::test_fast[x-1]"), (0.5, "tests/unit/test_cd.py::TestKind::test_in_class"),
+        (3.0, "tests/unit/test_cd.py::test_slow")]
+
+
+def _narrowing(monkeypatch, catches: dict, narrow_catches: dict):
+    """narrow() on fakes: the whole file's run writes a junit report of the tests `catches` names
+    for each mutant (by its copy's name), each in its seconds; `narrow_catches[mid]` says how many
+    rounds of the narrowed target catch it."""
+    monkeypatch.setattr(mc, "_copy_repo", lambda dest: (dest.mkdir(parents=True), (dest / "code.py").write_text("a\n")))
+
+    def pytest_(copy, examples, target, *more):
+        if copy.name != "base":
+            xml = Path(more[0].split("=", 1)[1])
+            _junit(xml, [("tests.unit.test_cd", n, t, "failure") for n, t in catches.get(copy.name, [])])
+        return type("P", (), {"returncode": 0 if copy.name == "base" else 1, "stdout": ""})()
+    monkeypatch.setattr(mc, "_pytest", pytest_)
+    left: dict = dict(narrow_catches)
+
+    def run(copy, examples, show=False, target=mc.INVARIANTS):
+        left[copy.name] = left.get(copy.name, 0) - 1
+        return left[copy.name] >= 0
+    monkeypatch.setattr(mc, "_run", run)
+
+
+def test_narrow_keeps_the_fastest_catchers_caught_in_every_round(tmp_path, monkeypatch):
+    """`--narrow`: the fastest NARROW tests that catch a mutant become its target — when they catch
+    it in each round; a mutant they miss once, or that no test catches, keeps the whole file."""
+    mutants = [(f"M{i}", f"bug {i}", "code.py", "a\n", "b\n") for i in range(4)]
+    _narrowing(monkeypatch, {"M0": [("test_slow", 9.0), ("test_fast", 0.5), ("test_mid", 1.0)],
+                             "M1": [("test_a", 1.0)], "M2": [("test_b", 1.0)]},
+               {"M0": 2, "M1": 1, "M2": 2})
+    path = tmp_path / "narrowed.json"
+    path.write_text(json.dumps({"mutants": {"M1": {"whole": "tests/unit/test_cd.py", "tests": "x::y"},
+                                            "GONE": {"whole": "a.py", "tests": "a.py::t"}}}))
+    monkeypatch.setattr(mc, "MUTANTS", mutants)
+    assert mc.narrow("tests/unit/test_cd.py", mutants, 60, 2, 1, path=path, say=lambda *a, **k: None) == 0
+    doc = json.loads(path.read_text())["mutants"]
+    assert doc == {"M0": {"whole": "tests/unit/test_cd.py",
+                          "tests": "tests/unit/test_cd.py::test_fast tests/unit/test_cd.py::test_mid"},
+                   "M2": {"whole": "tests/unit/test_cd.py", "tests": "tests/unit/test_cd.py::test_b"}}
+
+
+def test_update_scales_a_measure_to_today_s_rounds(tree, tmp_path, monkeypatch):
+    """A measure made in two rounds, of a target that has one today (L2): half of it is what the
+    gate will take; one made in today's rounds (the result says it) is taken as it is."""
+    _files(monkeypatch, tmp_path, {"tests/unit/test_a.py": _PLAIN})
+    path = tmp_path / "durations.json"
+    _shard_json(tmp_path / "old" / "m", "m", seconds={"M000": 40.0})                  # before CI10a: 2 rounds
+    assert mc.update_durations([tmp_path / "old"], path, say=lambda *a, **k: None) == 0
+    assert json.loads(path.read_text())["mutants"] == {"M000": 20}
+    doc = json.loads((tmp_path / "old" / "m" / "m.json").read_text())
+    doc |= {"seconds": {"M001": 9.0}, "mutant_rounds": {"M001": 1},
+            "mutant_targets": {"M001": "tests/unit/test_a.py"}}
+    (tmp_path / "new" / "m").mkdir(parents=True)
+    (tmp_path / "new" / "m" / "m.json").write_text(json.dumps(doc))
+    assert mc.update_durations([tmp_path / "new"], path, say=lambda *a, **k: None) == 0
+    assert json.loads(path.read_text())["mutants"] == {"M000": 20, "M001": 9}
+
+
+def test_update_drops_a_measure_on_another_target(tree, tmp_path, monkeypatch):
+    """A mutant narrowed since (L1): its measure on the whole file is no measure of it — it goes,
+    and the one the file kept with it; the estimate weighs it until the gate measures it."""
+    _files(monkeypatch, tmp_path, {"tests/unit/test_a.py": _PLAIN})
+    monkeypatch.setitem(mc.TESTS, "M002", "tests/unit/test_a.py::test_x")
+    monkeypatch.setattr(mc, "WHOLE", {"M002": "tests/unit/test_a.py"})
+    path = tmp_path / "durations.json"
+    path.write_text(json.dumps({"mutants": {"M002": 300, "M003": 12}, "targets": {}}))
+    _shard_json(tmp_path / "old" / "m", "m", seconds={"M002": 280.0, "M003": 10.0})
+    assert mc.update_durations([tmp_path / "old"], path, say=lambda *a, **k: None) == 0
+    assert json.loads(path.read_text())["mutants"] == {"M003": 10}
+    doc = json.loads((tmp_path / "old" / "m" / "m.json").read_text())
+    doc |= {"mutant_targets": {"M002": "tests/unit/test_a.py::test_x", "M003": "tests/unit/test_gone.py"},
+            "mutant_rounds": {"M002": 1}}
+    (tmp_path / "new" / "m").mkdir(parents=True)
+    (tmp_path / "new" / "m" / "m.json").write_text(json.dumps(doc))
+    assert mc.update_durations([tmp_path / "new"], path, say=lambda *a, **k: None) == 0
+    assert json.loads(path.read_text())["mutants"] == {"M002": 280}
+
+
+def _steps(workflow: str) -> dict:
+    """{job id: the text of its steps' `run`}, of a workflow of this tree."""
+    import yaml
+    doc = yaml.safe_load((ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8"))
+    return {job: "\n".join(str(s.get("run", "")) for s in spec.get("steps", []))
+            for job, spec in doc["jobs"].items()}
+
+
+def test_a_shard_leaves_the_machines_only_to_a_gate_that_runs_them():
+    """L3 is the gate's alone: a shard that skips the machines' unmutated run sits in a workflow whose
+    `invariants` job runs every machine of the tree on the same tree (the whole suite, or each
+    machine's file by name). The Monday measure has no such job: it never skips them."""
+    machines = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "tests").rglob("test_*.py")
+                      if mc.MACHINE.search(p.read_text(encoding="utf-8")))
+    assert machines == ["tests/unit/test_invariants.py", "tests/unit/test_invariants_aws.py"]
+    gate = _steps("release-gate.yml")
+    if any("--skip-machine-baseline" in run for job, run in gate.items() if job in ("mutants", "control")):
+        pytest_run = next(line for line in gate["invariants"].splitlines() if "-m pytest" in line).split()
+        assert "tests/" in pytest_run or all(m in pytest_run for m in machines), pytest_run
+    assert all("--skip-machine-baseline" not in run for run in _steps("mutants.yml").values())

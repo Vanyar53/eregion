@@ -9,7 +9,8 @@ The agent (infra/glorfindel-host/cd/eregion_cd.py) runs as on H0, installed in i
 - the fake server (tests/unit/fake_discord.py): GitHub's latest release and check runs, the
   registry (GHCR, read anonymously), H0's console, and #deploy's webhook;
 - a fake cosign (tests/unit/fake_sigstore.py) as ~/.eregion-cd/cosign, the installed
-  published_image.py pinned to its sha256 (the test's copy only).
+  published_image.py pinned to its sha256 (the test's copy only);
+- one wall clock for the agent and the fake watch, which never steps back (FL1, `CLOCK`).
 No network, no VM, no Docker.
 """
 import ast
@@ -21,6 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -46,7 +48,7 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None or shutil.which("bas
 
 FAKE_DOCKER = r'''#!PYTHON
 """A fake docker: images and containers in $FAKE_DOCKER_STATE, every call in $FAKE_DOCKER_LOG."""
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
 state_p = Path(os.environ["FAKE_DOCKER_STATE"])
 st = json.loads(state_p.read_text())
@@ -154,6 +156,29 @@ elif cmd == "compose":
             hb = Path(os.environ["FAKE_HEARTBEAT"])
             hb.parent.mkdir(parents=True, exist_ok=True)
             hb.write_text("now")
+            # FL1: the beat stamped on the agent's clock (CLOCK), never on the kernel's.
+            at = int(os.environ["FAKE_CLOCK_BASE_NS"]) + time.monotonic_ns()
+            os.utime(hb, ns=(at, at))
+'''
+
+# FL1 (#540): the agent's wall clock, and the fake watch's (its beat), in these tests — the
+# system's monotonic clock from a base taken once per H0. The health compares the beat's mtime
+# with `since`, a time.time() taken before the switch: two readings of CLOCK_REALTIME, here as
+# little as 14 ms apart (measured: the fake switch is quick). That clock can be set back (WSL2
+# does it, about 65 ms every 30 s, measured), and the kernel stamps a file with its coarse clock
+# (up to 25 ms behind time.time(), measured): the beat, written after the switch, read as from
+# before it — « la watch n'a pas battu depuis la bascule », H0 sent back. A real
+# watch beats again and again during the 180 s of the health; the fake one beats once. On H0, the
+# agent runs unchanged: only these tests inject the clock, so the oracle stays « a beat after the
+# switch », its order kept by construction. Everything else (the module) is run as on H0:
+# `python eregion_cd.py <mode>`, its __file__, its sys.argv, its exit code.
+CLOCK = r'''"""The CD as on H0, its time.time() and time.time_ns() on FAKE_CLOCK_BASE_NS + CLOCK_MONOTONIC (FL1)."""
+import os, runpy, sys, time
+base = int(os.environ["FAKE_CLOCK_BASE_NS"])
+time.time_ns = lambda: base + time.monotonic_ns()
+time.time = lambda: time.time_ns() / 1e9
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
 '''
 
 
@@ -224,6 +249,9 @@ class H0:
         bin_dir.mkdir()
         (bin_dir / "docker").write_text(FAKE_DOCKER.replace("#!PYTHON", f"#!{sys.executable}"))
         (bin_dir / "docker").chmod(0o755)
+        self.clock = tmp_path / "clock" / "clock.py"
+        self.clock.parent.mkdir()
+        self.clock.write_text(CLOCK)
         self.state, self.log = tmp_path / "docker.json", tmp_path / "docker.log"
         self.registry = tmp_path / "registry.json"
         self.registry.write_text("{}")
@@ -242,7 +270,8 @@ class H0:
             "EREGION_CD_GITHUB_API": f"{fake.base}/gh", "EREGION_CD_CONSOLE": f"{fake.base}/console",
             "EREGION_CD_HEARTBEAT": str(self.heartbeat), "EREGION_CD_HEALTH_S": "0.2", "EREGION_CD_STEP_S": "0.05",
             "EREGION_DISCORD_ENV": os.devnull, "EREGION_REGISTRY_API": f"{fake.base}/registry",
-            "FAKE_REGISTRY_IMAGES": str(self.registry), **self.sig.env()})
+            "FAKE_REGISTRY_IMAGES": str(self.registry), **self.sig.env(),
+            "FAKE_CLOCK_BASE_NS": str(time.time_ns() - time.monotonic_ns())})
         fake.console_token = "tok"
         self.digest = self.image("c2", "v0.4.0")
         self.publish("v0.4.0")
@@ -266,7 +295,8 @@ class H0:
         self.fake.gh["release"] = {"tag_name": tag, "html_url": f"https://example.invalid/releases/{tag}"}
 
     def run(self, mode="run", *args, **env):
-        return subprocess.run([sys.executable, str(self.cd / "eregion_cd.py"), mode, *args], cwd=self.home,
+        return subprocess.run([sys.executable, str(self.clock), str(self.cd / "eregion_cd.py"), mode, *args],
+                              cwd=self.home,
                               env={**self.env, **env}, capture_output=True, text=True, timeout=120)
 
     def docker(self):

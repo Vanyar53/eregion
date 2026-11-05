@@ -23,6 +23,9 @@ mock_provider "azurerm" {
   }
 }
 
+# IR1b : le module lit azuread (identity_executor.tf, désactivé) : un faux, jamais Graph.
+mock_provider "azuread" {}
+
 override_data {
   target = data.azurerm_virtual_machine.session_drain["vm-celebrimbor-gondolin"]
   values = {

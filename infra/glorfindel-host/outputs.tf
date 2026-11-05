@@ -41,3 +41,13 @@ output "workspace_id" {
   description = "AZURE_WORKSPACE_ID à mettre dans host.env."
   value       = data.azurerm_log_analytics_workspace.bench.workspace_id
 }
+
+output "identity_executor_client_id" {
+  description = "IR1b : EREGION_IDENTITY_EXECUTOR_CLIENT_ID — l'application de l'exécuteur d'identité (vide : désactivé). Jamais une cible (eregion_core/never_target.py)."
+  value       = var.identity_executor_enabled ? azuread_application.identity_executor[0].client_id : ""
+}
+
+output "identity_executor_object_id" {
+  description = "IR1b : l'object id du principal de l'exécuteur d'identité (vide : désactivé) — celui à qui IDI1 donne la propriété des applications inscrites, et IDI1b ses rôles d'annuaire bornés."
+  value       = var.identity_executor_enabled ? azuread_service_principal.identity_executor[0].object_id : ""
+}

@@ -135,7 +135,12 @@ glorfindel/
                           graph.py (IR1a : Microsoft Graph en lecture seule, un GET et rien d'autre ; Unreadable : un droit,
                           une erreur, un délai), entra_plan.py + entra_items.py + entra_grants.py (IR1a : le plan d'une carte
                           identity_change, par le code, ses ids lus dans Graph, jamais inventés), entra_check.py (IR1a : Verify,
-                          held / not_held / unreadable, jamais held sans la réponse de Graph)
+                          held / not_held / unreadable, jamais held sans la réponse de Graph),
+                          identity_contract.py (IR1b : le contrat de l'exécuteur d'identité, lu à son
+                          démarrage — son jeton Graph puis ses droits relus en lecture seule, contre la
+                          liste fermée ; beyond_contract, contract_unreadable : passif, il refuse de
+                          démarrer ; `glorfindel identity-contract`. Son application : Terraform de H0,
+                          infra/glorfindel-host/identity_executor.tf, désactivée par défaut)
                           backup.py : check_backup_points ; list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
                           indépendant de l'état des VMs (source de vérité backup même VM éteinte). Cheap leg : 1 appel
                           paginé, pas de count RP par item (count = check_backup_points par VM, opt-in). Read-only OK.

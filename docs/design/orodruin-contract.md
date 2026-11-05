@@ -344,6 +344,9 @@ fenêtres qu'il a fermées : chaque injecteur ouvre la sienne avant de toucher s
   en `Cancelling` après l'annulation est signalée.
 - Une fenêtre fermée étiquette encore ses cibles pendant sa grâce (15 min, le décalage de
   détection), et non plus jusqu'à 2 h 15.
+- IDI1 : les deux rôles d'application de Microsoft Graph d'Orodruin (`graph_read_enabled`) ne sont pas
+  retirés par le kill, qui ne retire que les attributions ARM. Ce sont des lectures ; les retirer :
+  `graph_read_enabled = false`, puis `make orodruin-lock`, sous un Administrateur des rôles privilégiés.
 
 **Qui ferme les fenêtres.** L'identité d'Orodruin vient d'être révoquée. Le compte du canal n'a
 pas de clé partagée, et l'opérateur n'avait aucun droit sur ses données. D'où une attribution de
@@ -612,7 +615,22 @@ Graph de l'identité, demandé par IMDS, sans aucun appel à Graph ni droit pour
 | `scp` | absent | `graph_unlisted_right` : le jeton d'un utilisateur (le poste d'un opérateur), pas l'identité d'Orodruin |
 
 Un jeton qu'on ne peut avoir → `graph_unreadable`. Chaque fois : `passive`, comme une attribution
-ARM hors du banc. Mutants M3860, M3861, M3906 (le contrat), M3862, M3863 (Terraform). Tests :
+ARM hors du banc — **une fois le droit Graph déclaré**.
+
+**Déclaré, ou non** (relecture d'IDI1 : la garantie ne doit faire tomber aucun Orodruin à la
+release). Le droit Graph est déclaré quand `orodruin.env` nomme le tenant du banc
+(`EREGION_TENANT_ID`, `GRAPH_DECLARED_ENV`) : c'est le geste qui fait lire Entra ID à la garde d'une
+identité, et sans lui elle refuse toute identité — une variable de plus dirait la même chose.
+
+| | Non déclaré (tout Orodruin d'avant les gestes d'IDI1) | Déclaré |
+|---|---|---|
+| un rôle d'application dans le jeton | `passive`, `graph_undeclared_right` : un droit Graph que personne n'a déclaré | strict : les deux lectures seules |
+| un `wids` hors d'`APP_DEFAULT_WIDS` | **dit** par `orodruin-check` (`⚠ graph_directory_role <valeur>`), sans passer `passive` : l'hypothèse n'est pas mesurée | `passive`, `graph_directory_role` |
+| un jeton Graph qu'on ne peut avoir | dit (`⚠ graph_unreadable`), sans passer `passive` | `passive`, `graph_unreadable` |
+
+Ce qui est dit (`Verdict.notes`) n'arme ni ne désarme, et n'est pas publié pour la console. La valeur
+de `wids` se mesure au premier `orodruin-check` après la release ; on rendra ensuite strict le cas non
+déclaré. Mutants M3940, M3941. Mutants M3860, M3861, M3906 (le contrat), M3862, M3863 (Terraform). Tests :
 `tests/unit/test_orodruin.py`, `infra/orodruin/tests/graph_read.tftest.hcl`.
 
 La garde sait aussi, avant de lire, ce que Terraform lui donne (`terraform output`, dans

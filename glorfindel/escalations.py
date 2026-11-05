@@ -60,7 +60,14 @@ def sign_proposals(signer_of) -> None:
     _PROPOSER = signer_of
 
 
-def _propose(e: dict) -> None:
+# FS1b (§7, « Ne re-signer qu'au-delà d'un âge »): a card seen again keeps the proposal it carries
+# while that one still stands (this watch's, for the card as it is) and is younger than this —
+# re-signed at each refresh, its digest changed under a request just named. Short enough for the
+# age of an approval, read from the proposal's signed issued_at, to stay right.
+RESIGN_AFTER_S = 600
+
+
+def _propose(e: dict, seen_again: bool = False) -> None:
     if _PROPOSER is None:
         return
     try:
@@ -68,8 +75,12 @@ def _propose(e: dict) -> None:
         if not action_queue.proposable(e):
             return
         signer = _PROPOSER()
-        if signer is not None:
-            e["proposal"] = action_queue.sign_proposal(e, signer, datetime.now(timezone.utc))
+        if signer is None:
+            return
+        now = datetime.now(timezone.utc)
+        if seen_again and action_queue.proposal_fresh(e, e.get("proposal"), signer.public, now, RESIGN_AFTER_S):
+            return
+        e["proposal"] = action_queue.sign_proposal(e, signer, now)
     except Exception:       # the card first: a proposal is never worth a card lost
         pass
 
@@ -141,6 +152,8 @@ _ESCALATION_LABELS = {
     "telemetry_gap": "télémétrie incomplète (requêtes d'enquête en échec)",
     "unstable_decision": "décision instable (les tirages ne s'accordent pas)",
     "readiness_hold": "VM retenue en observation (préparation)",
+    "queue_tampered": "file d'actions : une demande que son service n'a pas écrite (FS1b)",
+    "queue_unavailable": "file d'actions : le registre de la watch illisible (FS1b)",
     "control_plane_change": "plan de contrôle modifié (détection seule)",
     "identity_change": "identité modifiée dans Entra ID (détection seule)",
     "protected_address": "adresse protégée (jamais bloquée)",
@@ -174,6 +187,7 @@ def record(
     exercise_run: str = "",
     explanation: str = "",
     replaces: dict[str, str] | None = None,
+    identity_plan: dict | None = None,
 ) -> str:
     """Append an escalation and return its id.
 
@@ -269,7 +283,7 @@ def record(
                     if explanation:
                         e["explanation"] = explanation
                     e["updated_at"] = now
-                _propose(e)     # FS1a: signed again, seen again
+                _propose(e, seen_again=True)     # FS1a, FS1b: seen again — signed again past an age
                 lines[i] = json.dumps(e, default=str)
                 _write_lines(lines)
                 return e["id"]
@@ -302,6 +316,11 @@ def record(
         "status": "pending",
         "resolved_at": None,
     }
+    if identity_plan:
+        # IR1a: the plan of an identity card, and the thread of its checks (« Verify »). Never a
+        # proposal of FS1a: an identity card holds no action (`action_queue.proposed_verbs`).
+        esc["identity_plan"] = identity_plan
+        esc["identity_checks"] = []
     _propose(esc)       # FS1a: the watch's proposal, when the card holds an action
     # Rewritten whole, as every write of the store: an append seen half-done by a reader
     # made its last line unreadable (SEC3, V-10). The cards it replaces closed in it (L1A).
@@ -366,11 +385,76 @@ def refresh(escalation_id: str, reason: str, **fields) -> bool:
             now = datetime.now(timezone.utc).isoformat()
             e.setdefault("first_reason", e.get("reason", ""))
             e.update(fields, reason=reason, updated_at=now, last_seen=now)
-            _propose(e)     # FS1a: signed again, seen again
+            _propose(e, seen_again=True)     # FS1a, FS1b: seen again — signed again past an age
             lines[i], done = json.dumps(e, default=str), True
     if done:
         _write_lines(lines)
     return done
+
+
+# IR1a: the checks a card keeps (its thread), newest last.
+IDENTITY_CHECKS_KEPT = 20
+
+
+def _rewrite_one(escalation_id: str, change) -> dict | None:
+    """`change(e)` on the pending card `escalation_id` (under the lock, by the caller); the card
+    changed, or None."""
+    if not _STORE.exists():
+        return None
+    lines, found = _STORE.read_text().splitlines(), None
+    for i, line in enumerate(lines):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(e, dict) and e.get("id") == escalation_id and e.get("status") == "pending":
+            change(e)
+            lines[i], found = json.dumps(e, default=str), e
+    if found is not None:
+        _write_lines(lines)
+    return found
+
+
+@_locked
+def request_identity_check(escalation_id: str) -> str:
+    """The console's « Verify » on an identity card (IR1a): a request the watch reads, and answers
+    by reading Graph (`identity_checks.run_requested`) — the console never reads Graph itself. The
+    time of the request; KeyError when no pending card has this id, ValueError when it has no plan."""
+    now = datetime.now(timezone.utc).isoformat()
+    seen: dict = {}
+
+    def change(e):
+        seen["card"] = dict(e)
+        if e.get("escalation_type") == "identity_change" and isinstance(e.get("identity_plan"), dict):
+            e["identity_check_requested"] = now
+
+    card = _rewrite_one(escalation_id, change)
+    if card is None:
+        raise KeyError(f"no pending card {escalation_id}")
+    if "identity_check_requested" not in card or card["identity_check_requested"] != now:
+        raise ValueError("this card has no identity plan to verify")
+    return now
+
+
+@_locked
+def note_identity_check(escalation_id: str, result: dict) -> bool:
+    """The watch's check, noted on the card's thread (`identity_checks`, the last
+    IDENTITY_CHECKS_KEPT); the request it answers cleared, unless a newer one came meanwhile."""
+    def change(e):
+        thread = [c for c in (e.get("identity_checks") or []) if isinstance(c, dict)]
+        e["identity_checks"] = (thread + [result])[-IDENTITY_CHECKS_KEPT:]
+        asked = e.get("identity_check_requested") or ""
+        if asked and asked <= (result.get("requested_at") or ""):
+            e.pop("identity_check_requested", None)
+        e["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    return _rewrite_one(escalation_id, change) is not None
+
+
+def identity_checks_requested() -> list[dict]:
+    """The pending identity cards whose « Verify » waits for the watch."""
+    return [e for e in pending() if e.get("escalation_type") == "identity_change"
+            and isinstance(e.get("identity_plan"), dict) and e.get("identity_check_requested")]
 
 
 @_locked
@@ -564,7 +648,7 @@ DISRUPTIVE_ACTIONS = ("isolate_vm", "block_suspicious_ip")
 # Cards that are not a decision on a detection: posture, housekeeping, proposals.
 _NOT_DECISIONS = {"posture_gap", "orphan_rule", "quarantine_altered", "proposed_rule", "readiness_hold",
                   "ttl_exceeded", "detection_blocked", "bypassed", "state_unreadable", "rule_left",
-                  "unverified"}
+                  "unverified", "queue_tampered", "queue_unavailable"}
 
 
 def all_escalations() -> list[dict]:

@@ -38,12 +38,14 @@ OWNERS = {
                  "ORO_RUN_REQUEST"},
     # The local channel of verdicts: the watch writes it, the red reads it, read-only.
     "verdicts": {"watch", "GLORFINDEL_VOLS"},
+    # FS1b: the bot's requests of the action queue — a writer of its own.
+    "bot": {"bot"},
 }
 RED = {"annatar", "gothmog", "ANNATAR_VOLS", "ORO_RUN", "ORO_RUN_GOTHMOG", "ORO_RUN_CONTRACT", "ORO_RUN_REQUEST"}
 # The Makefile's docker runs that mount runs/, by variable. ORO_MIGRATE mounts it whole, once.
 MAKE_RUNS = ("ANNATAR_VOLS", "GLORFINDEL_VOLS", "ORO_RUN", "ORO_RUN_GOTHMOG", "ORO_RUN_CONTRACT",
              "ORO_RUN_REQUEST")
-_MOUNT = re.compile(r"(?P<src>\S*runs\}?(?:/(?P<sw>[a-z]+))?):(?P<dst>/app/runs(?:/(?P<dw>[a-z]+))?)(?P<ro>:ro)?$")
+_MOUNT = re.compile(r"(?P<src>\S*runs\}?(?:/(?P<sw>[a-z]+)(?P<ssub>/[a-z]+)?)?):(?P<dst>/app/runs(?:/(?P<dw>[a-z]+)(?P<dsub>/[a-z]+)?)?)(?P<ro>:ro)?$")
 
 
 def _variable(name: str) -> str:
@@ -70,7 +72,19 @@ def _mounts() -> dict[str, list[tuple[str, str, bool]]]:
 def _parse(volume: str) -> tuple[str, str, bool]:
     m = _MOUNT.search(volume)
     assert m, volume
+    assert (m["ssub"] or "") == (m["dsub"] or ""), volume
     return m["sw"] or "", m["dw"] or "", bool(m["ro"])
+
+
+def _subdirs() -> dict[str, list[tuple[str, str, bool]]]:
+    """FS1b: the mounts of a subdirectory of a writer's — (writer, its subdirectory, read-only)."""
+    out: dict[str, list] = {}
+    for name, s in COMPOSE.items():
+        for v in s.get("volumes") or []:
+            m = _MOUNT.search(v) if "/app/runs" in v else None
+            if m and m["ssub"]:
+                out.setdefault(name, []).append((m["sw"], m["ssub"], bool(m["ro"])))
+    return out
 
 
 def test_no_service_mounts_runs_whole():
@@ -79,6 +93,15 @@ def test_no_service_mounts_runs_whole():
         assert mounts, who
         for src, dst, _ in mounts:
             assert src and src == dst and src in runs_layout.WRITERS, (who, src, dst)
+
+
+def test_the_bot_mounts_the_watchs_receipts_only_read_only():
+    """FS1b: of the watch's directory, the bot mounts runs/glorfindel/queue — its receipts and its
+    status — read-only, and nothing else; the watch mounts the bot's requests read-only; no other
+    service mounts a subdirectory."""
+    assert _subdirs() == {"bot": [("glorfindel", "/queue", True)]}
+    assert ("bot", True) in {(w, ro) for w, _, ro in _mounts()["watch"]}
+    assert "${EREGION_RUNS:-./runs}/bot:/app/runs/bot" in COMPOSE["bot"]["volumes"]
 
 
 def test_a_writers_directory_is_mounted_read_write_by_its_writers_only():
@@ -101,9 +124,9 @@ def test_the_red_never_mounts_the_watchs_directory_nor_the_consoles():
 
 def test_each_service_mounts_what_it_writes_and_reads():
     want = {"watch": {("glorfindel", False), ("annatar", True), ("gothmog", True), ("console", True),
-                      ("verdicts", False)},
+                      ("verdicts", False), ("bot", True)},
             "war-room": {("console", False), ("glorfindel", True), ("annatar", True), ("gothmog", True)},
-            "bot": {("console", False), ("annatar", True)},
+            "bot": {("console", False), ("annatar", True), ("bot", False), ("glorfindel", True)},
             "annatar": {("annatar", False), ("orodruin", False), ("verdicts", True)},
             "gothmog": {("gothmog", False), ("orodruin", False), ("verdicts", True)},
             "ANNATAR_VOLS": {("annatar", False), ("orodruin", False), ("verdicts", True)},

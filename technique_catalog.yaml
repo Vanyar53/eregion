@@ -200,16 +200,33 @@ resource_types:
         script_sha256:                 # SEC14 (V-19) : le contenu vérifié, pas le chemin seul
           scripts/vm/account_creation_sim.sh: e05bd69c83b0397e91069f6bf1da5b32cc43bb2f5fbf99e1ad2a333f336f6bae
 
-      # ── Expansion VM (design — pas encore exécutable) ──
+      # ── Expansion VM (VM3, #548) : trois paires rouge/bleu via Atomic Red Team ──
       - ttp: T1070.002
         name: "Indicator Removal: Clear Linux or Mac System Logs"
         tactic: defense-evasion
-        status: planned
+        status: implemented
+        # R1/VM3 : test Atomic Red Team épinglé (annatar/atomics/T1070.002, cf. PIN). L'adaptateur
+        # (annatar/engines/atomic.py) résout l'engine_ref, applique engine_args par-dessus les
+        # défauts du test (fichier vendorisé jamais modifié) et exécute commande + cleanup par
+        # Run Command. Scénario : annatar/scenarios/azure/log-clearing-atomic.yaml.
+        engine: atomic
+        engine_ref: T1070.002/d304b2dc-90b4-4465-a650-16ddd503f7b5
+        # log_path jetable : le cleanup du test le supprime (chemin ≠ /var/log/secure), aucun vrai
+        # journal détruit, état initial rétabli. Confiné au banc par l'inscription.
+        engine_args:
+          log_path: /var/log/eregion-t1070-disposable.log
+        # blue : auditd (règle log_tamper, scripts/auditd.sh) → Syslog local6 ; règle
+        # t1070-002-log-tamper. local6 collecté seulement avec auditd_enabled.
         log_source: Syslog
-        indicator_key: ""
-        indicator_columns: [SyslogMessage]
+        indicator_key: syslog_event
+        indicator_columns: [SyslogMessage, ProcessName]
         expected_latency_s: 480     # P99 DCR Syslog (mesuré sur les règles curées)
-        destructive: true           # supprime des logs → ne se confine PAS à un volume
+        steady_state:
+          probes:
+            - name: log-absent
+              verify: "test -e #{log_path} && echo PRESENT || echo ABSENT"
+              expect: ABSENT
+        destructive: true           # efface un journal → ne se confine PAS à un volume
         requires_testdata: false
         safe_target: sandbox_disposable   # garde-fou = scope allowlist (VM Celebrimbor jetable), pas un path
         testdata_marker: ""
@@ -219,24 +236,71 @@ resource_types:
       - ttp: T1053.003
         name: "Scheduled Task/Job: Cron"
         tactic: persistence
-        status: planned
+        status: implemented
+        # R1/VM3 : test Atomic Red Team épinglé (annatar/atomics/T1053.003, cf. PIN).
+        # Scénario : annatar/scenarios/azure/cron-persistence-atomic.yaml. Défauts suffisants
+        # (pas de réseau sortant, crontab rétabli par le cleanup) — aucun engine_args.
+        engine: atomic
+        engine_ref: T1053.003/435057fb-74b1-410e-9403-d81baf194f75
+        # blue : crontab écrit « REPLACE » en Syslog facilité cron ; règle
+        # t1053-003-cron-crontab-replace. Facilité cron collectée seulement avec cron_logs_enabled.
         log_source: Syslog
-        indicator_key: ""
+        indicator_key: syslog_event
         indicator_columns: [SyslogMessage, ProcessName]
         expected_latency_s: 480     # P99 DCR Syslog (mesuré sur les règles curées)
-        destructive: false
+        steady_state:
+          probes:
+            - name: cron-entry-absent
+              verify: "crontab -l 2>/dev/null | grep -qF '#{command}' && echo PRESENT || echo ABSENT"
+              expect: ABSENT
+            # B3 (VM3) : les deux fichiers que le test écrit dans /tmp, à des chemins prévisibles —
+            # /tmp/notevil est la crontab de root, réinstallée par le cleanup. Absents avant (un
+            # fichier posé là par un autre deviendrait la crontab de root) ; le cleanup amont ne
+            # les retire pas, le revert ci-dessous les retire, la sonde d'après le vérifie.
+            - name: tmp-files-absent
+              verify: "if [ -e /tmp/notevil ] || [ -L /tmp/notevil ] || [ -e #{tmp_cron} ] || [ -L #{tmp_cron} ]; then echo TMP_PRESENT; else echo TMP_ABSENT; fi"
+              expect: TMP_ABSENT
+        # VM3 (décision du 05/11) : le revert du scénario (E1), joué APRÈS le cleanup amont (qui
+        # lit /tmp/notevil) et seulement s'il a tourné — le fichier vendorisé n'est pas touché.
+        # Le catalogue le fixe : un autre revert rend la technique inconnue (catalog_destructive).
+        revert:
+          - name: remove-tmp-files
+            action: remove_files
+            paths: ["/tmp/notevil", "#{tmp_cron}"]
+        # B3 (VM3) : il remplace TOUTE la crontab de root (crontab -l > /tmp/notevil, puis
+        # crontab /tmp/persistevil) et la rétablit depuis /tmp → altère l'état système, banc seulement.
+        destructive: true
         requires_testdata: false
+        safe_target: sandbox_disposable   # garde-fou = scope allowlist (VM Celebrimbor jetable)
+        testdata_marker: ""
         reference_script: null
         setup_scripts: []
 
       - ttp: T1059.004
         name: "Command and Scripting Interpreter: Unix Shell"
         tactic: execution
-        status: planned
+        status: implemented
+        # R1/VM3 : test Atomic Red Team épinglé (annatar/atomics/T1059.004, cf. PIN).
+        # Scénario : annatar/scenarios/azure/shell-execution-atomic.yaml.
+        engine: atomic
+        engine_ref: T1059.004/7e7ac3ed-f795-4fa5-b711-09d6fbe9b873
+        # host 127.0.0.1 : le défaut amont ping 8.8.8.8 (réseau sortant) ; la boucle locale garde
+        # le comportement sans sortie. script_path jetable : supprimé par le cleanup.
+        engine_args:
+          host: 127.0.0.1
+          script_path: /tmp/eregion-t1059-art.sh
+        # blue : auditd (règle shell_exec, scripts/auditd.sh) → Syslog local6 ; règle
+        # t1059-004-shell-from-world-writable (distincte d'auditd-sensitive-root-command, qui ne
+        # lit QUE les commandes d'une connexion humaine — un run par Run Command a l'auid non posé).
         log_source: Syslog
-        indicator_key: ""
+        indicator_key: syslog_event
         indicator_columns: [SyslogMessage, ProcessName]
         expected_latency_s: 480     # P99 DCR Syslog (mesuré sur les règles curées)
+        steady_state:
+          probes:
+            - name: script-absent
+              verify: "test -f #{script_path} && echo PRESENT || echo ABSENT"
+              expect: ABSENT
         destructive: false
         requires_testdata: false
         reference_script: null

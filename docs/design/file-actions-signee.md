@@ -1,7 +1,9 @@
 # La file d'actions signée (FS1, #413) — conception
 
 > **Statut : conception, 04/11 ; décisions de Jonathan le 04/11 (fin du document). FS1a fait le
-> 05/11 (#551, §7) : le format et sa vérification, sans changement de comportement.** Ce document
+> 05/11 (#551, §7) : le format et sa vérification, sans changement de comportement. FS1b fait le
+> 05/11 (#563, §8) : la watch relève la file, la console et le bot y déposent — derrière
+> `EREGION_ACTION_QUEUE=1`, faux par défaut : sans lui, rien ne change.** Ce document
 > prépare FS1, le dernier prérequis de sûreté avant toute VM hors du banc (ROADMAP, « Critères de
 > la 1.0 »).
 >
@@ -553,7 +555,7 @@ En jours de travail effectif, à ±50 %, comme la ROADMAP.
 | Lot | Contenu | Sessions | Estimation |
 |---|---|---|---|
 | **FS1a** ✅ 05/11 | Le format et sa vérification : `eregion_core/action_queue.py` (forme, domaines, signature, fraîcheur, nonce, les refus), la clé de service tirée (factorisée avec `watch_key`), la proposition signée sur les cartes par la watch. Tests et mutants. Aucun changement de comportement. | Glorfindel | 2–3 j |
-| **FS1b** | La watch relève la file : le fil, le registre, le rattachement, les gardes rejouées (sorties de la console en code partagé), l'exécution sous `_vm_lock`, les reçus et le statut signés, les cartes critiques. La console et le bot déposent, derrière `EREGION_ACTION_QUEUE=1`. Le nouvel écrivain `runs/bot/`, les montages. | Glorfindel, Console, bot | 4–5 j |
+| **FS1b** ✅ 05/11 | La watch relève la file : le fil, le registre, le rattachement, les gardes rejouées (sorties de la console en code partagé), l'exécution sous `_vm_lock`, les reçus et le statut signés, les cartes critiques. La console et le bot déposent, derrière `EREGION_ACTION_QUEUE=1`. Le nouvel écrivain `runs/bot/`, les montages. | Glorfindel, Console, bot | 4–5 j |
 | **FS1c** | La file par défaut. Les routes d'approbation deviennent asynchrones (`GET /api/queue/<id>`, la page suit le reçu), le bot dit le reçu, les boutons grisés selon le statut de la watch. La mesure au banc avec Jonathan. | Console, bot, Tests | 2–3 j |
 | **FS1d** | Les identités lectrices : le compose, `docs/operations.md` « Identités Azure », le Terraform de H0 selon le Q3, les rôles de la console et du bot, `GLORFINDEL_OWN_CALLERS`, la préparation (`check_permissions`) qui dit une console qui écrit encore. Les gestes de Jonathan. | H0 (Infra), Glorfindel | 2–3 j + gestes |
 | **FS1e** | Le retrait de l'appel direct, le test de frontière du code, le modèle de menace (§3.3), SID1 resserré. | Glorfindel, Console | 1–2 j |
@@ -741,3 +743,89 @@ console et le bot gardent l'appel direct, aucune file n'est relevée, aucune dem
   `nothing_to_undo`, `guard` et `read_only` ont leur code ici, leur contrôle sera dans FS1b.
 - **Les propositions consommées** : `proposal_refusal` prend leur ensemble (`consumed`) ; leur
   registre est à FS1b, à côté de `seen.json`.
+
+## 8. FS1b, fait (05/11, #563)
+
+**Derrière `EREGION_ACTION_QUEUE=1` seulement**, lu par les trois services (`action_queue.enabled` :
+« 1 », rien d'autre) ; vide, le défaut, rien ne change — aucune file n'est lue, aucune demande
+écrite, l'appel direct reste (`tests/unit/test_action_queue_watch.py` le prouve pour la watch, la
+console et le bot). Chaque point du §7 « Pour FS1b » est tenu :
+
+- **La watch relève la file** (`glorfindel/queue_watch.py`, lancé par `glorfindel watch`) dans un fil
+  à elle, chaque seconde, au plus 16 demandes par service et par passage ; une demande acceptée
+  s'exécute dans un fil de travail (4 au plus), sous `_vm_lock`, jamais coupée au milieu : ni la
+  boucle ni le battement n'attendent. Sans sa clé, rien n'est relevé, et c'est dit.
+- **L'ordre** : le nom du fichier doit être son nonce ; un reçu `received` d'abord ; puis §2.8,
+  étapes 1 à 9 (`verify_request`) ; l'étape 10 (`proposal_refusal`, ou ce que la watch tient pour un
+  verbe sans carte : `nothing_to_undo`) ; l'étape 11, les gardes ; l'étape 12, `read_only` ; la
+  proposition consommée ; le reçu `accepted` ; l'exécution ; `done` ou `failed`.
+- **Les gardes rejouées** sont sorties de la console en code partagé (`glorfindel/approval.py`,
+  appelé par la console et par la watch, jamais recopié) : l'approbation en un clic
+  (`approval_refusal`), dont **l'âge se lit sur l'`issued_at` signé de la proposition**, jamais sur
+  `last_seen` ; une adresse seule hors de `never_block` (`blockable_ip`) et une portée `vm` ou
+  `subnet` ; la VM du périmètre de la watch (découverte, ou tenue, ou d'une carte en attente) ; le
+  blocage de cette IP sur cette VM ; pour le bot, son humain relu contre la copie de
+  `DISCORD_ALLOWED_USERS` et `DISCORD_ALLOWED_ROLES` de la watch (un rôle n'est lisible que par le
+  bot : listé, il suffit). La console importe `action_queue.APPROVABLE_TYPES`.
+- **L'exécution** : les fonctions de la watch — le connecteur, et pour la levée et le reset celles de
+  la CLI, sorties de `cli.py` en `glorfindel/gestures.py` (`release_needed`, `reset_targets`,
+  `reset_apply`, que la CLI appelle aussi) ; puis `approval.verify_approved` (une carte
+  `verification_failed` si la vérification n'est pas `True`) et la carte réglée.
+- **Le registre** (`~/.eregion/watch-queue/`, que seule la watch monte) : les nonces (`seen.json`) et
+  les propositions consommées (`consumed.json`, 30 jours), **écrits durablement** (`fsync` du fichier,
+  puis du répertoire, `channel_reader.write_file(…, sync=True)`) ; **le débit compté avant le
+  registre** (le contrôle de `Rate` passe avant la réclamation : une clé prise ne le remplit pas) ;
+  **illisible, sous quelque forme, il refuse et ne lève jamais** (`seen_store_unavailable`, une
+  carte `queue_unavailable`). Une proposition, une exécution : un échec la consomme aussi.
+- **Un arrêt brutal entre la réclamation et l'exécution** : le reçu `received` ou `accepted` reste ;
+  au démarrage, la watch le dit `failed` (`interrupted`) et ne rejoue jamais la demande — sans ce
+  reçu, la relecture aurait dit `replayed`, une carte critique pour son propre arrêt.
+- **Les reçus et le statut**, signés sous `eregion.action-queue/1` (`kind` `receipt`, `status`) :
+  `runs/glorfindel/queue/<service>-<id>.json` (le nom du service devant le nonce : les deux services
+  ne partagent pas l'espace des noms) et `status.json` (la posture, les empreintes épinglées, depuis
+  quand, les refus comptés). Un reçu ne porte jamais la signature de la demande. Ils sont gardés 2 h
+  et retirés une fois leur demande partie.
+- **Les cartes critiques** (`queue_tampered`, le groupe `CRITICAL`) : décidées par le code, sans action,
+  au plus une par service et par heure, ancrées sur `~/runs/<service>/queue` (aucune VM).
+- **La console et le bot déposent** (`action_queue.ask` : la clé du service tirée au premier usage,
+  la demande écrite dans son répertoire en 0600, le reçu attendu, la demande retirée une fois
+  répondue, les oubliées au bout d'une heure) : les routes d'écriture de la console
+  (`eregion_console/action_requests.py`, `docs/design/console.md`), le Revert du bot (`reset`, sa
+  carte `verification_failed` et sa proposition, `by.via = "discord"`). La console note le geste
+  dans `runs/console/manual_actions.jsonl` à partir du reçu.
+- **Le nouvel écrivain `runs/bot/`** (`runs_layout.BOT`), ses montages : la watch monte `runs/bot` en
+  lecture seule ; le bot monte `runs/bot`, `runs/glorfindel/queue` en lecture seule (ce seul
+  sous-répertoire) et `~/.eregion/bot` ; la watch, `~/.eregion/watch-queue` et `EREGION_QUEUE_KEYS`.
+  `deploy.sh` et le Makefile créent `~/.eregion/bot`, `~/.eregion/watch-queue` et
+  `runs/glorfindel/queue` au nom de l'opérateur, avant les services.
+- **La proposition re-signée au-delà d'un âge seulement** : une carte revue garde la sienne tant
+  qu'elle tient (cette clé, la carte inchangée) et a moins de 10 min (`escalations.RESIGN_AFTER_S`,
+  `action_queue.proposal_fresh`).
+- **Les clés à épingler** : `make queue-keys` (ce poste) et `make glorfindel-host-queue-keys` (H0),
+  préparés, pas lancés (`docs/operations.md`, « La file d'actions signée »).
+- **Tests** : `tests/unit/test_action_queue_watch.py` (le bout en bout sur le faux Azure, chaque refus,
+  le rejeu, la carte forgée, la clé d'un autre service, le drapeau absent, un registre illisible,
+  un arrêt entre la réclamation et l'exécution, les gardes rejouées, la console et le bot, les
+  montages) ; mutants M3975–M4014 (`scripts/mutants/FS1b.py`).
+
+**Pour FS1c** (relecture de FS1b) :
+- **Le bot écrit encore `runs/console`** (`manual_actions.jsonl`, la CLI qu'il lance) : un bot
+  compromis peut remplacer ou noyer les demandes de la console — rien ne s'exécute, mais la carte
+  critique désigne la console à tort. Les gestes du bot dans `runs/bot/`, ou la file de la console
+  dans un répertoire que le bot ne monte pas.
+- **L'attente de `_queued` dans la console** : un sémaphore, ou un exécuteur à elle, pour qu'une
+  rafale de clics n'occupe pas tous les fils du serveur pendant 600 s.
+- **Un reçu présent mais non signé par la clé épinglée** se distingue d'« aucun reçu »
+  (`read_receipt` rend `None` dans les deux cas) : le dire, plutôt que « la watch n'a pas pris la
+  demande ».
+- **Le texte de `proposal_consumed` après un échec** : dire que l'exécution précédente a échoué et
+  qu'il faut une nouvelle détection, ou la CLI.
+- **Le `signal_id` de la carte `verification_failed` née de la file** (`approve-<carte>` aujourd'hui,
+  celui de la console) : lui donner celui de la demande.
+- **Les tests sans drapeau** des routes release, revert, unblock, promote et snapshot (celle
+  d'approbation l'a déjà).
+
+**Ce qui reste** : FS1c (la file par défaut, les routes asynchrones, les boutons selon le statut, la
+mesure au banc), FS1d (les identités lectrices), FS1e (le retrait de l'appel direct, le modèle de
+menace au « tenu », §3.3), FS1f (les écritures locales), FS1g (l'exécuteur de restore). La machine à
+invariants ne connaît pas encore l'action « demande de la console » (§4.3) : FS1c.

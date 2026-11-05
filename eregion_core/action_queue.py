@@ -420,6 +420,10 @@ def verify_request(data, *, service: str, pins: Mapping[str, bytes], now: dateti
     if now >= expires:
         raise Refused("expired", f"expired {(now - expires).total_seconds():.0f} s ago: the watch was "
                                  "stopped or slow")
+    # 8. the rate — FS1b: before the register, so a service's claims are bounded as well (its key,
+    # compromised, never fills the register with valid nonces until it refuses everything)
+    if not rate.take(service, now):
+        raise Refused("rate_limited")
     # 8. the nonce — claimed before anything runs; a register that cannot be kept refuses
     try:
         fresh = seen.claim(doc["id"], expires + timedelta(seconds=SKEW_S), now)
@@ -427,14 +431,12 @@ def verify_request(data, *, service: str, pins: Mapping[str, bytes], now: dateti
         raise Refused("seen_store_unavailable", f"{REFUSALS['seen_store_unavailable']} ({str(e)[:120]})") from None
     if not fresh:
         raise Refused("replayed")
-    # 9. the verb, and the rate
+    # 9. the verb
     verb = doc["verb"]
     if verb not in VERBS:
         raise Refused("unknown_verb", f"{verb[:40]!r} is not a verb of the queue ({', '.join(VERBS)})")
     if verb not in SERVICE_VERBS.get(service, frozenset()):
         raise Refused("verb_not_allowed", f"the {service} may not ask {verb}")
-    if not rate.take(service, now):
-        raise Refused("rate_limited")
     card = doc["card"]
     return Request(id=doc["id"], service=service, by=dict(doc["by"]), verb=verb,
                    resource_id=doc["resource_id"], ip=doc["ip"], scope=doc["scope"],
@@ -492,15 +494,100 @@ class SeenFile:
         return doc
 
     def claim(self, nonce: str, until: datetime, now: datetime) -> bool:
+        """FS1b: written durably — the file fsync'd, then its directory — before it returns: a
+        nonce claimed is never lost to a crash of the host, its request never replayed in its
+        window. Whatever the register holds, it refuses: OSError or ValueError, never another
+        exception (a nesting too deep, a time of another form)."""
         from eregion_core import channel_reader
         with self._lock:
-            seen = self._read()
-            kept = {n: u for n, u in seen.items() if datetime.fromisoformat(u) > now}
+            try:
+                seen = self._read()
+                kept = {n: u for n, u in seen.items() if datetime.fromisoformat(u) > now}
+            except (OSError, ValueError):
+                raise
+            except Exception as e:      # RecursionError, TypeError…: refused, never raised
+                raise ValueError(f"{self.path} is not a register of nonces ({type(e).__name__})") from None
             if nonce in kept:
                 return False
             kept[nonce] = _iso(until)
             self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            channel_reader.write_file(self.path, json.dumps(kept, sort_keys=True), mode=0o600)
+            channel_reader.write_file(self.path, json.dumps(kept, sort_keys=True), mode=0o600, sync=True)
+            return True
+
+
+# ── The watch's register of the proposals executed (FS1b) ─────────────────────────────
+
+CONSUMED_KEEP_DAYS = 30         # longer than any card waits for its approval
+
+
+class MemoryConsumed:
+    """The proposals executed, in memory (the tests, a single run)."""
+
+    def __init__(self):
+        self._at: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def digests(self) -> frozenset[str]:
+        with self._lock:
+            return frozenset(self._at)
+
+    def consume(self, proposal: str, card: str, now: datetime) -> bool:
+        with self._lock:
+            if proposal in self._at:
+                return False
+            self._at[proposal] = _iso(now)
+            return True
+
+
+class ConsumedFile:
+    """§2.4, « one proposal, one execution »: the digests of the proposals the watch executed
+    (``queue_dir()/consumed.json``, beside ``seen.json``), each with its card and when — kept
+    CONSUMED_KEEP_DAYS (a card that waits longer is refused by its age anyway). Consumed before
+    the execution, written durably. Unreadable, of another form, too large, or not written:
+    OSError or ValueError, never another exception — the request is refused
+    (``seen_store_unavailable``)."""
+
+    def __init__(self, path: Path | None = None):
+        self.path = Path(path) if path is not None else queue_dir() / "consumed.json"
+        self._lock = threading.Lock()
+
+    def _read(self) -> dict[str, dict]:
+        from eregion_core import channel_reader
+        try:
+            try:
+                data = channel_reader.read_file(self.path, SEEN_BYTES)
+            except FileNotFoundError:
+                return {}
+            doc = json.loads(data.decode("utf-8"))
+            if not isinstance(doc, dict):
+                raise ValueError(f"{self.path} is not a register of proposals")
+            for done, entry in doc.items():
+                if (not _DIGEST.fullmatch(str(done)) or not isinstance(entry, dict)
+                        or not isinstance(entry.get("card"), str) or not isinstance(entry.get("at"), str)
+                        or datetime.fromisoformat(entry["at"]).tzinfo is None):
+                    raise ValueError(f"{self.path}: {str(done)[:40]!r} is not a proposal consumed")
+            return doc
+        except (OSError, ValueError):
+            raise
+        except Exception as e:          # RecursionError…: refused, never raised
+            raise ValueError(f"{self.path} is not a register of proposals ({type(e).__name__})") from None
+
+    def digests(self) -> frozenset[str]:
+        with self._lock:
+            return frozenset(self._read())
+
+    def consume(self, proposal: str, card: str, now: datetime) -> bool:
+        """True the first time ``proposal`` is consumed (then written durably), False after."""
+        from eregion_core import channel_reader
+        with self._lock:
+            done = self._read()
+            if proposal in done:
+                return False
+            cutoff = now - timedelta(days=CONSUMED_KEEP_DAYS)
+            kept = {d: e for d, e in done.items() if datetime.fromisoformat(e["at"]) > cutoff}
+            kept[proposal] = {"card": str(card)[:200], "at": _iso(now)}
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            channel_reader.write_file(self.path, json.dumps(kept, sort_keys=True), mode=0o600, sync=True)
             return True
 
 
@@ -612,3 +699,245 @@ def proposal_refusal(card, request: Request, *, watch_public: bytes, consumed=fr
         raise Refused("proposal_mismatch", "the request names another address than the card")
     if request.proposal in consumed:
         raise Refused("proposal_consumed")
+
+
+def proposal_fresh(card, proposal, watch_public: bytes, now: datetime, max_age_s: float) -> bool:
+    """FS1b: the proposal already on a card still stands — this watch signed it, for the card as
+    it is now (its action, target, address, port, type), less than ``max_age_s`` ago. Then the
+    watch does not sign it again when the card is seen again: re-signed at each refresh, its
+    digest changed, and a request named just before a lasting detection refreshed its card was
+    refused (``proposal_mismatch``)."""
+    if not isinstance(card, dict) or not isinstance(proposal, dict) or set(proposal) != set(PROPOSAL_FIELDS):
+        return False
+    if watch_refusal(proposal, "proposal", watch_public):
+        return False
+    said = (proposal["card"], proposal["action"], str(proposal["resource_id"]).lower(),
+            proposal["escalation_type"], proposal["ip"], proposal["port"])
+    held = (card.get("id"), card.get("action"), str(card.get("resource_id") or "").lower(),
+            card.get("escalation_type"), _card_ip(card), _card_port(card))
+    if said != held:
+        return False
+    try:
+        issued = datetime.fromisoformat(proposal["issued_at"])
+    except (TypeError, ValueError):
+        return False
+    if issued.tzinfo is None:
+        return False
+    return timedelta(0) <= now - issued < timedelta(seconds=max_age_s)
+
+
+# ── The queue on disk (FS1b): where a service deposits, where the watch answers ───────────
+
+FLAG_ENV = "EREGION_ACTION_QUEUE"
+REQUEST_KEEP_S = 3600            # a service removes its requests once answered, or after an hour
+RECEIPT_BYTES = 64 * 1024
+RECEIPT_STATES = ("received", "accepted", "done", "failed", "refused")
+FINAL_STATES = ("done", "failed", "refused")
+STATUS_NAME = "status.json"
+
+
+def enabled(environ=None) -> bool:
+    """FS1b: the console and the bot deposit a request, and the watch picks the queue up, only
+    behind ``EREGION_ACTION_QUEUE=1`` — false by default: without it, nothing changes (the direct
+    call stays, no queue is read)."""
+    return (os.environ if environ is None else environ).get(FLAG_ENV, "") == "1"
+
+
+def request_dir(service: str, root=None) -> Path:
+    """``runs/<service>/queue/``: the service's own directory of runs/ (SEC18) — the console's,
+    or the bot's, a writer of its own since FS1b."""
+    from eregion_core import runs_layout
+    if service not in SERVICES:
+        raise ValueError(f"not a service of the queue: {service!r}")
+    return runs_layout.dir_of(service, root) / "queue"
+
+
+def receipts_dir(root=None) -> Path:
+    """``runs/glorfindel/queue/``: the watch's own directory — its receipts
+    (``<service>-<id>.json``) and its status (``status.json``), which it alone writes and signs."""
+    from eregion_core import runs_layout
+    return runs_layout.dir_of(runs_layout.GLORFINDEL, root) / "queue"
+
+
+def receipt_path(service: str, request_id: str, root=None) -> Path:
+    if service not in SERVICES or not _ID.fullmatch(str(request_id)):
+        raise ValueError(f"not a request of the queue: {service!r} {str(request_id)[:40]!r}")
+    return receipts_dir(root) / f"{service}-{request_id}.json"
+
+
+def deposit(request: dict, root=None) -> Path:
+    """Write a signed request in its service's directory: beside, then renamed (``write_file``:
+    never through a link), 0600."""
+    from eregion_core import channel_reader
+    directory = request_dir(request["service"], root)
+    if not _ID.fullmatch(str(request.get("id"))):
+        raise ValueError("a request without its nonce")
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = directory / f"{request['id']}.json"
+    channel_reader.write_file(path, json.dumps(request, separators=(",", ":")), mode=0o600)
+    return path
+
+
+def withdraw(service: str, request_id: str, root=None) -> None:
+    """The service removes its own request once its receipt is read — never another's."""
+    if _ID.fullmatch(str(request_id)):
+        (request_dir(service, root) / f"{request_id}.json").unlink(missing_ok=True)
+
+
+def sweep_requests(service: str, root=None, keep_s: float = REQUEST_KEEP_S, now: float | None = None) -> int:
+    """The service's own requests older than ``keep_s`` removed (an answer never read). Never
+    raises; how many removed."""
+    import stat as _stat
+    import time as _time
+    now = _time.time() if now is None else now
+    n = 0
+    try:
+        with os.scandir(request_dir(service, root)) as it:
+            for e in it:
+                if not e.name.endswith(".json"):
+                    continue
+                try:
+                    st = e.stat(follow_symlinks=False)
+                    if _stat.S_ISREG(st.st_mode) and now - st.st_mtime > keep_s:
+                        os.unlink(e.path)
+                        n += 1
+                except OSError:
+                    continue
+    except OSError:
+        return n
+    return n
+
+
+def read_receipt(service: str, request_id: str, *, root=None, watch_public: bytes | None = None) -> dict | None:
+    """The watch's receipt of a request — None while there is none, or when what is there is not
+    one: unreadable, another request's, or (``watch_public``: the watch's key pinned, on another
+    host) not signed by it. The receipt never carries the request's signature."""
+    from eregion_core import channel_reader
+    try:
+        doc = json.loads(channel_reader.read_file(receipt_path(service, request_id, root), RECEIPT_BYTES))
+    except (OSError, ValueError, RecursionError):
+        return None
+    if (not isinstance(doc, dict) or doc.get("kind") != "receipt" or doc.get("request") != request_id
+            or doc.get("service") != service or doc.get("state") not in RECEIPT_STATES):
+        return None
+    if watch_public is not None and watch_refusal(doc, "receipt", watch_public):
+        return None
+    return doc
+
+
+def await_receipt(service: str, request_id: str, *, final: bool, timeout_s: float, root=None,
+                  watch_public: bytes | None = None, poll_s: float = 0.2, clock=None, sleep=None) -> dict | None:
+    """The receipt once it says ``accepted`` or a final state (``final``: a final state only) —
+    or the last one read (None: none) after ``timeout_s``."""
+    import time as _time
+    clock, sleep = clock or _time.monotonic, sleep or _time.sleep
+    deadline = clock() + timeout_s
+    last = None
+    while True:
+        doc = read_receipt(service, request_id, root=root, watch_public=watch_public)
+        if doc is not None:
+            last = doc
+            if doc["state"] in FINAL_STATES or (not final and doc["state"] == "accepted"):
+                return doc
+        if clock() >= deadline:
+            return last
+        sleep(poll_s)
+
+
+TAKE_S = MAX_LIFETIME_S + SKEW_S    # a request is taken within its life, or never
+RUN_S = 600                         # a lift of a multi-NIC VM takes minutes (the CLI's timeout)
+
+
+def ask(service: str, verb: str, resource_id: str, *, by: Mapping[str, str], root=None, ip: str = "",
+        scope: str = "", card: tuple[str, str] | None = None, take_s: float | None = None,
+        run_s: float | None = None, poll_s: float = 0.2) -> dict:
+    """A service's gesture as a request of the queue (the console's, the bot's): signed by its key
+    (drawn at its first use), deposited in its directory, then the watch's receipt awaited —
+    ``accepted`` or ``refused`` within the request's life, then ``done`` or ``failed``.
+    ``{"receipt": …, "request": id}``, or ``{"error": …}`` when the service could not ask or the
+    watch did not take it. The request is withdrawn once answered. The receipt is believed from
+    the mount (one host) — and checked with the watch's key when the service pins it
+    (``EREGION_WATCH_KEY``, a service on another host)."""
+    take_s = TAKE_S if take_s is None else take_s
+    run_s = RUN_S if run_s is None else run_s
+    try:
+        signer = load_service_key(service)
+    except watch_key.KeyUnavailable as e:
+        return {"error": f"the {service}'s key of the action queue is unavailable: {e}"}
+    sweep_requests(service, root)
+    request = new_request(signer, service=service, verb=verb, resource_id=resource_id, by=by, ip=ip,
+                          scope=scope, card=card)
+    rid = request["id"]
+    try:
+        deposit(request, root)
+    except OSError as e:
+        return {"error": f"the request could not be written in runs/{service}/queue/: {e}"}
+    public, _ = watch_key.pinned()
+    got = await_receipt(service, rid, final=False, timeout_s=take_s, root=root, watch_public=public,
+                        poll_s=poll_s)
+    if got is None or got["state"] not in ("accepted",) + FINAL_STATES:
+        withdraw(service, rid, root)
+        return {"error": (f"the watch did not take the request in {MAX_LIFETIME_S} s — is it running, with "
+                          f"{FLAG_ENV}=1 and the {service}'s key pinned ({KEYS_ENV})?"), "request": rid}
+    if got["state"] not in FINAL_STATES:
+        got = await_receipt(service, rid, final=True, timeout_s=run_s, root=root, watch_public=public,
+                            poll_s=poll_s) or got
+    if got["state"] not in FINAL_STATES:
+        return {"error": f"the watch is still running the request ({got['state']}): its receipt will say it",
+                "request": rid, "state": got["state"]}
+    withdraw(service, rid, root)
+    return {"receipt": got, "request": rid}
+
+
+def read_status(*, root=None, watch_public: bytes | None = None) -> dict | None:
+    """The status the watch publishes for the queue (its posture, the keys it pins, since when it
+    picks the queue up) — None when there is none, or it is not one."""
+    from eregion_core import channel_reader
+    try:
+        doc = json.loads(channel_reader.read_file(receipts_dir(root) / STATUS_NAME, RECEIPT_BYTES))
+    except (OSError, ValueError, RecursionError):
+        return None
+    if not isinstance(doc, dict) or doc.get("kind") != "status":
+        return None
+    if watch_public is not None and watch_refusal(doc, "status", watch_public):
+        return None
+    return doc
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m eregion_core.action_queue public [console|bot]``: the line to pin at the watch
+    (``EREGION_QUEUE_KEYS=console=ed25519:…,bot=ed25519:…``), from the keys already drawn in
+    ``~/.eregion/<service>/`` — never draws one, never the private half."""
+    import sys
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] == ["pin"] and len(args) == 2 and args[1] in SERVICES:
+        # ``pin <service>``: that service's pin alone (``console=ed25519:…``) — make
+        # glorfindel-host-queue-keys joins the console's and the bot's, read in their containers.
+        try:
+            public = watch_key.read_public(service_key_dir(args[1]), name=watch_key.SERVICE_KEY_FILE)
+        except watch_key.KeyUnavailable as e:
+            print(f"✗ {args[1]} : {e}", file=sys.stderr)
+            return 1
+        print(f"{args[1]}={watch_key.public_text(public)}")
+        return 0
+    if not args or args[0] != "public" or any(a not in SERVICES for a in args[1:]):
+        print("usage: python -m eregion_core.action_queue public [console|bot] | pin console|bot")
+        return 2
+    pins, missing = [], []
+    for service in args[1:] or SERVICES:
+        try:
+            public = watch_key.read_public(service_key_dir(service), name=watch_key.SERVICE_KEY_FILE)
+        except watch_key.KeyUnavailable as e:
+            missing.append(f"# {service} : {e}")
+            continue
+        pins.append(f"{service}={watch_key.public_text(public)}")
+        missing.append(f"# {service} : empreinte {watch_key.fingerprint(public)}")
+    if pins:
+        print(f"export {KEYS_ENV}={','.join(pins)}")
+    for line in missing:
+        print(line)
+    return 0 if pins else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

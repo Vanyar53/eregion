@@ -797,6 +797,44 @@ commandes) : sur un
 poste, un injecteur reste passif ; il agit depuis Orodruin, avec l'identité managée qu'y crée
 `make orodruin-up` (ses droits par VM inscrite, SEC5).
 
+### La lecture de Microsoft Graph par la watch (IR1a, #552)
+
+Une carte `identity_change` porte un **plan** (`docs/glorfindel.md`, « Identités »), écrit par le
+code : ses paramètres (l'`id` de l'objet, le `keyId`, l'`id` de l'octroi ou de l'attribution) sont
+lus dans Microsoft Graph, **en lecture seule**, et le bouton **Verify** de la console demande à la
+watch de relire Graph après le geste de l'humain. Sans droit sur Graph, le plan reste utile (ce que
+le journal donne, chaque paramètre non lu marqué, jamais inventé) et la vérification dit
+« unreadable », jamais « held ». C'est le cas de H0 aujourd'hui.
+
+**Le droit à donner à l'identité de la watch** (l'identité managée de H0 ; sur un poste, le
+principal de la watch) — un **geste de Jonathan**, hors de tout lot, avec un compte qui peut
+consentir des permissions d'application (Privileged Role Administrator) :
+
+| Permission d'application (Microsoft Graph) | Pour |
+|---|---|
+| `Application.Read.All` | une application ou un principal : ses identifiants (`keyId`), son état (`accountEnabled`), ses attributions de rôles d'application, ses identifiants fédérés |
+| `DelegatedPermissionGrant.Read.All` | les octrois délégués d'une application cliente (`oauth2PermissionGrants`) |
+| `RoleManagement.Read.Directory` | les attributions de rôles d'annuaire d'un membre, actives et éligibles |
+| `User.Read.All` | l'heure depuis laquelle les sessions d'un utilisateur valent (`signInSessionsValidFromDateTime`) |
+
+Des **lectures** seulement : aucune n'écrit, et la watch n'écrit jamais sur Entra ID (§3.4 de
+`docs/design/reponse-identite.md`). Les droits exacts sont l'hypothèse 10 de la conception, à
+mesurer au banc. Les commandes, pour une identité managée (`<objectId>` : celui de la watch) :
+
+```bash
+GRAPH_SP=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)   # Microsoft Graph
+for p in Application.Read.All DelegatedPermissionGrant.Read.All RoleManagement.Read.Directory User.Read.All; do
+  ROLE=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query "appRoles[?value=='$p'].id" -o tsv)
+  az rest --method POST --url "https://graph.microsoft.com/v1.0/servicePrincipals/<objectId>/appRoleAssignments" \
+    --body "{\"principalId\":\"<objectId>\",\"resourceId\":\"$GRAPH_SP\",\"appRoleId\":\"$ROLE\"}"
+done
+```
+
+Pour un principal de service : les mêmes permissions dans son inscription d'application, puis
+« Accorder le consentement d'administrateur ». **Jamais** une permission en écriture
+(`*.ReadWrite.*`) : la liste refusée de la conception (§3.4) vaut pour la watch comme pour toute
+identité d'Eregion. La lecture de Graph, ce que voit `Verify`, ce qui manque : `docs/glorfindel.md`.
+
 ## Le canari azurerm, sans secret (P-04, 30/10)
 
 Le canari (`.github/workflows/canary-azurerm.yml`, chaque jour ; `make canary-jit` sur un poste)
@@ -1262,6 +1300,39 @@ reste `make glorfindel-host-start REF=<tag>`.
 - la clé de la watch retirée ou tirée à nouveau (une VM reconstruite, une clé vide après un disque
   plein : la watch dit « remove it ») : « signed by another key » chez les injecteurs ; refaire
   l'étape 5 (et la 7 pour ce poste).
+
+---
+
+## La file d'actions signée — les clés des services (FS1b, #563)
+
+**Rien à faire tant que `EREGION_ACTION_QUEUE` est vide** : c'est le défaut, l'appel direct de la
+console et du bot reste, et aucune file n'est lue. Le drapeau se pose avec FS1c, mesuré au banc
+(`docs/design/file-actions-signee.md`, §4.2) ; ces gestes sont préparés, **pas encore à faire**.
+
+Avec `EREGION_ACTION_QUEUE=1` (dans `.envrc` sur un poste, dans `host.env` sur H0 — pour les trois
+services : la watch le lit aussi), la console et le bot ne font plus que déposer une demande signée
+par **leur propre clé**, que la watch juge et exécute. Chacun tire sa clé à son premier démarrage
+avec le drapeau, dans le répertoire que lui seul monte : `~/.eregion/console/queue_ed25519` et
+`~/.eregion/bot/queue_ed25519` (32 octets, 0600 ; `make glorfindel-start` et `deploy.sh` créent
+`~/.eregion/bot` et `~/.eregion/watch-queue` au nom de l'opérateur, en 0700, avant que docker ne les
+crée au nom de root). La watch **épingle** leurs clés publiques, dans son environnement seulement :
+
+1. **Ce poste** : `make glorfindel-restart` avec le drapeau, puis `make queue-keys` — la ligne
+   `export EREGION_QUEUE_KEYS=console=ed25519:…,bot=ed25519:…` (le bot seulement s'il tourne,
+   profil `bot`) dans ton `.envrc`, puis `make glorfindel-restart`. Jamais la clé privée.
+2. **H0** : la release déployée avec le drapeau dans `host.env`, puis
+   `make glorfindel-host-queue-keys` (par SSH, la clé d'hôte épinglée) : la ligne
+   `EREGION_QUEUE_KEYS=…` dans `host.env`, puis `make glorfindel-host-push`.
+3. **La copie des autorisés du bot** chez la watch : `DISCORD_ALLOWED_USERS` et
+   `DISCORD_ALLOWED_ROLES` passent aussi à la watch (le compose), qui relit l'humain qu'une demande du
+   bot nomme ; vides chez elle, le Revert du bot est refusé (`guard`).
+
+Sans clé épinglée pour un service, la watch refuse chacune de ses demandes (`no_key_pinned`) et le
+dit au démarrage ; une clé tirée de nouveau est refusée avec les deux empreintes (`unknown_key`,
+une carte critique) : épingler la nouvelle. Le registre de la watch (`~/.eregion/watch-queue/`, les
+nonces vus et les propositions exécutées) est à elle seule ; illisible, elle refuse tout et le dit
+(`queue_unavailable`) — le réparer ou le retirer, la watch le recrée. Les reçus et le statut :
+`runs/glorfindel/queue/` (le bot en monte ce seul sous-répertoire, en lecture seule).
 
 ---
 
@@ -3119,6 +3190,45 @@ chaque VM : `sudo rm /etc/audit/rules.d/50-eregion-aud1.rules`, `sudo sed -i 's/
 no/' /etc/audit/plugins.d/syslog.conf`, `sudo augenrules --load`, `sudo service auditd restart` (ou
 `sudo apt-get purge -y auditd audispd-plugins`). Les lignes déjà ingérées restent jusqu'à la fin de la
 rétention (30 jours).
+
+### Les règles auditd de VM3 (#548)
+
+Deux des trois paires de VM3 lisent auditd : T1059.004 (un shell depuis `/tmp`, `/dev/shm`, `/var/tmp`)
+et T1070.002 (une altération d'un journal sous `/var/log`). Leurs règles auditd ne sont PAS dans
+`scripts/auditd.sh` : Azure n'autorise qu'une extension CustomScript par VM, et AUD1 la tient ; et le
+volume de `shell_exec` (chaque `execve` de `dash`/`bash`) noierait le signal humain d'AUD1 s'il passait
+avec `auditd_enabled`. Elles sont dans `infra/terraform/scripts/vm3_auditd.sh`, un geste manuel —
+aucune variable Terraform ne les pose.
+
+Pour mesurer les trois paires sur le banc, avec Jonathan, depuis le poste, à la racine du dépôt :
+1. `cron_logs_enabled = true` et `auditd_enabled = true` dans `terraform.tfvars` ; montrer le plan
+   (`make celebrimbor-auditd-plan`), puis `make celebrimbor-auditd-up YES=1` (auditd, le greffon
+   audisp-syslog vers `local6`, et la DCR — qui reçoit aussi la facilité `cron`).
+2. Le dépôt n'est pas sur les VM : le script y part par Run Command, une fois par VM du banc :
+   ```bash
+   for vm in vm-celebrimbor-gondolin vm-celebrimbor-bree; do
+     az vm run-command invoke -g rg-celebrimbor -n "$vm" --command-id RunShellScript \
+       --scripts @infra/terraform/scripts/vm3_auditd.sh
+   done
+   ```
+   (pose `/etc/audit/rules.d/60-eregion-vm3.rules` — la surveillance `-w /var/log -p wa` et les
+   `execve` de shell, clés `log_tamper` et `shell_exec` — puis `augenrules --load` ; auditd n'est pas
+   redémarré : Ubuntu refuse `systemctl restart auditd`).
+3. Vérifier que les lignes arrivent : `Syslog | where Facility == 'cron'` et
+   `Syslog | where Facility == 'local6' and SyslogMessage has_any ('log_tamper', 'shell_exec')`.
+4. Depuis Orodruin armé, la watch vivante, un run de chaque : `annatar run` sur
+   `cron-persistence-atomic.yaml`, `shell-execution-atomic.yaml`, `log-clearing-atomic.yaml`
+   (`annatar/scenarios/azure/`). Les deux destructives (cron, journaux) sur le banc seulement.
+5. Après le run cron : le test laisse `/tmp/notevil` (la crontab de root) et `/tmp/persistevil` ; le
+   revert du scénario les retire après le cleanup, et la sonde d'après le vérifie. Si le cleanup a
+   échoué, le revert ne tourne pas (`/tmp/notevil` reste la seule copie de la crontab de root) : le run
+   affiche le cleanup puis le revert à lancer à la main, dans cet ordre.
+
+Le défaire : `--scripts "rm -f /etc/audit/rules.d/60-eregion-vm3.rules && augenrules --load"` par Run
+Command, et `cron_logs_enabled = false`. Les colonnes et la forme des lignes restent des HYPOTHÈSES (A0,
+AUD1), à mesurer : les comm et exe réels du bruit, la forme des enregistrements PATH, la facilité où
+`crontab` écrit, le volume de `shell_exec`, et si un `echo 0>` sur un journal existant (O_TRUNC) est vu
+par la surveillance du répertoire.
 
 ---
 

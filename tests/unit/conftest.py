@@ -92,6 +92,8 @@ def isolated_watch_key(tmp_path, monkeypatch):
     monkeypatch.setattr(action_queue, "KEY_ROOT", tmp_path / "service-keys")
     monkeypatch.setattr(action_queue, "QUEUE_DIR", tmp_path / "watch-queue")
     monkeypatch.delenv(action_queue.KEYS_ENV, raising=False)
+    # FS1b: the queue off, as by default — never the developer's shell's EREGION_ACTION_QUEUE.
+    monkeypatch.delenv(action_queue.FLAG_ENV, raising=False)
 
 
 @pytest.fixture
@@ -391,6 +393,18 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
         monkeypatch.setattr(api, "_RESTORE_FAILURES", home / "restore_failures.json")  # SEC4c
     except ImportError:  # war-room extra not installed
         pass
+
+
+@pytest.fixture(autouse=True)
+def no_graph(monkeypatch):
+    """Microsoft Graph never read by a test (IR1a): the watch's reader is one that reads nothing
+    and says why — the graph tests (dry_run=False) would otherwise ask the developer's real tenant
+    for an identity card's plan. Tests that read a « Graph » hand in the fake one
+    (tests/unit/fake_graph.py)."""
+    if not GLORFINDEL:
+        return
+    from glorfindel.providers.azure import graph
+    monkeypatch.setattr(graph, "default_reader", lambda: graph.NoGraph("tests : Graph jamais lu"))
 
 
 @pytest.fixture(autouse=True)

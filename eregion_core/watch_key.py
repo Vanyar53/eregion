@@ -277,13 +277,18 @@ def load_or_create(directory: Path | None = None, *, name: str = KEY_FILE) -> Si
         raise KeyUnavailable(f"{directory}: {e}") from None
 
 
-def read_public(directory: Path | None = None) -> bytes:
-    """The public half of the key already drawn — never draws one. Raises KeyUnavailable."""
+def read_public(directory: Path | None = None, *, name: str = KEY_FILE) -> bytes:
+    """The public half of the key already drawn — never draws one. Raises KeyUnavailable.
+    ``name`` (FS1b): a service's key of the action queue (``SERVICE_KEY_FILE``), for
+    ``make queue-keys``."""
     directory = Path(directory) if directory is not None else key_dir()
-    path = directory / KEY_FILE
+    path = directory / name
     try:
         return Signer(_read_key(path)).public
     except FileNotFoundError:
+        if name != KEY_FILE:
+            raise KeyUnavailable(f"no key in {directory}: the service draws it at its first start with "
+                                 "EREGION_ACTION_QUEUE=1 — or this container does not mount it") from None
         raise KeyUnavailable(f"no key in {directory}: the watch draws it at its first start "
                              "(make glorfindel-start, or H0 deployed) — or this container does not mount it "
                              "(only the watch's does: in make glorfindel-shell it is not mounted; make "

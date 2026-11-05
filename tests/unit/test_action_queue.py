@@ -649,3 +649,93 @@ def test_the_other_spellings_of_a_heartbeat_s_or_a_detection_s_signature_are_ref
     for sig in _spellings(det["sig"]) + [det["sig"] + "\n"]:
         assert "not one" in watch_key.detection_refusal({**det, "sig": sig}, WATCH.public,
                                                         run_id="r1", signal_id="s1"), sig
+
+
+# ── FS1b: the queue on disk, the flag, the keys to pin ──────────────────────────────
+
+def test_fs1b_a_request_is_deposited_in_its_services_directory_and_withdrawn(tmp_path):
+    doc = _request()
+    path = aq.deposit(doc, tmp_path)
+    assert path == tmp_path / "console" / "queue" / f"{doc['id']}.json"
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert _verify(aq.read_request(path)).id == doc["id"]
+    bot = _request(signer=BOT, service="bot", verb="reset")
+    assert aq.deposit(bot, tmp_path).parent == tmp_path / "bot" / "queue"
+    aq.withdraw("console", doc["id"], tmp_path)
+    assert not path.exists()
+    with pytest.raises(ValueError):
+        aq.deposit({**doc, "id": "../x"}, tmp_path)
+
+
+def test_fs1b_requests_left_unanswered_are_swept_after_an_hour(tmp_path):
+    old, new = aq.deposit(_request(), tmp_path), aq.deposit(_request(), tmp_path)
+    os.utime(old, (0, 0))
+    assert aq.sweep_requests("console", tmp_path) == 1
+    assert not old.exists() and new.exists()
+
+
+def test_fs1b_a_receipt_is_read_only_when_it_is_the_watchs_for_this_request(tmp_path):
+    rid = "a" * 32
+    body = {"request": rid, "service": "console", "state": "done", "verb": "isolate_vm"}
+    path = aq.receipt_path("console", rid, tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(aq.sign_watch("receipt", body, WATCH)))
+    assert aq.read_receipt("console", rid, root=tmp_path, watch_public=WATCH.public)["state"] == "done"
+    assert aq.read_receipt("console", rid, root=tmp_path, watch_public=STRANGER.public) is None
+    assert aq.read_receipt("bot", rid, root=tmp_path) is None                  # another service's name
+    path.write_text(json.dumps(aq.sign_watch("proposal", body, WATCH)))
+    assert aq.read_receipt("console", rid, root=tmp_path) is None              # not a receipt
+    path.write_text("[" * 60_000)
+    assert aq.read_receipt("console", rid, root=tmp_path) is None              # never raises
+    with pytest.raises(ValueError):
+        aq.receipt_path("console", "../../x")
+
+
+def test_fs1b_a_receipt_awaited_until_its_state_or_its_time(tmp_path):
+    rid = "b" * 32
+    clock = iter(range(100)).__next__
+    assert aq.await_receipt("console", rid, final=False, timeout_s=3, root=tmp_path, clock=clock,
+                            sleep=lambda s: None) is None
+    path = aq.receipt_path("console", rid, tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(aq.sign_watch("receipt", {"request": rid, "service": "console",
+                                                          "state": "accepted"}, WATCH)))
+    assert aq.await_receipt("console", rid, final=False, timeout_s=3, root=tmp_path, clock=clock,
+                            sleep=lambda s: None)["state"] == "accepted"
+    last = aq.await_receipt("console", rid, final=True, timeout_s=3, root=tmp_path, clock=clock,
+                            sleep=lambda s: None)
+    assert last["state"] == "accepted", "the last one read, once the time is out"
+
+
+def test_fs1b_the_flag_is_one_and_nothing_else():
+    for value, on in (("1", True), ("", False), ("0", False), ("true", False), ("yes", False), ("1 ", False)):
+        assert aq.enabled({aq.FLAG_ENV: value}) is on, value
+    assert aq.enabled({}) is False
+
+
+def test_fs1b_queue_keys_prints_the_line_to_pin_never_a_private_key(capsys):
+    assert aq.main(["public"]) == 1                                  # none drawn yet
+    console = aq.load_service_key("console")
+    assert aq.main(["public"]) == 0
+    out = capsys.readouterr().out
+    assert f"export {aq.KEYS_ENV}=console={watch_key.public_text(console.public)}" in out
+    line = next(x for x in out.splitlines() if x.startswith("export "))
+    pins, wrong = aq.parse_pins(line.split("=", 1)[1])
+    assert pins == {"console": console.public} and not wrong
+    bot = aq.load_service_key("bot")
+    assert aq.main(["pin", "bot"]) == 0
+    assert capsys.readouterr().out.strip() == f"bot={watch_key.public_text(bot.public)}"
+    assert aq.main(["pin", "watch"]) == 2
+    raw = (aq.service_key_dir("console") / watch_key.SERVICE_KEY_FILE).read_bytes()
+    assert raw.hex() not in out
+
+
+def test_fs1b_a_proposal_kept_only_while_it_stands_and_is_young():
+    card = {"id": "c1", "action": "isolate_vm", "resource_id": VM, "escalation_type": "mode_hold"}
+    p = aq.sign_proposal(card, WATCH, NOW)
+    assert aq.proposal_fresh(card, p, WATCH.public, NOW + timedelta(seconds=10), 600)
+    assert not aq.proposal_fresh(card, p, WATCH.public, NOW + timedelta(seconds=600), 600)
+    assert not aq.proposal_fresh(card, p, WATCH.public, NOW - timedelta(seconds=1), 600)    # dated ahead
+    assert not aq.proposal_fresh(card, p, STRANGER.public, NOW, 600)
+    assert not aq.proposal_fresh({**card, "action_params": {"port": 22}}, p, WATCH.public, NOW, 600)
+    assert not aq.proposal_fresh(card, None, WATCH.public, NOW, 600)

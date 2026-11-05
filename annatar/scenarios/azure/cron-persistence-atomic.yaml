@@ -1,0 +1,81 @@
+# VM3 (#548) — Scheduled Task/Job: Cron (T1053.003), via a PINNED Atomic Red Team test.
+#
+# The attack is the atomic « Cron - Replace crontab with referenced file » (guid 435057fb…),
+# run in the target VM through Run Command by the adapter (annatar/engines/atomic.py). Its own
+# command and cleanup_command are used verbatim: it writes `* * * * * /tmp/evil.sh` to the
+# current crontab and restores the previous one at cleanup. The test runs on Ubuntu, with no
+# outbound network dependency (it only calls `crontab`), which is why it was chosen over the
+# other T1053.003 atomics (they drop files in /etc/cron.* without a crontab REPLACE event, so
+# nothing is logged until cron reloads).
+#
+# DESTRUCTIVE (B3): it replaces root's whole crontab — `crontab -l > /tmp/notevil`, then
+# `crontab /tmp/persistevil` — and restores it from /tmp/notevil, a predictable path. Bench only,
+# refused in production by the inscription (the catalog: destructive, sandbox_disposable).
+#
+# Blue side: the crontab command logs a « REPLACE » line to Syslog facility cron
+# (t1053-003-cron-crontab-replace). That facility is NOT collected by the bench DCR by default
+# — infra/terraform/monitoring.tf proposes it behind `cron_logs_enabled` (off).
+schema_version: "1"
+kind: technique
+engine: atomic
+engine_ref: T1053.003/435057fb-74b1-410e-9403-d81baf194f75
+name: cron-persistence-atomic
+description: "T1053.003 — Scheduled Task/Job: Cron, via a pinned Atomic Red Team test (replaces root's crontab, bench only)"
+mitre: T1053.003
+version: "1.0.0"
+destructive: true
+
+target:
+  type: azure_vm
+  resource_group: rg-celebrimbor
+  vm_name: vm-celebrimbor-gondolin
+
+# Checked on the VM before the attack (clean start — the evil cron line absent) and after the
+# atomic's cleanup (the previous crontab restored). `#{command}` is filled from the atomic's
+# input-argument default (/tmp/evil.sh).
+steady_state:
+  probes:
+    - name: cron-entry-absent
+      verify: "crontab -l 2>/dev/null | grep -qF '#{command}' && echo PRESENT || echo ABSENT"
+      expect: ABSENT
+    # The two files the test writes at predictable /tmp paths — /tmp/notevil is root's crontab,
+    # reinstalled by the cleanup. Absent before (a file planted there would become root's
+    # crontab); the upstream cleanup does not remove them — the revert below does, and the
+    # after-check verifies it.
+    - name: tmp-files-absent
+      verify: "if [ -e /tmp/notevil ] || [ -L /tmp/notevil ] || [ -e #{tmp_cron} ] || [ -L #{tmp_cron} ]; then echo TMP_PRESENT; else echo TMP_ABSENT; fi"
+      expect: TMP_ABSENT
+
+# The scenario's own return (E1 `revert`, decided 05/11): run AFTER the atomic's cleanup (which
+# reads /tmp/notevil) and only once it ran; it removes the two files the test leaves (`rm -f --`,
+# inside /tmp/ only — annatar/engines/atomic.py, revert_commands). The vendored file is never
+# touched. It must be the catalog entry's: another revert makes the run unknown, so destructive.
+revert:
+  - name: remove-tmp-files
+    action: remove_files
+    paths: ["/tmp/notevil", "#{tmp_cron}"]
+
+detection:
+  timeout: "600s"
+  prerequisites:
+    - name: syslog_cron_dcr
+      table: Syslog
+      why: >
+        The DCR must collect facility 'cron' — crontab logs its REPLACE/DELETE there, and the
+        bench DCR does not collect it by default (infra/terraform/monitoring.tf,
+        cron_logs_enabled).
+      verify: "Syslog | where Facility == 'cron' | where TimeGenerated > ago(1h) | limit 1"
+  hints:
+    log_source: Syslog
+    attack_commands_summary: >
+      Atomic Red Team T1053.003 (Linux, guid 435057fb…): crontab -l > /tmp/notevil, then
+      echo "* * * * * /tmp/evil.sh" > /tmp/persistevil && crontab /tmp/persistevil; cleanup
+      restores the previous crontab (crontab /tmp/notevil). The crontab command logs a line to
+      facility cron: "(root) REPLACE (root)", ProcessName crontab.
+    expected_indicators:
+      - "Syslog Facility: 'cron'"
+      - "ProcessName: 'crontab'"
+      - "SyslogMessage contains 'REPLACE'"
+    failure_candidates:
+      - "Syslog | where Facility == 'cron' | where ProcessName == 'crontab' | where SyslogMessage has 'REPLACE' | where TimeGenerated > ago(10m)"
+      - "cron CMD lines (ProcessName CRON) are jobs running, not a crontab edit — not this rule"

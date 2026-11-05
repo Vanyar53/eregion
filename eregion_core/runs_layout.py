@@ -6,7 +6,11 @@ by those who read it (docs/fichiers-cles.md, « runs/ — qui écrit, qui lit, q
   ``<run_id>.json`` and ``.pulled-runs/``, ``exercises/``, ``orodruin/``), and what the analysis
   writes of a campaign (``campaigns/<id>/report.md``, ``report.error``, ``triage.*``,
   ``replay.json``) — wherever the campaign itself was written;
-- ``runs/console/`` — the console, Glorfindel's CLI and the bot: ``manual_actions.jsonl``;
+- ``runs/console/`` — the console, Glorfindel's CLI and the bot: ``manual_actions.jsonl``; the
+  console's requests of the action queue (``queue/``, FS1b);
+- ``runs/bot/`` — the bot (FS1b): its requests of the action queue (``queue/``), signed by its
+  key — a writer of its own, so the directory says the writer, and the key must be its;
+- ``runs/glorfindel/queue/`` — the watch's receipts of those requests and its status, signed;
 - ``runs/annatar/`` — Annatar: ``*_signals.jsonl``, ``<run_id>.json``, ``exercises/``,
   ``campaigns/``;
 - ``runs/gothmog/`` — Gothmog: ``*_signals.jsonl``, ``<run_id>.json``, ``exercises/``;
@@ -46,7 +50,8 @@ from pathlib import Path
 ROOT = Path("runs")
 GLORFINDEL, CONSOLE, ANNATAR, GOTHMOG, ORODRUIN = "glorfindel", "console", "annatar", "gothmog", "orodruin"
 VERDICTS = "verdicts"   # written by the watch, read-only to the red (SEC18)
-WRITERS = (GLORFINDEL, CONSOLE, ANNATAR, GOTHMOG, ORODRUIN, VERDICTS)
+BOT = "bot"             # FS1b: the bot's requests of the action queue — a writer of its own
+WRITERS = (GLORFINDEL, CONSOLE, ANNATAR, GOTHMOG, ORODRUIN, VERDICTS, BOT)
 # What Orodruin's host holds: no watch there — its verdicts come by the storage channel.
 ORODRUIN_HOST = (ANNATAR, GOTHMOG, ORODRUIN)
 INJECTORS = (ANNATAR, GOTHMOG)
@@ -61,14 +66,18 @@ _FILES = {
     GOTHMOG: ("*_signals.jsonl", "*.json"),
     ORODRUIN: ("audit.jsonl",),
     VERDICTS: ("heartbeat.json",),
+    BOT: (),
 }
+# FS1b: ``queue/`` — a service's requests of the action queue (console, bot), the watch's receipts
+# and its status (glorfindel).
 _DIRS = {
-    GLORFINDEL: ("campaigns", "exercises", "orodruin"),
-    CONSOLE: (),
+    GLORFINDEL: ("campaigns", "exercises", "orodruin", "queue"),
+    CONSOLE: ("queue",),
     ANNATAR: ("campaigns", "exercises"),
     GOTHMOG: ("exercises",),
     ORODRUIN: ("requests",),
     VERDICTS: ("detections",),
+    BOT: ("queue",),
 }
 # The analysis' files of a campaign: in the watch's directory, whoever wrote the campaign.
 ANALYSIS_FILES = ("report.md", "report.error", ".report.lock", "triage.md", "triage.json",

@@ -253,6 +253,157 @@ rules:
       | project TimeGenerated, Computer, _ResourceId, Facility, SeverityLevel, ProcessName, SyslogMessage
       | order by TimeGenerated desc
 
+  # ── VM3 (#548) : trois paires rouge/bleu de plus sur VM ──────────────────────────
+  # Chaque règle voit l'effet d'un test Atomic Red Team épinglé (annatar/atomics/, cf. PIN),
+  # joué depuis Orodruin. Le seuil est dans le KQL (le texte que l'opérateur lit, intact P1).
+
+  - name: t1053-003-cron-crontab-replace
+    description: >
+      Cron persistence — T1053.003. Fires on a crontab REPLACE/DELETE written by the `crontab`
+      command to Syslog facility cron (« (user) REPLACE (user) »). Seuil : une édition de crontab
+      (REPLACE ou DELETE). Le bruit bénin ne déclenche pas : cron qui EXÉCUTE une tâche écrit
+      « CMD » sous ProcessName CRON (jobs d'apt, logrotate via /etc/cron.daily, anacron), un
+      `crontab -l` écrit « LIST ». Elle se déclenche aussi sur toute édition légitime
+      (`crontab -e` d'un administrateur, une installation qui écrit une crontab) et, pendant un
+      run, sur le REPLACE du cleanup de l'atomic (la crontab rétablie) — une carte de plus dans la
+      fenêtre de l'exercice. La facilité cron n'est PAS collectée par la DCR du banc par
+      défaut — infra/terraform/monitoring.tf la propose derrière cron_logs_enabled (désactivé).
+    enabled: true
+    ttp: T1053.003
+    assets: [auto]
+    interval_s: 30
+    expected_latency_s: 480
+    query: |
+      Syslog
+      | where TimeGenerated > ago(10m)
+      // crontab logs to facility cron (LOG_CRON) on Debian/Ubuntu (hypothesis, to measure).
+      | where Facility == "cron"
+      // The crontab command only (not the cron daemon CRON running a job, not anacron).
+      | where ProcessName == "crontab"
+      // An edit of the crontab — install (REPLACE) or remove (DELETE); a LIST (`crontab -l`) is
+      // a read, a CMD line is a job running, neither is a persistence written.
+      | where SyslogMessage has "REPLACE" or SyslogMessage has "DELETE"
+      | project TimeGenerated, Computer, _ResourceId, Facility, ProcessName, SyslogMessage
+      | order by TimeGenerated desc
+
+  - name: t1070-002-log-tamper
+    description: >
+      Log tampering on Linux — T1070.002. Fires on an auditd event (infra/terraform/scripts/
+      vm3_auditd.sh, key « log_tamper » : a write, create, rename, unlink or truncate under
+      /var/log) whose writer is not a log daemon. Seuil : un tel événement, sauf s'il est le fait
+      d'un démon de journalisation (rsyslogd — son fil « rs:main Q:Reg » a un comm en
+      hexadécimal, l'exe reste lisible —, journald, logrotate, auditd), ou d'un écrivain connu sur
+      ses seuls fichiers : les sessions (sshd, login, useradd…) sur wtmp, btmp, lastlog, faillog ;
+      l'agent Azure et ses extensions (python3, /var/lib/waagent/, /opt/microsoft/) sur
+      /var/log/azure/, waagent.log, unattended-upgrades ; dpkg et apt sur /var/log/apt/ et
+      dpkg.log. Jugé sur `exe` (le chemin du noyau) et sur les chemins, jamais sur `comm` (que
+      l'attaquant choisit). Lu dans Syslog facilité local6 (auditd_enabled). HYPOTHÈSES à mesurer
+      (A0, AUD1) : forme des lignes PATH et SYSCALL, chemins absolus ; un `echo 0>` sur un journal
+      existant (O_TRUNC) vu par la surveillance du répertoire, à mesurer.
+    enabled: true
+    ttp: T1070.002
+    assets: [auto]
+    interval_s: 60
+    expected_latency_s: 480
+    query: |
+      Syslog
+      | where TimeGenerated > ago(10m)
+      | where Facility == "local6"
+      | where ProcessName == "audisp-syslog" or ProcessName == "audispd"
+      | where SyslogMessage has "msg=audit("
+      | extend AuditEvent = extract(@"msg=audit\((\d+\.\d+:\d+)\)", 1, SyslogMessage),
+               RecordType = extract(@"(?:^|\s)type=(SYSCALL|PATH)\s", 1, SyslogMessage),
+               Key = extract(@'(?:^|\s)key="([^"]*)"', 1, SyslogMessage),
+               Exe = extract(@'(?:^|\s)exe="([^"]*)"', 1, SyslogMessage),
+               Name = extract(@'(?:^|\s)name="([^"]*)"', 1, SyslogMessage),
+               NameType = extract(@"(?:^|\s)nametype=([A-Z_]+)", 1, SyslogMessage),
+               // Each record kept bounded on the card (as AUD1's RECORD_KEPT).
+               Record = extract(@"^(.{0,1000})", 1, SyslogMessage)
+      | where isnotempty(AuditEvent) and isnotempty(RecordType)
+      // The event's SYSCALL (its key, its exe) and the entries it touched (PATH, not the parent).
+      | extend Tamper = RecordType == "SYSCALL" and Key == "log_tamper"
+      | extend Entry = RecordType == "PATH" and NameType != "PARENT"
+      // Who wrote, by the kernel's path of the program.
+      | extend Daemon = Tamper and Exe in ("/usr/sbin/rsyslogd", "/usr/lib/systemd/systemd-journald",
+                                          "/lib/systemd/systemd-journald", "/usr/sbin/logrotate",
+                                          "/usr/sbin/auditd")
+      | extend Session = Tamper and Exe in ("/usr/sbin/sshd", "/usr/lib/openssh/sshd-session",
+                                           "/usr/bin/login", "/usr/sbin/useradd", "/usr/sbin/usermod",
+                                           "/usr/sbin/userdel", "/usr/lib/systemd/systemd-logind")
+      | extend Agent = Tamper and (Exe startswith "/usr/bin/python3" or Exe startswith "/var/lib/waagent/"
+                                   or Exe startswith "/opt/microsoft/")
+      | extend Package = Tamper and Exe in ("/usr/bin/dpkg", "/usr/bin/apt", "/usr/bin/apt-get")
+      // What each known writer writes.
+      | extend SessionFile = Entry and (Name has "wtmp" or Name has "btmp" or Name has "lastlog" or Name has "faillog")
+      | extend AgentFile = Entry and (Name startswith "/var/log/azure/" or Name == "/var/log/waagent.log"
+                                     or Name startswith "/var/log/unattended-upgrades/")
+      | extend PackageFile = Entry and (Name startswith "/var/log/apt/" or Name == "/var/log/dpkg.log")
+      | summarize TimeGenerated = min(TimeGenerated), Tampers = countif(Tamper),
+                  Daemons = countif(Daemon), Sessions = countif(Session), Agents = countif(Agent),
+                  Packages = countif(Package), Entries = countif(Entry),
+                  SessionFiles = countif(SessionFile), AgentFiles = countif(AgentFile),
+                  PackageFiles = countif(PackageFile),
+                  Writer = make_set_if(Exe, Tamper, 2), Paths = make_set_if(Name, Entry, 8),
+                  Records = make_set_if(Record, Tamper or Entry, 8)
+                  by Computer, _ResourceId, AuditEvent
+      | where Tampers > 0
+      | where Daemons == 0
+      // A known writer is set aside only when every entry it touched is one of its own files;
+      // an event with no entry read is kept (fail closed).
+      | where not(Sessions > 0 and Entries > 0 and SessionFiles == Entries)
+      | where not(Agents > 0 and Entries > 0 and AgentFiles == Entries)
+      | where not(Packages > 0 and Entries > 0 and PackageFiles == Entries)
+      // No SyslogMessage of its own: the row is told apart by its event (_row_identity), and no
+      // writer's name in a free text can characterize it (useradd ≠ account_creation here).
+      | project TimeGenerated, Writer, Paths, Computer, _ResourceId, AuditEvent, Records
+
+  - name: t1059-004-shell-from-world-writable
+    description: >
+      Unix shell running a script from a world-writable path — T1059.004. Fires on an auditd event
+      whose SYSCALL has key « shell_exec » (a shell's execve, infra/terraform/scripts/vm3_auditd.sh)
+      AND whose EXECVE record names a script under /tmp, /dev/shm or /var/tmp — its first
+      argument, or its second after an option (`bash -x /tmp/x`, `sh -c /tmp/x`). Seuil : les deux
+      dans le même événement. Distincte d'auditd-sensitive-root-command : celle-ci ne lit que les
+      commandes d'une connexion HUMAINE en root (auid ≥ 1000) — un run par Run Command a l'auid non
+      posé ; exemptée de cette lecture par son nom (glorfindel/auditd.py, EXEMPT_RULES). Chaque
+      enregistrement borné à 1000 caractères, quatre au plus. Contournements, non vus : un chemin
+      relatif (`sh ./x` depuis /tmp), une commande `sh -c '…'` à plusieurs mots, un chemin qu'auditd
+      écrit en hexadécimal (une espace, un guillemet), un argument après le deuxième, un autre
+      interpréteur que dash et bash. Lu dans Syslog local6 (auditd_enabled). HYPOTHÈSES à mesurer
+      (A0, AUD1) : forme des lignes.
+    enabled: true
+    ttp: T1059.004
+    assets: [auto]
+    interval_s: 60
+    expected_latency_s: 480
+    query: |
+      Syslog
+      | where TimeGenerated > ago(10m)
+      | where Facility == "local6"
+      | where ProcessName == "audisp-syslog" or ProcessName == "audispd"
+      | where SyslogMessage has "msg=audit("
+      | extend AuditEvent = extract(@"msg=audit\((\d+\.\d+:\d+)\)", 1, SyslogMessage),
+               RecordType = extract(@"(?:^|\s)type=(SYSCALL|EXECVE)\s", 1, SyslogMessage),
+               Key = extract(@'(?:^|\s)key="([^"]*)"', 1, SyslogMessage),
+               A1 = extract(@'(?:^|\s)a1="([^"]*)"', 1, SyslogMessage),
+               A2 = extract(@'(?:^|\s)a2="([^"]*)"', 1, SyslogMessage),
+               // Each record kept bounded on the card (as AUD1's RECORD_KEPT).
+               Record = extract(@"^(.{0,1000})", 1, SyslogMessage)
+      | where isnotempty(AuditEvent) and isnotempty(RecordType)
+      // A shell's execve (the SYSCALL's key) and, in the same event, an EXECVE whose script
+      // argument is under a world-writable directory.
+      | extend ShellExec = RecordType == "SYSCALL" and Key == "shell_exec"
+      | extend TmpArg = RecordType == "EXECVE" and (A1 startswith "/tmp/" or A1 startswith "/dev/shm/" or A1 startswith "/var/tmp/")
+      | extend TmpAfterOption = RecordType == "EXECVE" and A1 startswith "-" and (A2 startswith "/tmp/" or A2 startswith "/dev/shm/" or A2 startswith "/var/tmp/")
+      | summarize TimeGenerated = min(TimeGenerated), Shells = countif(ShellExec),
+                  Tmp = countif(TmpArg or TmpAfterOption),
+                  Execve = make_set_if(Record, RecordType == "EXECVE", 4),
+                  Syscall = make_set_if(Record, RecordType == "SYSCALL", 4)
+                  by Computer, _ResourceId, AuditEvent
+      | where Shells > 0 and Tmp > 0
+      // No SyslogMessage of its own: the row is told apart by its event (_row_identity).
+      | project TimeGenerated, Execve, Computer, _ResourceId, AuditEvent, Syscall
+
   # ── Plan de contrôle : le journal d'activité (AzureActivity, AL1) ─────────────
   # Détection seule : une détection sur AzureActivity n'entraîne JAMAIS d'action
   # autonome — `decide` construit la décision par le code, sans appel au modèle :

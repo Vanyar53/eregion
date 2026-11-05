@@ -300,3 +300,11 @@ autre, épingler la nouvelle chez les injecteurs.
   les injecteurs. Une signature connue, calculée avec le code d'avant FS1a, le prouve octet pour
   octet (`test_the_watch_signs_its_heartbeat_as_before_the_draw_was_shared`), avec les tests et les
   mutants de SEC19 et de SEC21, inchangés.
+
+**Fait dans FS1b (#563, 05/11).** Derrière `EREGION_ACTION_QUEUE=1`, la watch signe aussi, sous
+`eregion.action-queue/1`, ses **reçus** (`kind` `receipt`) et son **statut** de la file (`kind`
+`status`), dans `runs/glorfindel/queue/` ; elle vérifie sa propre proposition avec la moitié
+publique de la clé en mémoire. La console et le bot tirent leur clé de service à leur démarrage
+(`load_or_create(…, name="queue_ed25519")`), et `read_public(…, name=…)` la relit pour
+`make queue-keys`. La clé de la watch, sa place et le battement ne changent pas
+([`file-actions-signee.md`](file-actions-signee.md), §8).

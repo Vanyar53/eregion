@@ -13,6 +13,7 @@ but lives here so Annatar does not import from the glorfindel package.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -103,7 +104,29 @@ def _pinned(entry: dict[str, Any], script: str) -> bool:
         return False
 
 
+def _plain_args(args: Any) -> dict[str, str] | None:
+    """engine_args as compared (VM3): each value as text; {} for none; None for what is no
+    mapping — never equal to the catalog's."""
+    if args is None:
+        return {}
+    if not isinstance(args, dict):
+        return None
+    return {str(k): str(v) for k, v in args.items()}
+
+
+def _plain_revert(revert: Any) -> str | None:
+    """A revert (E1, VM3) as compared: its steps, in order, as canonical text; "[]" for none;
+    None for what is no list — never equal to the catalog's."""
+    if revert is None:
+        return "[]"
+    if not isinstance(revert, list):
+        return None
+    return json.dumps(revert, sort_keys=True, default=str)
+
+
 def catalog_destructive(ttp: str, *, engine: str = "", engine_ref: str = "",
+                        engine_args: dict[str, Any] | None = None,
+                        revert: list[Any] | None = None,
                         scripts: list[str] | tuple[str, ...] | None = None,
                         catalog: dict[str, dict[str, Any]] | None = None) -> bool | None:
     """Does the catalog say this technique destroys or alters data? ``None`` when it does not
@@ -111,6 +134,9 @@ def catalog_destructive(ttp: str, *, engine: str = "", engine_ref: str = "",
 
     The catalog decides, not the scenario: the entry of the technique, and only for the source
     the catalog names. An atomic (``engine: atomic``) must be the entry's own ``engine_ref``;
+    with the entry's own ``engine_args`` (VM3: an argument the catalog does not set, or sets
+    otherwise, makes it another run than the one it vouched for), and the entry's own
+    ``revert`` (VM3: the steps a scenario runs after the atomic's cleanup are commands too);
     a local script, the entry's ``reference_script`` or one of its ``setup_scripts`` — each of
     ``scripts``, when given —, its content the one the entry pins (``script_sha256``, SEC14
     V-19: a path is not a content; ``scripts/`` may be written). Another test, another script,
@@ -121,6 +147,12 @@ def catalog_destructive(ttp: str, *, engine: str = "", engine_ref: str = "",
         return None
     if engine and engine != "local-script":
         if entry.get("engine") != engine or entry.get("engine_ref") != engine_ref:
+            return None
+        own = _plain_args(engine_args)
+        if own is None or own != _plain_args(entry.get("engine_args")):
+            return None
+        mine = _plain_revert(revert)
+        if mine is None or mine != _plain_revert(entry.get("revert")):
             return None
     elif scripts:
         known = {entry.get("reference_script")} | set(entry.get("setup_scripts") or [])

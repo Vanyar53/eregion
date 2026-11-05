@@ -31,10 +31,27 @@ eregion_core/action_queue.py    → FS1a (#551) : la file d'actions signée, son
                                    (liste fermée, ceux de chaque service), les refus (liste fermée, REFUSALS) ;
                                    verify_request (pur : forme, signature, clé épinglée EREGION_QUEUE_KEYS, service,
                                    fraîcheur, nonce, verbe, débit), proposal_refusal ; la clé d'un service tirée par le
-                                   code de watch_key (~/.eregion/console|bot/queue_ed25519). Personne ne la lit encore
-                                   pour agir (FS1b) — docs/design/file-actions-signee.md
+                                   code de watch_key (~/.eregion/console|bot/queue_ed25519). FS1b (#563) : la file sur
+                                   le disque (deposit, read_receipt, await_receipt, ask : le geste d'un service, son reçu
+                                   attendu), le drapeau EREGION_ACTION_QUEUE (enabled : « 1 », faux par défaut), le
+                                   registre durable (SeenFile, ConsumedFile, fsync), le débit avant le registre,
+                                   proposal_fresh ; `python -m eregion_core.action_queue public|pin` (make queue-keys)
+                                   — docs/design/file-actions-signee.md
+glorfindel/queue_watch.py       → FS1b (#563) : la watch relève la file (derrière EREGION_ACTION_QUEUE=1), dans un fil
+                                   à elle — reçu received, vérification, rattachement, gardes rejouées, posture,
+                                   proposition consommée, accepted, exécution sous _vm_lock, done/failed ; reçus et
+                                   statut signés (runs/glorfindel/queue/), cartes queue_tampered (critiques) et
+                                   queue_unavailable ; recover : un arrêt entre réclamation et fin dit interrupted
+glorfindel/approval.py          → FS1b : les gardes d'un geste humain, un seul code pour la console et la watch —
+                                   approval_refusal (l'âge : last_seen pour la console, l'issued_at signé pour la
+                                   watch), address_refusal, scope_refusal, held_isolation/held_block(s), in_perimeter,
+                                   discord_refusal, verify_approved
+glorfindel/gestures.py          → FS1b : la levée et le reset de la CLI en fonctions (release_needed, reset_targets,
+                                   reset_apply), appelées par la CLI et par la watch
+eregion_console/action_requests.py → FS1b : le côté console de la file (ask, answer) — les routes d'écriture, derrière
+                                   EREGION_ACTION_QUEUE=1
 eregion_core/runs_layout.py     → SEC18 (N-05) : runs/ un répertoire par écrivain — glorfindel/, console/, annatar/,
-                                   gothmog/, orodruin/ ; ce que chacun tient (belongs), où un lecteur trouve les
+                                   gothmog/, orodruin/, verdicts/, bot/ (FS1b : ses demandes de la file, queue/) ; ce que chacun tient (belongs), où un lecteur trouve les
                                    campagnes et les rapports (campaign_dirs, find_campaign, run_reports), où l'analyse
                                    écrit (campaign_output), ce qui n'est pas lu, dit une fois (survey, say_strays), le
                                    rapport d'un run tenu contre son répertoire (report_refusal), la migration de
@@ -115,6 +132,10 @@ glorfindel/
                           isolation qu'il a enregistrée — `drains_at` de l'état — est une carte critique),
                           entra.py (AzureEntraDetector, C2 : les journaux d'Entra ID, détection seule ; seuils en code,
                           identité de Glorfindel marquée acteur ou cible, jamais écartée ; texte et étapes des cartes)
+                          graph.py (IR1a : Microsoft Graph en lecture seule, un GET et rien d'autre ; Unreadable : un droit,
+                          une erreur, un délai), entra_plan.py + entra_items.py + entra_grants.py (IR1a : le plan d'une carte
+                          identity_change, par le code, ses ids lus dans Graph, jamais inventés), entra_check.py (IR1a : Verify,
+                          held / not_held / unreadable, jamais held sans la réponse de Graph)
                           backup.py : check_backup_points ; list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
                           indépendant de l'état des VMs (source de vérité backup même VM éteinte). Cheap leg : 1 appel
                           paginé, pas de count RP par item (count = check_backup_points par VM, opt-in). Read-only OK.

@@ -266,6 +266,25 @@ Après I1F, AL1, C2 et A3 (27/10) :
 - **Le détail d'une carte échappe tout ce qui vient d'Azure ou du modèle** (raison, étapes, requête
   proposée) : un nom d'application Entra ID ou de règle NSG choisi par un attaquant ne s'exécute pas dans la page.
 
+**Le plan d'une carte d'identité, et Verify (IR1a, #552, 05/11)** :
+- Dans le détail d'une carte `identity_change` qui porte un plan (`identity_plan`, écrit par la watch,
+  `docs/glorfindel.md`), la console montre le plan à la place des étapes : « Verbs (the identity
+  executor's, IR1c) » puis « Steps for a human », chacun avec sa commande complète, ce qui n'a pas été
+  lu (« not read: … », jamais inventé), la commande qui le trouve, ce qu'il faut garder avant, l'effet
+  de bord et le retour arrière. Un bandeau dit quand Graph n'a pas été lu, et pourquoi. Aucun
+  exécuteur avant IR1c : chaque ligne se fait à la main, avec le compte de l'opérateur.
+- **🔎 Verify** (`verifyIdentity`, `POST /api/identity/verify/<id>`) écrit la demande sur la carte, pour
+  la watch. **La console ne lit jamais Graph** : elle n'a aucun droit sur Entra ID. La watch relit
+  Graph (~10 s) et note le résultat au fil de la carte (`identity_checks`) ; la page relit l'état
+  toutes les 5 s pendant une minute, puis dit que la watch n'a pas répondu (la demande reste sur la
+  carte). Les trois derniers résultats sont montrés : **held** (vert), **NOT held** (rouge),
+  **unreadable (never « held »)** (jaune), chaque étape dite. Le bouton n'écrit rien sur Azure : le mode
+  lecture seule le laisse actif.
+- Tout champ du plan est un texte du dehors (un nom d'application choisi par un attaquant) : écrit par
+  `_attr`, toujours (`tests/unit/test_console_escaping.py`, mutant M3898). Aucun bouton d'action, ni dans
+  la console ni dans le bot : le bot montre le plan (les étapes de la carte), il n'agit pas (§3.2, Q5).
+- Tests : `tests/unit/test_console_identity_plan.py` ; mutants M3880–M3899 (`scripts/mutants/IR1a.py`).
+
 **Mutants M570–M575** (`tests/unit/test_console.py`) :
 - M570 : un type sans libellé.
 - M571 : une carte du plan de contrôle retrouve Restore.
@@ -356,6 +375,41 @@ ne l'était pas.
 - Tests : `tests/unit/test_console_signed_detections.py` (signée, non signée, d'une autre clé,
   changée, recopiée, pas un objet, sans clé, une valeur qui n'est pas une clé, la borne, la parité avec
   `vouched_detections`, la page, le compose) ; mutants M3750–M3759 (`scripts/mutants/CON-S.py`).
+
+### Les gestes d'écriture par la file d'actions signée (FS1b, #563, 05/11)
+
+**Derrière `EREGION_ACTION_QUEUE=1` seulement** ; faux par défaut, et alors rien ne change : chaque
+route garde son appel direct, aucune demande n'est écrite (`tests/unit/test_action_queue_watch.py`
+le prouve). Avec le drapeau, les routes d'écriture — Approve & execute (`/api/action/approve/{id}` :
+isoler, bloquer, instantané, lever), Release, Reset (`revert`), Extend to subnet (`block-promote`),
+Unblock, Snapshot — n'appellent plus Azure : elles déposent une **demande signée par la clé de la
+console** (`~/.eregion/console/queue_ed25519`, tirée au démarrage de la console avec le drapeau, son
+empreinte dite) dans `runs/console/queue/<id>.json`, puis attendent le reçu de la watch
+(`runs/glorfindel/queue/console-<id>.json`) : `accepted` ou `refused` dans la vie de la demande
+(120 s, plus l'écart d'horloge), puis `done` ou `failed` (600 s au plus, comme la CLI). La route
+répond comme avant à partir du reçu (`ok`, `result`, `verification` ; un refus : `error` et
+`refused`, son code) et porte `via: "queue"` et l'id de la demande ; la demande est retirée une fois
+répondue, et celles qu'aucune réponse n'a retirées le sont au bout d'une heure. Le geste est noté
+dans `runs/console/manual_actions.jsonl` (le fil, les indicateurs) à partir du reçu, comme l'appel
+direct le notait. Le restore n'y passe pas (FS1g).
+- **Les gardes de la console restent, et la watch les rejoue** : `_approval_refusal` et
+  `_verify_approved` appellent le code partagé `glorfindel/approval.py` ; `_APPROVABLE_TYPES` est
+  `action_queue.APPROVABLE_TYPES`, importé, plus recopié. La console juge d'abord pour dire tout de
+  suite ; la watch juge ensuite, sur sa propre lecture (l'âge de la carte : l'`issued_at` signé de sa
+  proposition, jamais `last_seen`).
+- **La demande d'une approbation nomme la carte et le condensé de la proposition** que la watch a
+  signée dessus : une carte sans proposition (d'avant FS1, ou d'une autre main) est refusée tout de
+  suite, `proposal_missing`, avec ce qu'en dit la watch. L'adresse saisie quand la carte n'en a pas
+  part dans la demande ; celle d'une carte qui en a une ne se remplace pas.
+- **L'humain** : `by.via = "console-token"` et `by.session`, 8 caractères hexadécimaux d'une HMAC par
+  le jeton de la date d'émission de la session (le cookie ; « bearer » pour un script), jamais le
+  jeton — deux navigateurs séparés au journal de la watch, rien de plus (§2.7).
+- **Sans watch** (arrêtée, sans le drapeau, sans la clé de la console épinglée) : la route dit
+  « the watch did not take the request in 120 s » et le geste à faire.
+- **À FS1c** : la file par défaut, les routes asynchrones (`GET /api/queue/<id>`), les boutons grisés
+  selon le statut que la watch publie (`runs/glorfindel/queue/status.json`, signé).
+- Code : `eregion_console/action_requests.py`, `eregion_core/action_queue.py` (`ask`, `deposit`,
+  `await_receipt`) ; conception : [`file-actions-signee.md`](file-actions-signee.md).
 
 ### Ce qui vient du dehors (#254)
 

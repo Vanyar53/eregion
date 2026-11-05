@@ -512,8 +512,9 @@ MUTANTS = [
       "        errors = _runtime_atomic_errors(path)\n"),
      ("", "        errors = []\n")),
     ("M118", "the synthesizer accepts an engine_ref the adapter cannot resolve (#165)", SYN,
-     '    try:\n        resolve_ref(engine_ref)\n    except AtomicError as e:\n'
-     '        return SynthesisResult(False, f"{ttp}: engine_ref unresolved — {e}")\n',
+     '    try:\n        # the entry\'s revert too (VM3: what the upstream cleanup leaves, removed after it).\n'
+     '        revert_commands(revert, resolve_ref(engine_ref, engine_args))\n    except AtomicError as e:\n'
+     '        return SynthesisResult(False, f"{ttp}: engine_ref unresolved — {e}")\n',   # re-anchored (VM3)
      "    pass\n"),
     ("M119", "the catalog schema accepts an implemented atomic without steady_state (#165)", CATSCHEMA,
      '                  "const": "atomic"\n', '                  "const": "atomic-never"\n'),
@@ -713,18 +714,19 @@ MUTANTS = [
      C,
      "    return str(raw).strip().lower() not in _SWITCH_OFF\n",
      '    return str(raw).strip().lower() in ("1", "true", "yes")\n'),
+    # The approval's guards moved to glorfindel/approval.py, shared with the watch (FS1b, #563).
     ("M158", "the configuration: an approval age limit of nan or inf executes a card of any age (G2)",
-     "eregion_console/api.py",
+     "glorfindel/approval.py",
      "    if math.isnan(value) or value == math.inf:\n        return 2.0\n", ""),
     # G2, after the Opus 5.5 review (M159–M169 belong to lot 167).
     ("M170", "the configuration: an approval age limit of 0 or less is lifted to 2 h, reopening "
              "the one-click approval closed on purpose (G2 review)",
-     "eregion_console/api.py",
+     "glorfindel/approval.py",
      "    if math.isnan(value) or value == math.inf:\n",
      "    if math.isnan(value) or value == math.inf or value <= 0:\n"),
     ("M171", "the configuration: an approval age limit of 0 or less refuses no card of its own — "
              "a card dated ahead of the clock runs (G2 review)",
-     "eregion_console/api.py",
+     "glorfindel/approval.py",
      "    if max_age_h <= 0:\n", "    if False:\n"),
     ("M172", "the model: a NaN confidence passes the confidence gate (G2 review)",
      "glorfindel/agent.py",
@@ -824,9 +826,9 @@ MUTANTS = [
      "glorfindel/agent.py",
      '    "agreement": "unstable_decision",\n', ""),
     ("M211", "an unstable decision's card cannot be approved in one click (D-1)",
-     "eregion_console/api.py",
-     '                     "telemetry_gap", "unstable_decision"}\n',
-     '                     "telemetry_gap"}\n'),
+     "eregion_core/action_queue.py",     # the console imports the queue's list (FS1b, #563)
+     '                              "telemetry_gap", "unstable_decision"})\n',
+     '                              "telemetry_gap"})\n'),
     ("M212", "GLORFINDEL_DECISION_DRAWS never reaches the watch's container (D-1)",
      "docker-compose.yml",
      "  GLORFINDEL_DECISION_DRAWS: ${GLORFINDEL_DECISION_DRAWS:-}\n", ""),
@@ -2220,9 +2222,10 @@ MUTANTS += [
     ("M937", "an identity rule without EventId loads in silence (C2)", DRU,
      "        if rule_enabled and is_identity_source(source) and \"eventid\" not in item[\"query\"].lower():",
      "        if False:"),
-    ("M938", "a role card without how to revoke the assignment (C2)", ENT,
-     "            \"Non voulue : retirer l'attribution — portail, ou `az rest --method DELETE --url \"\n"
-     "            \"https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/<id>`.\",\n", ""),
+    # IR1a: the steps are the plan's (glorfindel/providers/azure/entra_grants.py), Graph not read here.
+    ("M938", "a role card without how to revoke the assignment (C2)", "glorfindel/providers/azure/entra_grants.py",
+     "            command=f\"az rest --method DELETE --url {GRAPH_URL}/roleManagement/directory/roleAssignments/{_v(aid_p)}\",\n",
+     "            command=\"\",\n"),
     ("M939", "the tenant's diagnostic setting always on: the whole tenant's logs sent (C2)",
      "infra/terraform/entra_logs.tf", "  count = local.entra_logs_enabled ? 1 : 0", "  count = 1"),
 ]
@@ -2248,10 +2251,11 @@ MUTANTS += [
     ("M945", "respond on an Entra query of another source goes to the model (C2)", AGT,
      "    entra_query = _reads_entra_table(query) and not is_control_plane_source(source)",
      "    entra_query = False"),
-    ("M946", "a consent card proposes to disable the resource's principal: the whole tenant cut (C2)", ENT,
-     "        client = (tid if op.lower() == \"consent to application\" and row.get(\"TargetId\")\n"
-     "                  else str(row.get(\"ClientId\") or \"\").strip())",
-     "        client = tid"),
+    # IR1a: the client is chosen by the plan (entra_grants.py); M3899 takes the target alone.
+    ("M946", "a consent card proposes to disable the resource's principal: the whole tenant cut (C2)",
+     "glorfindel/providers/azure/entra_grants.py",
+     "    client = guid(row.get(\"TargetId\")) if op == \"consent to application\" else guid(row.get(\"ClientId\"))\n",
+     "    client = guid(row.get(\"TargetId\")) or guid(row.get(\"ClientId\"))\n"),
     ("M947", "an identity card labelled exercise by a window on its anchor VM (C2)", AGT,
      "    if _is_identity(signal) or (\n"
      "            # `unattributed` is the RulePoller's own word; a respond signal (an\n"
@@ -8818,7 +8822,7 @@ MUTANTS += [
     ("M3134", "`reset --from-azure` on its own unreadable state says `swept` and deletes the file (I3U)", SWP,
      '        deleted, failed = [], unreadable + self._unread(resource_id, "reset non vérifié", unreadable + failed_early)\n',
      "        deleted, failed = [], list(unreadable)\n"),
-    ("M3135", "the plain reset on an unreadable state says « Nothing to reset » (I3U)", GCLI,
+    ("M3135", "the plain reset on an unreadable state says « Nothing to reset » (I3U)", "glorfindel/gestures.py",     # moved out of the CLI (FS1b, #563)
      '    isolations = isolations or ([{"resource_id": resource_id}] if _isolation_unreadable(resource_id) else [])\n',
      ""),
 ]
@@ -9809,9 +9813,9 @@ MUTANTS += [
     ("M3332", "a move writes over what is there (SEC18, review)", LAYOUT,
      "        os.link(src, dst, follow_symlinks=False)\n", "        os.replace(src, dst)\n        return 1\n"),
     ("M3333", "the workstation makes and mounts a writer's directory that is a link (SEC18, review)", MAKE,
-     "RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts; do \\\n"
+     "RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts runs/bot; do \\\n"
      "\t{ test ! -L \"$$d\" && { test ! -e \"$$d\" || test -d \"$$d\"; }; } \\\n",
-     "RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts; do \\\n"
+     "RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts runs/bot; do \\\n"
      "\t{ true; } \\\n"),
     ("M3334", "Orodruin mounts a writer's directory that is a link (SEC18, review)", MAKE,
      'ORO_DIRS       = for d in $$HOME/runs/annatar $$HOME/runs/gothmog $$HOME/runs/orodruin; do { test ! -L "$$d" && { test ! -e "$$d" || test -d "$$d"; }; }',

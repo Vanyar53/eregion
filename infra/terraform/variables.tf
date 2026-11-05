@@ -68,6 +68,17 @@ variable "auditd_enabled" {
   nullable    = false
 }
 
+# ── VM3 (#548) : la facilité cron dans la DCR du banc ──────────────────────────────────
+# Pour la règle t1053-003-cron-crontab-replace : crontab écrit « REPLACE » en facilité cron, que
+# la DCR du banc ne collecte PAS par défaut. Désactivé par défaut ; dans terraform.tfvars, jamais
+# en `-var` d'une seule commande (le prochain apply sans lui retirerait la facilité). monitoring.tf.
+variable "cron_logs_enabled" {
+  description = "Ajoute la facilité cron à la DCR du banc (monitoring.tf), pour la détection de persistance cron (T1053.003, VM3). Défaut false."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 # G1 : les VM qui reçoivent le bruit bénin (chaos.tf). La source de vérité reste chaos.noise_vms
 # du config.yaml ; cette variable ne sert qu'à le remplacer le temps d'un plan — ce que fait
 # tests/chaos_noise.tftest.hcl, un local ne se remplaçant pas dans un test. Un second moyen

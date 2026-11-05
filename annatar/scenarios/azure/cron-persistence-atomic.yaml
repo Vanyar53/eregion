@@ -45,15 +45,27 @@ steady_state:
     - name: tmp-files-absent
       verify: "if [ -e /tmp/notevil ] || [ -L /tmp/notevil ] || [ -e #{tmp_cron} ] || [ -L #{tmp_cron} ]; then echo TMP_PRESENT; else echo TMP_ABSENT; fi"
       expect: TMP_ABSENT
+    # VM3b (m1): root's crontab is the one from before — while /tmp/notevil exists, identical
+    # to it byte for byte. Holds before (no file), breaks after the command (the evil crontab),
+    # holds after a real cleanup (reinstalled from /tmp/notevil). An emptied crontab breaks it;
+    # cron-entry-absent alone would not see it.
+    - name: root-crontab-restored
+      verify: "if [ ! -e /tmp/notevil ] || crontab -l 2>/dev/null | cmp -s - /tmp/notevil; then echo CRONTAB_RESTORED; else echo CRONTAB_CHANGED; fi"
+      expect: CRONTAB_RESTORED
 
 # The scenario's own return (E1 `revert`, decided 05/11): run AFTER the atomic's cleanup (which
 # reads /tmp/notevil) and only once it ran; it removes the two files the test leaves (`rm -f --`,
-# inside /tmp/ only — annatar/engines/atomic.py, revert_commands). The vendored file is never
-# touched. It must be the catalog entry's: another revert makes the run unknown, so destructive.
+# inside /tmp/ only — annatar/engines/atomic.py, revert_commands). VM3b: it waits on a probe, not
+# on the call — root-crontab-restored after the cleanup (root's crontab identical to
+# /tmp/notevil, its only copy); otherwise it is skipped, /tmp/notevil stays for the operator,
+# and the run says so. The vendored
+# file is never touched. It must be the catalog entry's (and so must the probes above): another
+# makes the run unknown, so destructive.
 revert:
   - name: remove-tmp-files
     action: remove_files
     paths: ["/tmp/notevil", "#{tmp_cron}"]
+    requires_probe: root-crontab-restored
 
 detection:
   timeout: "600s"

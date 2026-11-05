@@ -35,7 +35,7 @@ def scenario_destructive(scenario) -> tuple[bool, str]:
     itself non-destructive for a technique the catalog says is destructive — or does not
     vouch for — is refused (``(True, why)``). Returns ``(destructive, "")`` otherwise.
     """
-    from annatar.campaign.catalog import catalog_destructive
+    from annatar.campaign.catalog import catalog_destructive, probes_of
 
     scripts = [a.get("script") for a in [*(getattr(scenario, "setup", None) or []),
                                           *(getattr(scenario, "steps", None) or [])]
@@ -44,6 +44,8 @@ def scenario_destructive(scenario) -> tuple[bool, str]:
                                engine_ref=getattr(scenario, "engine_ref", "") or "",
                                engine_args=getattr(scenario, "engine_args", None) or None,
                                revert=(getattr(scenario, "raw", None) or {}).get("revert"),
+                               probes=probes_of((getattr(scenario, "raw", None) or {})
+                                                 .get("steady_state")),
                                scripts=scripts)
     own = scenario.raw.get("destructive")
     destructive = said is not False or own is True
@@ -104,6 +106,7 @@ class Engine:
         self._detection_missing: list[str] = []
         self._detection_missing_total = 0
         self._session = None
+        self._revert_why = ""   # VM3b: why a revert step was skipped, said in the run's report
 
     def run(self, scenario_path: str, skip_confirm: bool = False):
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -194,13 +197,15 @@ class Engine:
         # after the contract holds and before the exercise window opens.
         if scenario.engine == "atomic":
             probes = (scenario.raw.get("steady_state") or {}).get("probes") or []
-            needed = self._atomic_calls_needed(len(probes)) + len(revert)   # VM3: one per step
+            # VM3: one call per revert step; VM3b: one more, the probe it waits on.
+            needed = self._atomic_calls_needed(len(probes)) + 2 * len(revert)
             available = session.max_injections - session.calls
             if available < needed:
                 reason = (
                     f"cap of {session.max_injections} calls ({session.calls} used): this "
-                    f"atomic needs {needed} (command, cleanup, its revert steps, and the "
-                    "steady-state probes before, right after the command, and after cleanup)"
+                    f"atomic needs {needed} (command, cleanup, its revert steps and the probe "
+                    "each waits on, and the steady-state probes before, right after the "
+                    "command, and after cleanup)"
                 )
                 console.print(f"[red]Refused:[/red] {reason}")
                 return RunOutcome(run_id, "unknown", error=f"cap: {reason}", refused=True)
@@ -289,14 +294,16 @@ class Engine:
     def _atomic_calls_needed(n_probes: int) -> int:
         """Run Command calls an atomic run needs: the command, its cleanup, and each
         steady-state probe three times (before, right after the command as the effect
-        proof, and after cleanup). The scenario's revert steps (VM3) add one each."""
+        proof, and after cleanup). The scenario's revert steps (VM3) add two each: the probe
+        the step waits on (VM3b), then the step."""
         return 2 + 3 * n_probes
 
     @staticmethod
     def _atomic_probe_error(scenario) -> str | None:
         """An atomic engine must verify the initial state before and after: at least one
-        steady-state probe, each with a non-empty ``verify`` and ``expect``. The check is
-        the runner's (the schema only runs in CI); ``None`` when it holds."""
+        steady-state probe, each with a non-empty ``verify`` and ``expect``; and each revert
+        step waits on one of them (``requires_probe``, VM3b). The check is the runner's (the
+        schema only runs in CI); ``None`` when it holds."""
         probes = (scenario.raw.get("steady_state") or {}).get("probes") or []
         if not probes:
             return ("engine 'atomic' requires at least one steady_state probe "
@@ -305,7 +312,26 @@ class Engine:
             if not str(probe.get("verify") or "").strip() or not str(probe.get("expect") or "").strip():
                 return (f"steady_state probe {probe.get('name', '?')!r} needs a non-empty "
                         "verify and expect")
+        names = {probe.get("name") for probe in probes}
+        revert = scenario.raw.get("revert")
+        for step in revert if isinstance(revert, list) else []:
+            gate = step.get("requires_probe") if isinstance(step, dict) else None
+            if not isinstance(gate, str) or gate not in names:
+                return (f"revert {(step.get('name') if isinstance(step, dict) else step)!r}: "
+                        f"requires_probe {gate!r} is not one of the steady_state probes — a "
+                        "revert runs only once a probe says the cleanup held")
         return None
+
+    def _revert_gate(self, executor, probe: dict, resolved) -> bool:
+        """VM3b: the probe a revert step waits on, run after the cleanup — True only when it
+        holds again (the cleanup did what the files were kept for). A probe that raises is no
+        proof: False."""
+        try:
+            [(_, ok, _)] = self._check_probes(executor, [probe], resolved, "before revert")
+        except Exception as e:
+            console.print(f"[red]Probe {probe.get('name')} failed:[/red] {e}")
+            return False
+        return ok
 
     def _run_enrolled(self, scenario, executor, run_id: str) -> RunOutcome:
         """The run once its target is enrolled and ready: setup, integrity check, steps,
@@ -438,9 +464,9 @@ class Engine:
         Verify the initial state, run the atomic's own command, confirm it broke the steady
         state (the effect proof), emit ``attack_started``, run its ``cleanup_command``, then the
         scenario's ``revert`` (VM3: what the upstream cleanup leaves, ``revert_commands`` — run
-        only once the cleanup ran, which may need those files), then verify the initial state
-        was restored. The command runs inside a ``try``; whatever it
-        does, the ``finally`` runs the cleanup, the after-probes and writes the report (the
+        only once the cleanup ran, which may need those files, and, VM3b, each step only once the
+        probe it waits on holds again after it), then verify the initial state was restored.
+        The command runs inside a ``try``; whatever it does, the ``finally`` runs the cleanup, the after-probes and writes the report (the
         atomic's command failing is ``attack: ERROR``, never a silent half-run). ``attack_started``
         is emitted only once the effect is observed — a command that raised, or that did
         nothing, never makes Glorfindel propose a rule for an attack that did not happen.
@@ -449,8 +475,12 @@ class Engine:
         from annatar.engines.atomic import revert_commands
 
         probes = (scenario.raw.get("steady_state") or {}).get("probes") or []
-        # Held before the contract was armed (run): pure, so the same steps here.
-        revert = revert_commands(scenario.raw.get("revert"), resolved)
+        # Held before the contract was armed (run): pure, so the same steps here — each with
+        # the probe it waits on (VM3b; _atomic_probe_error checked it is one of them).
+        by_name = {p.get("name"): p for p in probes}
+        revert = [(name, command, by_name[gate])
+                  for name, command, gate in revert_commands(scenario.raw.get("revert"), resolved)]
+        self._revert_why = ""
         emitter = SignalEmitter(
             run_id=run_id,
             scenario_name=scenario.name,
@@ -552,6 +582,8 @@ class Engine:
                 # /tmp/notevil is root's crontab), so it stays, for the operator.
                 checks["revert"] = self._run_revert(executor, revert, resolved) \
                     if checks.get("cleanup") == "PASS" else "SKIPPED"
+                if checks["revert"] == "SKIPPED":   # VM3b: the run says why, and what is left
+                    metrics["revert_skipped"] = self._revert_why or "the cleanup did not pass"
             try:
                 console.print("[cyan]->[/cyan] Initial-state check (after cleanup)...")
                 after = self._check_probes(executor, probes, resolved, "after")
@@ -593,6 +625,8 @@ class Engine:
         if restored is not True:
             error = ("initial state not restored" if restored is False
                      else "initial state not verified after cleanup")
+            if "revert_skipped" in metrics:   # VM3b: what the revert left, said with it
+                error += f" — revert skipped: {metrics['revert_skipped']}"
             return RunOutcome(run_id, "unknown", error=error)
         if checks.get("revert", "PASS") != "PASS":   # VM3: never chained over its leftovers
             return RunOutcome(run_id, "unknown",
@@ -625,11 +659,22 @@ class Engine:
         report.save()
         return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
 
-    @staticmethod
-    def _run_revert(executor, revert, resolved) -> str:
+    def _run_revert(self, executor, revert, resolved) -> str:
         """Each revert step of the scenario (VM3), in order: PASS, or ERROR at the first that
-        raises (the rest are not run — the after-probes say what is left)."""
-        for name, command in revert:
+        raises (the rest are not run — the after-probes say what is left). VM3b: a step runs
+        only once the probe it waits on holds again after the cleanup — the cleanup's call not
+        raising is no proof (Run Command does not raise on a script that failed). When it does
+        not hold: SKIPPED, the step's files left in place for the operator, and why in
+        ``self._revert_why``."""
+        for name, command, probe in revert:
+            if not self._revert_gate(executor, probe, resolved):
+                left = command.splitlines()[-1].removeprefix("rm -f -- ")
+                self._revert_why = (
+                    f"probe {probe.get('name')!r} did not hold after the cleanup — {left} "
+                    "left in place"
+                )
+                console.print(f"[red]Revert ({name}) skipped:[/red] {self._revert_why}")
+                return "SKIPPED"
             console.print(f"[cyan]->[/cyan] Revert ({name})...")
             try:
                 executor.run_command(command, label=f"atomic {resolved.guid} revert {name}")
@@ -652,7 +697,7 @@ class Engine:
             f"  [bold]az vm run-command invoke -g {rg} -n {vm} --command-id RunShellScript "
             f"--scripts {shlex.quote(resolved.cleanup_command)}[/bold]"
         )
-        for name, command in revert:
+        for name, command, *_ in revert:
             console.print(
                 f"[yellow]then, once it held, the scenario's revert ({name}):[/yellow]\n"
                 f"  [bold]az vm run-command invoke -g {rg} -n {vm} --command-id RunShellScript "
@@ -690,8 +735,9 @@ class Engine:
             console.print(f"  Atomic  : {resolved.name} ({resolved.guid})")
             console.print(f"  command : {resolved.command.strip()}")
             console.print(f"  cleanup : {resolved.cleanup_command.strip()}")
-            for name, command in revert:
-                console.print(f"  revert  : {name} — {command.splitlines()[-1]}")
+            for name, command, gate in revert:
+                console.print(f"  revert  : {name} — {command.splitlines()[-1]} "
+                              f"(once probe {gate} holds after the cleanup)")
             for p in (scenario.raw.get("steady_state") or {}).get("probes") or []:
                 console.print(
                     f"  probe   : {p.get('name')} — "

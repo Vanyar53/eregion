@@ -10931,6 +10931,16 @@ def total(where: Path, shards: int, control_shards: int, examples: int, rounds: 
 EMBEDDING = "chromadb.utils.embedding_functions"
 
 
+def _not_prepared(exc: Exception, say) -> bool:
+    """A preparation that failed, said with its error and what to do: False, never a verdict."""
+    say(f"ChromaDB's embedding model could not be prepared before the runs ({type(exc).__name__}: "
+        f"{exc}). The runs go on as before: each may fetch it into ~/.cache/chroma itself — an "
+        f"unmutated run that fails on it says so below. Without a network, put the model there "
+        f"first; if it is there but unreadable, remove ~/.cache/chroma/onnx_models and run again.",
+        flush=True)
+    return False
+
+
 def prepare_embedding_model(say=print) -> bool | None:
     """ChromaDB's embedding model, made ready in this process: None when ChromaDB is not here
     (nothing to prepare), True when it is ready (fetched now, or there already: nothing goes out),
@@ -10941,15 +10951,12 @@ def prepare_embedding_model(say=print) -> bool | None:
         functions = importlib.import_module(EMBEDDING)
     except ImportError:
         return None
+    except Exception as exc:          # there, but it cannot start: chromadb 1.5.9 raises a RuntimeError
+        return _not_prepared(exc, say)   # on import when sqlite3 is too old (CI6b, review)
     try:
         functions.DefaultEmbeddingFunction()(["eregion"])
     except Exception as exc:          # said, never hidden, never a verdict
-        say(f"ChromaDB's embedding model could not be prepared before the runs ({type(exc).__name__}: "
-            f"{exc}). The runs go on as before: each may fetch it into ~/.cache/chroma itself — an "
-            f"unmutated run that fails on it says so below. Without a network, put the model there "
-            f"first; if it is there but unreadable, remove ~/.cache/chroma/onnx_models and run again.",
-            flush=True)
-        return False
+        return _not_prepared(exc, say)
     say("ChromaDB's embedding model: ready in ~/.cache/chroma, before any run (CI6b)", flush=True)
     return True
 

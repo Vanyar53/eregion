@@ -1,6 +1,6 @@
 """CI6b (#538): ChromaDB's embedding model made ready once, by the harness, before any run in
 parallel — never by each run, never not at all; a preparation that fails is said, and never stops
-the runs nor catches a mutant (M3730–M3733); the gate's mutants and control set restore the
+the runs nor catches a mutant, ChromaDB unable to start included (M3730–M3733, M3735); the gate's mutants and control set restore the
 model's cache, as its invariants and ci.yml (M3734).
 """
 HARNESS = "scripts/mutation_check.py"
@@ -22,8 +22,12 @@ MUTANTS = [
      "    except Exception as exc:          # said, never hidden, never a verdict\n",
      "    except ImportError as exc:        # said, never hidden, never a verdict\n"),
     ("M3733", "a preparation that fails says nothing: the runs' error unexplained (CI6b)", HARNESS,
-     "    except Exception as exc:          # said, never hidden, never a verdict\n        say(",
-     "    except Exception as exc:          # said, never hidden, never a verdict\n        (lambda *_, **__: None)("),
+     "    say(f\"ChromaDB's embedding model could not be prepared before the runs",
+     "    (lambda *_, **__: None)(f\"ChromaDB's embedding model could not be prepared before the runs"),
+    ("M3735", "chromadb there but unable to start (sqlite3 too old: a RuntimeError on import) crashes the "
+              "harness, its failure unsaid (CI6b, review)", HARNESS,
+     "    except Exception as exc:          # there, but it cannot start: chromadb 1.5.9 raises a RuntimeError\n"
+     "        return _not_prepared(exc, say)   # on import when sqlite3 is too old (CI6b, review)\n", ""),
 ]
 # The release gate's (.github/workflows/release-gate.yml): its mutants restore ChromaDB's model, as
 # the invariants and ci.yml do (M3734).
@@ -40,5 +44,6 @@ TESTS = {
     "M3730": _ONCE,
     "M3731": _ONCE,
     "M3732": f"{_FAILS} {_SH}test_a_failed_preparation_never_catches_a_mutant",
-    "M3733": _FAILS,
+    "M3733": f"{_FAILS} {_SH}test_chromadb_that_cannot_start_is_said_never_raised",
+    "M3735": f"{_SH}test_chromadb_that_cannot_start_is_said_never_raised",
 }

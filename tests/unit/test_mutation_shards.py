@@ -346,6 +346,20 @@ def test_without_chromadb_nothing_is_prepared_nor_said(monkeypatch, capsys):
     assert capsys.readouterr().out == ""
 
 
+def test_chromadb_that_cannot_start_is_said_never_raised(tmp_path, monkeypatch, capsys):
+    """CI6b's review: chromadb 1.5.9 raises a RuntimeError on its own import when sqlite3 is too old
+    (chromadb/__init__.py). There, but unable to start: said and False, never a trace that stops
+    the harness — and never None, taken for ChromaDB absent."""
+    (tmp_path / "chromadb_ci6b_cannot_start.py").write_text(
+        'raise RuntimeError("Your system has an unsupported version of sqlite3. Chroma requires sqlite3 >= 3.35.0.")\n')
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(mc, "EMBEDDING", "chromadb_ci6b_cannot_start")
+    monkeypatch.delitem(sys.modules, "chromadb_ci6b_cannot_start", raising=False)
+    assert REAL_PREPARE() is False
+    said = capsys.readouterr().out
+    assert "could not be prepared" in said and "RuntimeError: Your system has an unsupported version of sqlite3" in said
+
+
 def test_a_preparation_that_fails_is_said_and_the_runs_go_on_as_before(tmp_path, monkeypatch, capsys):
     """Without a network, say: the error said whole, never hidden, and the runs go on — each may
     fetch the model itself; nothing about the preparation is a verdict."""

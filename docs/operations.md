@@ -2181,8 +2181,9 @@ mesurait en entier le commit publié.
   de ChromaDB, appelée sur un mot, ne télécharge que si un fichier du modèle manque, vérifie l'empreinte
   SHA-256 de l'archive et le charge comme un test. Le modèle déjà là, rien ne part sur le réseau ;
   sans ChromaDB, rien à préparer. Les runs héritent du `HOME` du harnais, donc du même cache. Un échec
-  (pas de réseau, un cache illisible) est dit, avec son erreur et quoi faire ; les runs continuent comme
-  avant, et cet échec n'arrête jamais une tranche ni n'attrape un mutant. Les jobs `mutants` et
+  (pas de réseau, un cache illisible, un ChromaDB qui ne démarre pas : un sqlite3 trop ancien) est dit,
+  avec son erreur et quoi faire ; les runs continuent comme avant, et cet échec n'arrête jamais une
+  tranche ni n'attrape un mutant. Les jobs `mutants` et
   `control` restaurent aussi le cache `chroma-onnx-v1`, comme `invariants` et `ci.yml`, par la même
   action épinglée par commit. La mesure du lundi et un run local en profitent de même ;
 - `terraform` : les tests Terraform de `ci.yml`, mot pour mot (providers simulés) ;

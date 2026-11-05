@@ -5,7 +5,8 @@ off the quarantine group after the swap) or None (unreadable), the ENIs named in
 each deny is confirmed as it is written and a NIC left raises (PartialActionError), but a deny written
 behind an allow is answered `isolated` too, with `bypass`. Read as written, both made the card say
 « reposée une fois. Si elle disparaît encore, Glorfindel alertera » of an isolation that does not
-hold, and `reasserted_at` took it out of every later put-back.
+hold. Now such a put-back is `partial`: said as it is, nothing promised — and put back once, as a
+block (`reasserted_at`): gone again, it is « une deuxième fois », escalated alone, never written again.
 
 And RW1's follow-ups (#558): a pair the first time wrote partial, its second time never come (its
 lock held, the pass cut off), stayed out of every pass without a card; the card of a write the
@@ -88,11 +89,13 @@ def _swapped_back_at_the_check(f: FakeAws) -> None:
     f.chaos = chaos
 
 
-def test_aws_isolation_put_back_unverified_is_not_reposed_nor_marked(aws):
+def test_aws_isolation_put_back_unverified_is_not_reposed_once(aws):
     """The swap lands, the check reads the ENI off quarantine: AWS answers `isolated`, `verified`
-    False. The card says it does not hold, names the ENI, promises nothing; `reasserted_at` not set.
-    The next pass, the same disappearance, says nothing more (one card per episode)."""
+    False. The card says it does not hold, names the ENI, promises nothing; put back once all the same
+    (`reasserted_at`, the original `isolated_at` kept). The next pass, the same disappearance, says
+    nothing more (one card per episode)."""
     f, c = aws
+    since = _load_isolation_state(_WEB)["isolated_at"]
     _terraform_apply(f)
     _swapped_back_at_the_check(f)
     report = reassert_active(c, _ACT)
@@ -102,8 +105,8 @@ def test_aws_isolation_put_back_unverified_is_not_reposed_nor_marked(aws):
     assert "ne tient pas en entier" in card["reason"] and "ne la relit pas entière (eni-web1)" in card["reason"]
     assert "reposée une fois" not in card["reason"] and "alertera" not in card["reason"]
     state = _load_isolation_state(_WEB)
-    assert not state.get("reasserted_at"), "an isolation that does not hold, marked put back: never tried again"
-    assert state.get("drift_alerted_at")
+    assert state.get("reasserted_at") and state.get("drift_alerted_at")
+    assert state["isolated_at"] == since
     assert c.verify_isolation(_WEB)["verified"] is False                  # as the card says
     f.chaos = lambda *a: None
     written = len(f.journal)
@@ -129,7 +132,7 @@ def test_aws_isolation_put_back_unreadable_is_said_so(aws, monkeypatch):
     assert [r["outcome"] for r in report] == ["partial"], report
     assert "n'a pas pu la relire (vérification impossible)" in report[0]["detail"]
     assert "alertera" not in report[0]["detail"]
-    assert not _load_isolation_state(_WEB).get("reasserted_at")
+    assert _load_isolation_state(_WEB).get("reasserted_at")
     # The episode over once it reads whole: verified, its mark off.
     assert reassert_active(c, _ACT) == []
     state = _load_isolation_state(_WEB)
@@ -193,9 +196,89 @@ def test_azure_isolation_put_back_behind_an_allow_is_not_reposed(monkeypatch):
     assert "ne tient pas en entier : Isolation contournée" in card["reason"] and "allow-ssh" in card["reason"]
     assert "reposée une fois" not in card["reason"] and "alertera" not in card["reason"]
     state = _load_isolation_state(_AZ_WEB)
-    assert not state.get("reasserted_at") and state.get("drift_alerted_at")
+    assert state.get("reasserted_at") and state.get("drift_alerted_at")
     flows = open_flows({"nsgs": f.nsgs, "nics": f.nics, "subnets": f.subnets, "vms": f.vms}, _AZ_WEB)
     assert any(fl[2] == "in" and fl[4] == 22 for fl in flows), "the card says it does not hold: SSH is open"
+
+
+def _azure_isolated_behind_an_allow(monkeypatch):
+    """web isolated behind the customer's allow-ssh, its isolation time pushed back an hour (as the
+    watch finds it later), then our denies taken off by a `terraform apply`."""
+    from glorfindel.actions import _save_isolation_state
+    f, c, _ = _azure(monkeypatch, allow=True)
+    c.isolate_vm(_AZ_WEB)
+    since = "2026-11-05T08:00:00+00:00"
+    _save_isolation_state(_AZ_WEB, {**_load_isolation_state(_AZ_WEB), "isolated_at": since})
+    _ours_gone(f, "glorfindel-iso")
+    return f, c, since
+
+
+def test_azure_isolation_put_back_behind_an_allow_keeps_its_isolation_time(monkeypatch):
+    """The TTL (RW2's review): Azure's write sets `isolated_at` anew; the put-back that does not hold
+    keeps the original, as a whole one does — the TTL counts from the isolation, not from its put-back."""
+    f, c, since = _azure_isolated_behind_an_allow(monkeypatch)
+    assert [r["outcome"] for r in reassert_active(c, _ACT) if r["kind"] == "isolation"] == ["partial"]
+    assert _load_isolation_state(_AZ_WEB)["isolated_at"] == since
+
+
+def test_azure_isolation_behind_an_allow_gone_twice_is_put_back_once(monkeypatch):
+    """Put back once behind an allow, back in place, then gone again (an apply in a loop): the second
+    disappearance is « une deuxième fois », escalated alone — no write, never a third card of a
+    put-back (RW2's review: measured, a write and a card at every episode)."""
+    f, c, _ = _azure_isolated_behind_an_allow(monkeypatch)
+    writes = []
+    real = c.isolate_vm
+    c.isolate_vm = lambda rid: (writes.append(rid), real(rid))[1]
+    reassert_active(c, _ACT)
+    reassert_active(c, _ACT)                                # its rules back, an allow passes them
+    _ours_gone(f, "glorfindel-iso")
+    report = [r for r in reassert_active(c, _ACT) if r["kind"] == "isolation"]
+    assert [r["outcome"] for r in report] == ["escalated"], report
+    assert "une deuxième fois" in report[0]["detail"] and "ne les repose pas" in report[0]["detail"]
+    assert len(writes) == 1, f"put back again behind the allow: {len(writes)} writes"
+    _ours_gone(f, "glorfindel-iso")
+    reassert_active(c, _ACT)
+    assert len(writes) == 1
+
+
+def test_azure_isolation_partial_on_its_put_back_says_it_is_no_longer_read(monkeypatch):
+    """web on two NICs; written again, the second NIC's write refused (403): Azure keeps the first,
+    marks the isolation `partial` and raises PartialActionError. The card « la reposer a échoué » says
+    that no pass reads it again, as `_held_partial` does for a block; the next pass says nothing."""
+    f, c, _ = _azure(monkeypatch, nics=2)
+    c.isolate_vm(_AZ_WEB)
+    _ours_gone(f, "glorfindel-iso")
+    writes = []
+
+    def chaos(op, phase, write):
+        if op == "rule.write" and phase == "before":
+            writes.append(1)
+            if len(writes) == 3:                       # the second NIC's first rule
+                raise _error(HttpResponseError, 403, "(AuthorizationFailed) rule.write: refused")
+    f.chaos = chaos
+    report = reassert_active(c, _ACT)
+    assert [r["outcome"] for r in report] == ["failed"], report
+    (card,) = _cards("isolate_vm")
+    assert "la reposer a échoué" in card["reason"]
+    assert card["reason"].endswith("Notée partielle par le fournisseur : la réaffirmation ne la relit plus avant "
+                                   "une nouvelle isolation entière ou une levée."), card["reason"]
+    assert _load_isolation_state(_AZ_WEB).get("partial")
+    f.chaos = lambda *a: None
+    assert reassert_active(c, _ACT) == []                 # held by its mark, as the card says
+
+
+def test_an_isolation_that_could_not_be_put_back_says_nothing_of_a_mark_it_has_not():
+    """The boundary: a write refused with nothing written (no `partial` state): the card as before."""
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    from glorfindel.actions import _save_isolation_state
+    readiness.record_assessment(readiness._verdict("vm", []), rid)
+    _save_isolation_state(rid, {"resource_id": rid, "isolated_at": "2026-11-05T08:00:00+00:00"})
+    c = MagicMock()
+    c.verify_isolation.return_value = {"verified": False, "missing_rules": ["glorfindel-iso-vm"]}
+    c.isolate_vm.side_effect = RuntimeError("AuthorizationFailed")
+    c.recent_changes.return_value = []
+    (r,) = reassert_active(c, _ACT)
+    assert r["outcome"] == "failed" and r["detail"].endswith("la reposer a échoué : AuthorizationFailed")
 
 
 def test_azure_isolation_put_back_whole_is_reposed_once(monkeypatch):
@@ -303,6 +386,19 @@ def test_a_partial_pair_of_a_pass_cut_off_after_the_first_time_is_said_the_next_
     (b,) = _load_block_entries(_WEB)
     assert not b.get("partial_unsaid") and b.get("drift_alerted_at") and b.get("partial")
     assert reassert_active(c, _ACT) == [] and len(_cards()) == 1      # said once
+
+
+def test_a_partial_pair_said_a_pass_later_has_its_own_head_and_keeps_its_hour(aws_block):
+    """Said a pass later (RW2's review): the card says the pair was written at the pass before — not
+    « ses règles réécrites une fois », nothing was written now — and `reasserted_at` stays the first
+    time's hour."""
+    f, c, blind = aws_block
+    _first_time_only(c, blind)
+    hour = _load_block_entries(_WEB)[0]["reasserted_at"]
+    (r,) = reassert_active(c, _ACT)
+    assert "sa règle de périmètre réécrite à la passe précédente" in r["detail"], r["detail"]
+    assert "réécrites une fois" not in r["detail"]
+    assert _load_block_entries(_WEB)[0]["reasserted_at"] == hour
 
 
 def test_a_partial_pair_said_a_pass_later_writes_nothing_in_human_only(aws_block):

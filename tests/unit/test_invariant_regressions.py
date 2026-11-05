@@ -3577,7 +3577,8 @@ def test_an_isolation_written_again_keeps_the_deny_before_an_allow_and_says_it(m
 def test_a_reassertion_says_the_deny_it_kept_before_an_allow(monkeypatch):
     """I4D: the same, written again by the reassertion — its card says the deny kept. And, the
     isolation under the second name bypassed (`bypass`, as above), never « reposée une fois » nor
-    « Glorfindel alertera » (RW2, #555: Azure's side of the hole — the write read as it answered)."""
+    « Glorfindel alertera » (RW2, #555: Azure's side of the hole — the write read as it answered) — put
+    back once all the same (`reasserted_at`), its card marked said."""
     import shutil
 
     from glorfindel import actions, escalations
@@ -3592,7 +3593,7 @@ def test_a_reassertion_says_the_deny_it_kept_before_an_allow(monkeypatch):
                    and "10.0.0.7, à api, qu'il coupe" in r for r in said), said
         assert not any("reposée une fois" in r or "alertera" in r for r in said), said
         state = actions._load_isolation_state(DB)
-        assert not state.get("reasserted_at") and state.get("drift_alerted_at"), state
+        assert state.get("reasserted_at") and state.get("drift_alerted_at"), state
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
 

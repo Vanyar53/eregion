@@ -5191,6 +5191,7 @@ MUTANTS += [
      "    except Exception:\n        return False\n    nid = holders.get(addr)\n"),
     ("M1904", "what the isolation left kept out of its outcome: nothing said (I4B)", ISO,
      '        if left:\n            out["left_rules"] = left\n', '        if False:\n            out["left_rules"] = left\n'),
+    # re-anchored (RW2): the note read once, for both cards of a put-back.
     ("M1905", "the reassertion's card silent on what the isolation it put back left (I4B)", R,
      """        left = f" {put['left_note']}" if isinstance(put, dict) and put.get("left_note") else ""\n""",
      '        left = ""\n'),
@@ -6382,13 +6383,15 @@ TESTS.update({mid: _L1B_REV for mid in ("M2044", "M2045", "M2046", "M2047")})
 _L1Q = ("tests/unit/test_invariant_regressions.py::test_a_block_written_again_after_an_acknowledged_drift_is_said_again "
         "tests/unit/test_invariant_regressions.py::test_a_block_beside_a_lifted_perimeter_vanishes_under_a_quarantine_change "
         f"{_RT}a_block_written_again_after_an_acknowledged_drift_is_said_again")
-_L1Q_MARKS = '        for mark in () if partial else ("drift_alerted_at", "drift_said", "reasserted_at"):\n'
+# re-anchored (RW2): `partial_unsaid` joins the marks a block written whole takes off.
+_L1Q_MARKS = ('        for mark in () if partial else ("drift_alerted_at", "drift_said", "reasserted_at", '
+              '"partial_unsaid"):\n')
 MUTANTS += [
     ("M2150", "a block written again whole keeps an acknowledged drift mark: what it still names gone, unsaid (L1Q)",
-     STA, _L1Q_MARKS, '        for mark in () if partial else ("reasserted_at",):\n'),
+     STA, _L1Q_MARKS, '        for mark in () if partial else ("reasserted_at", "partial_unsaid"):\n'),
     ("M2154", "a block written again whole keeps its re-application's mark: its next disappearance « une "
               "deuxième fois », never put back (L1Q, review)",
-     STA, _L1Q_MARKS, '        for mark in () if partial else ("drift_alerted_at", "drift_said"):\n'),
+     STA, _L1Q_MARKS, '        for mark in () if partial else ("drift_alerted_at", "drift_said", "partial_unsaid"):\n'),
 ]
 TESTS.update({"M2150": f"{_L1Q} {INVARIANTS}", "M2154": f"{_RT}a_block_written_again_whole_is_put_back_again_once"})
 # L1Q, found by its rule (seed 322 at 2 000): a drift better than its acknowledged card — a
@@ -10059,7 +10062,7 @@ MUTANTS += [
               "unsaid (L1E, MAK's review)", STA, _L1Q_MARKS, "        for mark in ():\n"),
     ("M3441", "a block written again whole keeps the drift mark of the card acknowledged before it: gone again "
               "the same way, unsaid (L1E)", STA, _L1Q_MARKS,
-     '        for mark in () if partial else ("drift_said", "reasserted_at"):\n'),
+     '        for mark in () if partial else ("drift_said", "reasserted_at", "partial_unsaid"):\n'),
 ]
 MUTANTS += [
     ("M3442", "the machine ends an acknowledgement only by the block written again, never by its journal: a rule "
@@ -10480,17 +10483,18 @@ TESTS.update({"M3550": _I11G_RACES, "M3553": _I11G_RACES,
 # L1O (#507): « reposé une fois » ends its episode in the write of `reasserted_at` — the drift marks
 # taken off, the episode over in memory first; a put-back that doesn't hold whole marks a new one after its
 # card. Gone again before the next pass: said « une deuxième fois », never written again. M3540–M3544.
+# re-anchored (RW2): `reasserted_at=at`, the first time's hour on the path of a pair of an earlier pass.
 _L1O_END = ("        episode(ref or vm, ip, over=True)\n"
-            "        _update_block_entry(ref or vm, ip, reasserted_at=now, drift_alerted_at=None, drift_said=None)\n")
+            "        _update_block_entry(ref or vm, ip, reasserted_at=at, drift_alerted_at=None, drift_said=None)\n")
 MUTANTS += [
     ("M3540", "« reposé une fois » keeps the episode open: gone again before the next pass, unsaid (L1O)", R,
-     _L1O_END, "        _update_block_entry(ref or vm, ip, reasserted_at=now)\n"),
+     _L1O_END, "        _update_block_entry(ref or vm, ip, reasserted_at=at)\n"),
     ("M3541", "the episode ended on disk alone: its write refused, the rules still gone unsaid (L1O)", R,
      _L1O_END,
-     "        _update_block_entry(ref or vm, ip, reasserted_at=now, drift_alerted_at=None, drift_said=None)\n"),
+     "        _update_block_entry(ref or vm, ip, reasserted_at=at, drift_alerted_at=None, drift_said=None)\n"),
     ("M3542", "the episode ended in memory alone: the marks of « said » left on disk (L1O)", R,
      _L1O_END, "        episode(ref or vm, ip, over=True)\n"
-               "        _update_block_entry(ref or vm, ip, reasserted_at=now)\n"),
+               "        _update_block_entry(ref or vm, ip, reasserted_at=at)\n"),
     ("M3543", "the put-back unmarked: put back again at every disappearance (L1O, L1Q)", R,
      _L1O_END, "        episode(ref or vm, ip, over=True)\n"
                "        _update_block_entry(ref or vm, ip, drift_alerted_at=None, drift_said=None)\n"),
@@ -10508,7 +10512,7 @@ MUTANTS += [
     ("M3545", "« reposé une fois » reopens the episode in memory: after a restart and a refused write, gone "
               "again in silence (L1O, review)", R, _L1O_END,
      "        episode(ref or vm, ip, over=False)\n"
-     "        _update_block_entry(ref or vm, ip, reasserted_at=now, drift_alerted_at=None, drift_said=None)\n"),
+     "        _update_block_entry(ref or vm, ip, reasserted_at=at, drift_alerted_at=None, drift_said=None)\n"),
     ("M3546", "the first time keeps the marks on disk (L1O, review)", "glorfindel/reassert_perimeters.py",
      _L1O_FIRST, "                    episode(ref, ip, over=True)\n"
                  "                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat())\n"),

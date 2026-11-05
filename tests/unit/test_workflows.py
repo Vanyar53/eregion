@@ -1814,3 +1814,78 @@ def test_the_gesture_on_the_rule_of_main_is_written():
     ops = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
     section = ops.split("## La CI, plus rapide (CI5", 1)[1].split("\n## ", 1)[0]
     assert f"« {MACOS} »" in section and "Require status checks to pass" in section
+
+
+# ── CI8 (#566): the CI's downloads retried, never a test ──────────────────────────────────────────
+# Jonathan, 05/11: no job of the CI is re-run on its own (the sessions' App reads Actions only), and
+# one 504 on a provider's download held a release back an hour. A download is tried three times,
+# 10 then 30 s apart, each attempt said (scripts/retry.sh); a test, the mutation, the invariants
+# never: a flaky test is never masked. Read from the files; retry.sh run against a fake command and
+# a fake `sleep` — no network, no wait.
+
+# retry.sh itself, run as the CI runs it: `bash scripts/retry.sh <command> [argument…]`.
+RETRY_SH = ROOT / "scripts" / "retry.sh"
+
+
+def _retry_sh(tmp_path: Path, codes: str | None, *args: str):
+    """retry.sh on a fake command whose successive exit codes are `codes` (then 0) — None: no command
+    at all —, with a fake `sleep` that only writes down its seconds: what it said, its exit code, the
+    command's runs (each with its arguments) and the waits."""
+    import os
+    import subprocess
+    bin_ = tmp_path / "bin"
+    bin_.mkdir(exist_ok=True)
+    count, calls, slept = tmp_path / "count", tmp_path / "calls", tmp_path / "slept"
+    _fake(bin_ / "sleep", f'echo "$1" >> "{slept}"\n')
+    _fake(bin_ / "flaky", f'n=$(cat "{count}" 2>/dev/null || echo 0)\necho $((n + 1)) > "{count}"\n'
+                          f'printf "[%s]" "$@" >> "{calls}"\necho >> "{calls}"\n'
+                          'codes=($CODES)\nexit "${codes[$n]:-0}"\n')
+    env = {"PATH": f"{bin_}:{os.environ.get('PATH', '')}", "HOME": str(tmp_path), "CODES": codes or ""}
+    argv = ["bash", str(RETRY_SH), *((str(bin_ / "flaky"), *args) if codes is not None else ())]
+    res = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=30, cwd=tmp_path)
+    read = lambda p: p.read_text().splitlines() if p.exists() else []  # noqa: E731
+    return res, read(calls), read(slept)
+
+
+def test_ci8_a_download_that_fails_twice_passes_at_its_third_attempt(tmp_path):
+    res, calls, slept = _retry_sh(tmp_path, "3 4 0", "a b", "c")
+    assert res.returncode == 0, res
+    assert calls == ["[a b][c]"] * 3                          # the arguments untouched, each time
+    assert slept == ["10", "30"]                              # the waits grow
+    out = res.stdout
+    assert all(f"attempt {n}/3" in out for n in (1, 2, 3)) and "passed at attempt 3/3" in out
+    assert out.count("::warning::") == 2 and "(exit 3)" in out and "(exit 4)" in out and "::error::" not in out
+
+
+def test_ci8_three_failures_exit_with_the_last_failures_code(tmp_path):
+    res, calls, slept = _retry_sh(tmp_path, "3 4 5")
+    assert res.returncode == 5, res
+    assert len(calls) == 3 and slept == ["10", "30"]          # no wait after the last attempt
+    assert "::error::" in res.stdout and "failed 3 times; exit 5" in res.stdout
+
+
+def test_ci8_a_download_that_passes_at_once_is_run_once_and_waits_for_nothing(tmp_path):
+    res, calls, slept = _retry_sh(tmp_path, "0")
+    assert res.returncode == 0 and len(calls) == 1 and slept == []
+    assert "::warning::" not in res.stdout and "passed at" not in res.stdout
+
+
+@pytest.mark.parametrize("code", [130, 143])
+def test_ci8_a_command_stopped_by_a_signal_is_never_run_again(tmp_path, code):
+    """A cancelled job, or one at its bound: SIGINT or SIGTERM, never a second attempt."""
+    res, calls, slept = _retry_sh(tmp_path, f"{code} 0")
+    assert res.returncode == code and len(calls) == 1 and slept == []
+
+
+def test_ci8_the_command_said_in_a_workflow_message_cannot_end_it(tmp_path):
+    """A `%` or a line break of the command, escaped as GitHub reads its messages: the warning stays
+    one line, its text the command's; the command itself gets its arguments untouched."""
+    res, calls, slept = _retry_sh(tmp_path, "3 0", "50%", "x\ny")
+    assert res.returncode == 0 and calls[0] == "[50%][x"           # the fake writes the newline as it is
+    (warning,) = [ln for ln in res.stdout.splitlines() if ln.startswith("::warning::")]
+    assert "50%25 x%0Ay" in warning and "failed (exit 3)" in warning
+
+
+def test_ci8_without_a_command_it_says_how_and_fails(tmp_path):
+    res, calls, slept = _retry_sh(tmp_path, None)
+    assert res.returncode == 2 and "usage" in res.stderr and calls == [] and slept == []

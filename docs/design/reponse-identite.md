@@ -3,7 +3,16 @@
 > **IR1a fait (#552, 05/11)** : le plan sur chaque carte `identity_change`, ses paramètres lus dans
 > Graph en lecture seule, les commandes complètes, le bouton Verify (held, not held, unreadable),
 > `IDENTITY_ACTIONS`, la liste `never_target` d'IDI1 lue — `docs/glorfindel.md`, « Identités », et
-> `docs/design/console.md`. Le reste (IR1b à IR1e) est encore une conception.
+> `docs/design/console.md`.
+>
+> **IR1b fait (#572, 05/11)** : le contrat de l'exécuteur, lu à son démarrage
+> (`glorfindel/providers/azure/identity_contract.py`, `glorfindel identity-contract`) — son jeton
+> Graph, puis ses droits relus dans Graph en lecture seule, contre la liste fermée ; un droit en
+> trop, `beyond_contract`, un contrat illisible, `contract_unreadable` : passif, il refuse de
+> démarrer ; son application en Terraform de H0, désactivée par défaut
+> (`infra/glorfindel-host/identity_executor.tf`), ses deux permissions consenties par Jonathan à
+> l'apply — `docs/operations.md`, « L'exécuteur d'identité ». Aucun verbe n'est écrit. Le reste
+> (IDI1b, IR1c à IR1e) est encore une conception.
 >
 > **IDI1b écrit (#573, 05/11), rien appliqué** : l'hypothèse 13 est tranchée sur le fournisseur
 > verrouillé — `azuread` 3.10.0 ne sait créer ni une unité restreinte, ni un ensemble d'attributs, ni
@@ -497,6 +506,31 @@ un User Administrator à une autre portée que `/administrativeUnits/<l'unité d
 (fermé). Hypothèse à mesurer : les droits qu'il faut pour lire
 les siens.
 
+**Fait par IR1b** (`glorfindel/providers/azure/identity_contract.py`). Ce que le code a précisé :
+- le **jeton Graph** est lu d'abord, sans appel : un jeton d'application (pas de `scp`), du tenant
+  et de l'application déclarés, ses `roles` et ses `wids` dans la liste ; puis Graph, en lecture
+  seule : ses permissions (chacune nommée par sa ressource, Microsoft Graph seule), ses rôles
+  d'annuaire actifs (chacun à sa seule portée) et éligibles (aucun : `roleEligibilityScheduleInstances`,
+  sans `$expand`), ses groupes (aucun : un groupe peut porter un rôle), et **ce qu'il possède** — des
+  applications et leurs principaux, jamais lui-même ni une identité de `never_target`, ni une
+  identité privilégiée (Q6, jugée par `privilege_refusal` d'IDI1 lui-même : le principal de chacune
+  ne tient ni rôle d'annuaire, actif ou éligible, ni groupe, ni aucune permission d'application, et
+  ne possède rien à son tour ; au-delà de 20 objets possédés, passif, une mesure d'IR1e ;
+  ni ses rôles Azure ni ses consentements délégués ne sont lus, la limite d'IDI1) : posséder une
+  identité, c'est pouvoir agir comme elle, et ce serait un droit en trop ;
+- `wids` ne porte que les rôles au tenant : User Administrator ou Attribute Assignment Reader qui
+  y figure (par un groupe compris) est un rôle borné tenu au tenant, refusé ;
+- un rôle se reconnaît à l'`id` de sa définition, celui de son modèle pour un rôle intégré —
+  jamais à son nom, ni à son `templateId`, qu'un rôle personnalisé peut choisir ;
+- une permission n'est tenue que si le jeton **et** ses attributions la disent ; un droit qui
+  manque n'arme ni ne désarme, il retire les verbes qui en ont besoin (`VERB_RIGHTS`, `allows`) ;
+- l'exécuteur ne prend que son certificat, jamais `DefaultAzureCredential` : sur H0, le point de
+  jeton de la VM répondrait, et son identité est celle de la watch ;
+- son identifiant d'application rejoint `never_target` (`EREGION_IDENTITY_EXECUTOR_CLIENT_ID`) ;
+- son application est dans l'état de H0 (`infra/glorfindel-host/identity_executor.tf`) : les deux
+  permissions de Graph et Log Analytics Reader sur le workspace. Ses rôles d'annuaire bornés
+  viennent d'IDI1b (Celebrimbor), la propriété des applications inscrites d'IDI1.
+
 **Sur H0**, l'exécuteur est un conteneur à qui le point de jeton de la VM est coupé (FS1, Q3,
 décision du 04/11). Il a donc son propre principal, avec un certificat dont la clé est tirée sur
 l'hôte, dans un répertoire que lui seul monte. FS1 l'a noté (son hypothèse 4) : un certificat volé
@@ -705,8 +739,10 @@ Jonathan, avant d'être écrite comme un fait.
 8. Les codes d'erreur d'une connexion refusée après chaque action, lisibles dans les journaux.
 9. Les noms d'opération de `AuditLogs` pour chaque écriture de l'exécuteur, et leur latence
    (pour IR1d).
-10. Les droits qu'il faut à l'exécuteur pour lire ses propres permissions et ses rôles (le
-    contrat), et à la watch pour lire le plan (IR1a).
+10. Les droits qu'il faut à l'exécuteur pour lire ses propres permissions, ses rôles, ses groupes et
+    ceux de ce qu'il possède (le contrat, IR1b : Directory Readers est celui qu'il attend ; s'il ne
+    lit pas les instances éligibles de PIM, le contrat ne s'arme jamais), et à la watch pour lire le
+    plan (IR1a).
 11. L'accès conditionnel pour les identités de charge de travail : ce qu'il borne (l'adresse), et
     sa licence.
 12. Dans une unité restreinte, `User.RevokeSessions.All` ne touche pas ses membres, et le User
@@ -730,7 +766,7 @@ En jours de travail effectif, à ±50 %, comme la ROADMAP.
 | Lot | Contenu | Attend | Sessions | Estimation |
 |---|---|---|---|---|
 | **IR1a** (fait, 05/11) | **Le plan et sa vérification, en lecture seule.** Le plan écrit par le code sur chaque carte `identity_change` (§3.2), avec ses paramètres lus dans Graph ; les commandes complètes, sans `<id>` à chercher ; le bouton **Vérifier**, qui relit Graph et dit « tenu » ou « pas tenu », noté au fil. La liste `never_target` dans `eregion_core/` (partagée avec IDI1). `IDENTITY_ACTIONS` disjoint d'`AUTONOMOUS_ACTIONS`. Graph seulement dans `glorfindel/providers/azure/` (`test_provider_boundary.py`). Un faux Graph, des tests, des mutants. | rien pour le code ; ID1 pour la mesure | Glorfindel, Console | 3–4 j |
-| **IR1b** | **Le contrat de l'exécuteur** : la liste refusée, la lecture de ses droits, `beyond_contract` ; `docs/operations.md` (« Identités Azure ») ; l'application de l'exécuteur en Terraform, désactivée par défaut, ses permissions consenties par Jonathan. | IR1a | Glorfindel, Infra | 2 j |
+| **IR1b** (fait, 05/11) | **Le contrat de l'exécuteur** : la liste refusée, la lecture de ses droits, `beyond_contract` ; `docs/operations.md` (« Identités Azure ») ; l'application de l'exécuteur en Terraform, désactivée par défaut, ses permissions consenties par Jonathan. | IR1a | Glorfindel, Infra | 2 j |
 | **IDI1b** | **L'inscription d'un utilisateur de test** (§3.6) : l'unité administrative restreinte du banc, ses utilisateurs de test sans rôle, le User Administrator à sa portée et Directory Readers pour l'exécuteur, l'ensemble d'attributs d'Eregion, en Terraform de Celebrimbor désactivé par défaut (plan et apply par Jonathan) ; la garde en deux moitiés (l'appartenance, l'attribut), la même que pour une VM ; tests sans réseau, mutants. | IDI1 (#546) | Infra, Glorfindel | 2–3 j |
 | **IR1c** | **L'exécuteur d'identité** : les verbes du §3.3, la vérification de la demande et de la proposition, les gardes (inscription, zone, `never_target`, débit, clé de l'opérateur, preuve, état), l'état pour le retour, les reçus signés, les cartes critiques. Les verbes déposés par la console, la commande du poste pour les verbes lourds. | FS1a, FS1b (la file), FS1g (le modèle d'exécuteur), IDI1 et IDI1b (l'inscription et la propriété), IR1b | Glorfindel, Console | 5–7 j |
 | **IR1d** | **L'exécuteur surveillé** : toute écriture d'Entra sous son identité sans reçu est une carte critique, comme SID1 pour Run Command ; le modèle de menace (§4). | IR1c, ID1 | Glorfindel | 1–2 j |

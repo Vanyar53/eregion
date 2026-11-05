@@ -32,6 +32,22 @@ provider's. `--check` (and `make glorfindel-host-model`, before it writes anythi
 host.env to the same rule, its model's variables read as the watch receives them. The analysis
 model (EREGION_ANALYSIS_MODEL) writes the campaign reports, never a decision: its missing key,
 or a local analysis model (it does not read GLORFINDEL_LLM_BASE_URL), is said, not refused.
+
+The never_target list (NT1, #583; eregion_core/never_target.py), which the watch reads to write
+an identity card's plan (IR1a): ids, no secret, copied from the operator's environment like the
+rest — each one's source a Terraform output, named in NEVER_TARGET, never read here. One empty,
+or an entry that is no object id, is said, by the writing and by `--check`, never refused: an
+unreadable list refuses every identity — each verb of a plan a human's step, closed, not a
+breakdown. What is said names the variable and its source, never a value; the executor's client
+id empty is said as information (ℹ): it stays empty as long as the executor is not enabled.
+
+A value written, any of COPIED, never holds a line break, a carriage return, a quote, a `$` or a
+backslash (one pair of quotes around it is unwrapped, as compose reads it): refused, the
+variable named, never the value — a line break would add a variable of its own to host.env, a
+quote left open would make compose refuse the whole file, a `$` would be interpolated by compose
+(`'a$HOME'` written `a$HOME`: the watch would receive a path), a backslash read as an escape.
+`--check` refuses a line whose value opens a quote it never closes, or holds a backslash inside
+quotes (`"abc\\"`: compose takes the next line into the value, or refuses the file).
 """
 from __future__ import annotations
 
@@ -46,12 +62,41 @@ from eregion_core.models import (  # noqa: E402
     BASE_URL, DEFAULT_ANALYSIS_MODEL, LOCAL_PROVIDERS, PROVIDER_ENV, UnknownProvider, missing_env,
     model_provider,
 )
+from eregion_core.never_target import ids  # noqa: E402
 
 # OL1: every provider's variables — docker-compose.yml (x-models) passes them all to the watch.
 # host.env carries only those of the configured models' providers (carried_keys), never another
 # provider's key: an operator's .envrc may hold several.
 MODEL_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "MISTRAL_API_KEY", "AZURE_API_KEY",
               "AZURE_API_BASE", "AZURE_API_VERSION")
+# NT1 (#583): the never_target list, to the watch alone (docker-compose.yml) — each variable, its
+# source (a Terraform output, read by the operator into .envrc), and what its absence leaves.
+_ORODRUIN_OUT = "terraform -chdir=infra/orodruin output -raw"
+_HOST_OUT = "terraform -chdir=infra/glorfindel-host output -raw"
+NEVER_TARGET = {
+    "EREGION_OPERATOR_OBJECT_ID": (
+        f"{_ORODRUIN_OUT} operator_object_id",
+        "la liste never_target de la watch est illisible : chaque verbe d'un plan d'identité (IR1a) "
+        "devient une étape de l'humain — fermé, pas une panne"),
+    "EREGION_PROTECTED_IDENTITIES": (
+        f"{_ORODRUIN_OUT} protected_identities, et l'object id de l'exécuteur ({_HOST_OUT} "
+        "identity_executor_object_id), séparés par des virgules",
+        "Orodruin et les watches ne sont pas dans la liste never_target de la watch : un plan "
+        "d'identité pourrait les viser"),
+    "EREGION_IDENTITY_EXECUTOR_CLIENT_ID": (
+        f"{_HOST_OUT} identity_executor_client_id",
+        "l'exécuteur d'identité n'est pas dans la liste never_target de la watch (vide tant qu'il "
+        "n'est pas activé, identity_executor_enabled : rien à faire alors)"),
+}
+# Its client id is empty as long as the executor is not enabled: said, never as a warning.
+EXECUTOR = "EREGION_IDENTITY_EXECUTOR_CLIENT_ID"
+# What a value written into host.env never holds (NT1 review, measured with `docker compose
+# config`): a line break adds a line — a variable of its own, which compose reads (the signed
+# queue switched on, its keys); a quote compose opens and never closes refuses the whole file, and
+# no service starts on H0; compose interpolates a `$` (second review: `'a$HOME'`, unwrapped, gave
+# the watch a path) and reads a backslash as an escape. Every value copied, not only the list's.
+UNSAFE = {"\n": "a line break", "\r": "a carriage return", "$": "a dollar sign", "\\": "a backslash",
+          '"': "a quote", "'": "a quote"}
 COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID",
           "GLORFINDEL_LLM_MODEL", "GLORFINDEL_LLM_BASE_URL", *MODEL_KEYS,
           "GLORFINDEL_WEBHOOK_URL", "GLORFINDEL_BACKUP_VAULT",
@@ -60,7 +105,9 @@ COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID",
           "EREGION_EXERCISE_CHANNEL", "EREGION_WATCH_CHANNEL",
           # IA1: the analysis AI's model, never Glorfindel's — the hosted watch writes the
           # campaign reports with it (analysis/hosted_report.py).
-          "EREGION_ANALYSIS_MODEL")
+          "EREGION_ANALYSIS_MODEL",
+          # NT1: who is never a target, read by the watch (eregion_core/never_target.py).
+          *NEVER_TARGET)
 # The model's key is required by its provider (model_missing), never here.
 REQUIRED = ("AZURE_SUBSCRIPTION_ID",)
 MODEL = "GLORFINDEL_LLM_MODEL"
@@ -68,6 +115,29 @@ ANALYSIS = "EREGION_ANALYSIS_MODEL"
 # The console's token, and its former name (eregion_console/api.py, console_token).
 TOKEN = "EREGION_CONSOLE_TOKEN"
 LEGACY_TOKEN = "GLORFINDEL_WARROOM_TOKEN"
+# FS1c: the signed action queue — never copied from the operator's environment: its keys are this
+# workstation's, H0's are its own (`make glorfindel-host-queue-keys`). Written in host.env by hand,
+# keys and flag in one push; --check holds them together.
+QUEUE_FLAG = "EREGION_ACTION_QUEUE"
+QUEUE_KEYS = "EREGION_QUEUE_KEYS"
+QUEUE_GESTURE = ("make glorfindel-host-queue-keys, then its line and EREGION_ACTION_QUEUE=1 in host.env, "
+                 "then make glorfindel-host-push (docs/operations.md, « La file d'actions signée »)")
+
+
+def queue_problems(env: dict) -> list[str]:
+    """FS1c: what keeps H0's queue from taking a gesture, said before the push — a flag the queue
+    does not read (« 1 » only), or the flag set without the console's key pinned at the watch, or
+    without the bot's while the bot runs (DISCORD_BOT_TOKEN): pushed, the console of H0 would grey
+    every write and the watch refuse them all (no_key_pinned). Empty: nothing to say."""
+    from eregion_core.action_queue import parse_pins, pin_problems
+    flag = env.get(QUEUE_FLAG, "")
+    if flag not in ("", "1"):
+        return [f"{QUEUE_FLAG}={flag[:20]!r}: the queue reads « 1 » only — anything else leaves it off"]
+    if flag != "1":
+        return []
+    pins, wrong = parse_pins(env.get(QUEUE_KEYS, ""))
+    services = ("console", "bot") if env.get("DISCORD_BOT_TOKEN") else ("console",)
+    return pin_problems(pins, wrong, services)
 
 
 def model_missing(environ: dict) -> tuple[str, list[str]]:
@@ -110,6 +180,49 @@ def analysis_warning(environ: dict) -> str:
             f"un autre modèle dans {ANALYSIS}.")
 
 
+def never_target_warnings(environ: dict) -> list[str]:
+    """What the watch's never_target list lacks, said — one line a variable, its source named,
+    never its value: an empty one, or one with an entry that is no object id (read strictly, as
+    eregion_core/never_target.py reads it: the whole list then refuses every identity). Never a
+    refusal: the absence leaves every verb of a plan a human's step, closed."""
+    said = []
+    for name, (source, left) in NEVER_TARGET.items():
+        got, bad = ids(environ.get(name, ""))
+        if bad:
+            said.append(f"⚠ {name} porte {len(bad)} entrée(s) qui ne sont pas des object ids : la liste "
+                        "never_target de la watch est illisible, chaque verbe d'un plan d'identité "
+                        f"devient une étape de l'humain. Sa source : {source}.")
+        elif not got:
+            mark = "ℹ" if name == EXECUTOR else "⚠"
+            said.append(f"{mark} {name} vide : {left}. Sa source : {source}.")
+    return said
+
+
+def never_target_read(env: dict) -> dict:
+    """The list's variables as the watch receives them (model_value: a pair of quotes removed, a
+    comment alone empty) — `terraform output` without `-raw` gives a quoted value."""
+    return {k: model_value(env.get(k, "")) for k in NEVER_TARGET}
+
+
+def unquoted(value: str) -> str:
+    """A value with one pair of quotes around it, unwrapped — what compose reads of `KEY="…"`;
+    any other value as it is."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def unsafe(out: dict) -> None:
+    """SystemExit if a value to write holds what UNSAFE names: the variable said, never the value."""
+    for k, v in out.items():
+        held = sorted({what for c, what in UNSAFE.items() if c in v})
+        if held:
+            raise SystemExit(f"{k} holds {' and '.join(held)}: written into host.env, it would add a "
+                             "variable that docker compose reads, or make compose refuse the whole file "
+                             "(no service would start on H0). Its value is not printed — set it again, "
+                             "on one line, without quotes.")
+
+
 def carried_keys(environ: dict) -> set[str]:
     """The model variables host.env carries: those of the decision model's provider (its own
     key, even when a self-hosted endpoint does not require it) and of the analysis model's;
@@ -129,11 +242,12 @@ def host_env(environ: dict) -> dict:
                           if lacking else [])
         raise SystemExit(f"missing in the environment (load .envrc): {'; '.join(said)}")
     carried = carried_keys(environ)
-    out = {k: environ[k] for k in COPIED if environ.get(k) and (k not in MODEL_KEYS or k in carried)}
+    out = {k: unquoted(environ[k]) for k in COPIED if environ.get(k) and (k not in MODEL_KEYS or k in carried)}
     out["GLORFINDEL_READ_ONLY"] = "1"
     # A powered-off VM stays on the map a week (default 8 h): gondolin, off between
     # exercises, kept vanishing from the observed fleet.
     out.setdefault("GLORFINDEL_DISCOVERY_RETENTION_H", environ.get("GLORFINDEL_DISCOVERY_RETENTION_H") or "168")
+    unsafe(out)                         # NT1 review: no line nor quote injected into host.env
     out[TOKEN] = secrets.token_urlsafe(24)
     return out
 
@@ -173,7 +287,39 @@ def token_name(env: dict) -> str:
     return ""
 
 
+def _quoted(path: Path):
+    """(variable, value) of each line of a host.env whose value starts with a quote, trimmed — read
+    on the raw line, before read_env cuts a « # » inside quotes."""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.lstrip().startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            v = value.strip()
+            if v[:1] in ("\"", "'"):
+                yield key.strip(), v
+
+
+def unclosed(path: Path) -> list[str]:
+    """The variables whose value opens a quote it never closes on its line: docker compose refuses
+    the whole file (« unterminated quoted value », measured)."""
+    return [k for k, v in _quoted(path) if v.find(v[0], 1) == -1]
+
+
+def escaped(path: Path) -> list[str]:
+    """The variables with a backslash inside a quoted value: compose reads `\\"` as an escaped
+    quote — `"abc\\"` never closes, it takes the next line into the value or refuses the file
+    (second review, measured); `'a\\'` the same."""
+    return [k for k, v in _quoted(path) if "\\" in v]
+
+
 def check(dst: str) -> int:
+    if names := unclosed(Path(dst)):
+        raise SystemExit(f"{dst}: {', '.join(names)} opens a quote it never closes — docker compose "
+                         "would refuse the whole file, and no service would start on H0. Close it, or "
+                         "write the value without quotes.")
+    if names := escaped(Path(dst)):
+        raise SystemExit(f"{dst}: {', '.join(names)} holds a backslash inside quotes — docker compose "
+                         "reads it as an escape: the value may take the next line, or the whole file be "
+                         "refused. Write the value without quotes nor backslash.")
     env = read_env(Path(dst))
     name = token_name(env)
     if name and env[name].startswith("#"):
@@ -189,6 +335,14 @@ def check(dst: str) -> int:
     if lacking:
         raise SystemExit(f"{dst}: {', '.join(lacking)} empty — the model's provider, {provider} "
                          f"({MODEL}), needs it: pushed, the watch could not decide.")
+    # FS1c: the queue's flag and its keys together, as the watch reads them.
+    lacking = queue_problems({k: model_value(env.get(k, "")) for k in (QUEUE_FLAG, QUEUE_KEYS, "DISCORD_BOT_TOKEN")})
+    if lacking:
+        raise SystemExit(f"{dst}: the signed action queue would refuse every gesture — " + "; ".join(lacking)
+                         + f". The gesture: {QUEUE_GESTURE}.")
+    # NT1: the never_target list, as the watch receives it — said, never refused.
+    for warning in never_target_warnings(never_target_read(env)):
+        print(f"{dst}: {warning}", file=sys.stderr)
     if name == LEGACY_TOKEN:
         print(f"{dst}: console token under its former name, {LEGACY_TOKEN} — valid, nothing to rename")
     else:
@@ -206,6 +360,11 @@ def main(dst: str) -> int:
         print("⚠ DISCORD_ALLOWED_USERS / DISCORD_ALLOWED_ROLES vides : les boutons du bot refuseront "
               "tout clic (fermé par défaut). Ajoute ton id Discord à host.env.", file=sys.stderr)
     if warning := analysis_warning(env):
+        print(warning, file=sys.stderr)
+    if os.environ.get(QUEUE_FLAG) or os.environ.get(QUEUE_KEYS):
+        print(f"ℹ {QUEUE_FLAG} / {QUEUE_KEYS} de ton environnement ne vont pas dans host.env : ce sont "
+              f"les clés de ce poste, H0 a les siennes — {QUEUE_GESTURE}.", file=sys.stderr)
+    for warning in never_target_warnings(never_target_read(env)):
         print(warning, file=sys.stderr)
     path.touch(mode=0o600)
     path.write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")

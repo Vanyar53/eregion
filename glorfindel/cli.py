@@ -21,13 +21,17 @@ from rich.markup import escape as _esc_markup
 console = Console()
 
 
-def _record_manual_action(action: str, resource_id: str, outcome: dict) -> None:
-    """Append a manual operator action to runs/console/manual_actions.jsonl for the live feed —
-    the directory of the operator's hand (the console, this CLI, the bot), SEC18."""
+def _record_manual_action(action: str, resource_id: str, outcome: dict, hand: str | None = None) -> None:
+    """Append a manual operator action to manual_actions.jsonl for the live feed — in the directory
+    of the operator's hand (SEC18): runs/console (the console, this CLI), or runs/bot when the bot
+    runs it (FS1c, ``EREGION_RUNS_WRITER=bot``: the bot never writes the console's directory)."""
     import json as _json
     from datetime import datetime, timezone as _tz
     from eregion_core import runs_layout
     runs = runs_layout.dir_of(runs_layout.CONSOLE)
+    hand = hand or runs_layout.hand()
+    if hand != runs_layout.CONSOLE:      # FS1c: the bot's hand, its own directory
+        runs = runs_layout.dir_of(hand)
     record = {
         "timestamp": datetime.now(_tz.utc).isoformat(),
         "action": action,
@@ -2107,6 +2111,26 @@ def watch_key_cmd(create: bool):
         sys.exit(1)
     click.echo(f"export {watch_key.KEY_ENV}={watch_key.public_text(public)}")
     click.echo(f"# empreinte : {watch_key.fingerprint(public)}")
+
+
+@cli.command("identity-contract")
+def identity_contract_cmd():
+    """The identity executor's contract (IR1b): what its own identity holds in Entra ID, read from its
+    Graph token and read only on Graph, against the closed list — armed or passive, each right beyond
+    the contract named. Its environment: EREGION_TENANT_ID, EREGION_IDENTITY_EXECUTOR_CLIENT_ID,
+    EREGION_IDENTITY_EXECUTOR_CERTIFICATE (docs/operations.md, « L'exécuteur d'identité »). Writes
+    nothing; exit 0 only if armed."""
+    from glorfindel.providers.azure import identity_contract
+    verdict = identity_contract.check()
+    click.echo(f"identity executor: {verdict.verdict}")
+    for m in verdict.missing:
+        click.echo(f"  ✗ {m['code']}: {m['detail']}")
+    if verdict.held:
+        click.echo(f"  held: {', '.join(sorted(verdict.held))}")
+    if verdict.armed:
+        verbs = sorted(v for v in identity_contract.VERB_RIGHTS if verdict.allows(v))
+        click.echo(f"  verbs its rights allow: {', '.join(verbs) or 'none'}")
+    sys.exit(0 if verdict.armed else 1)
 
 
 @cli.command()

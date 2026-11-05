@@ -474,66 +474,139 @@ class _ExecuteButton(discord.ui.Button):
 
         channel = interaction.channel
         user = interaction.user
+        # FS1c: behind EREGION_ACTION_QUEUE=1, the Revert is deposited, then its receipt followed
+        # without holding a thread — each state said in the VM's thread as it comes.
+        arun = (lambda: _queue_revert(self.esc, user, channel)) if self._queued() else None
         asyncio.create_task(_execute_and_report(self.esc, self.cli_args, channel, lambda: self._run(user),
-                                                interaction.message, self.view))
+                                                interaction.message, self.view, arun=arun))
 
-    def _run(self, user=None) -> tuple[int, str]:
+    def _queued(self) -> bool:
         # FS1b: behind EREGION_ACTION_QUEUE=1, the Revert is a request of the queue, signed by the
         # bot's key — the watch judges it and runs it; without the flag, the CLI as before.
         from eregion_core import action_queue
         if action_queue.enabled() and self.cli_args[:1] == ["revert"]:
-            return _queue_reset(self.esc, user)
+            return True
+        return False
+
+    def _run(self, user=None) -> tuple[int, str]:
         return _run_cli(self.cli_args)
 
 
-def _queue_reset(esc: dict, user) -> tuple[int, str]:
+# FS1c: how often the bot reads the receipt of its request, and what it says of each state.
+QUEUE_POLL_S = 1.0
+_STATE_SAID = {"received": "📥 File d'actions ({rid}) : reçue par la watch.",
+               "accepted": "⚙️ File d'actions ({rid}) : acceptée — la watch exécute le reset."}
+
+
+def _deposit_reset(esc: dict, user) -> dict:
     """FS1b (docs/design/file-actions-signee.md §2.7): the Revert of a card ``verification_failed``
     as a request of the queue — the verb ``reset``, bound to the card and to the proposal the watch
     signed on it, the human named by Discord (``by``: their id and their name, said, never proved).
-    (0, what the receipt says) once ``done``; 1 otherwise — the card stays open."""
+    FS1c: deposited, never awaited — ``{"request": id}`` or ``{"error": …}``."""
     from eregion_core import action_queue as aq
     card = _current(esc["id"]) or esc
     proposal = card.get("proposal")
     if not isinstance(proposal, dict):
-        return 1, f"refusé (proposal_missing) : {aq.REFUSALS['proposal_missing']}"
+        return {"error": f"refusé (proposal_missing) : {aq.REFUSALS['proposal_missing']}"}
     by = {"via": "discord", "user": str(getattr(user, "id", "") or ""),
           "name": str(getattr(user, "display_name", "") or "")[:100]}
-    asked = aq.ask("bot", "reset", str(card.get("resource_id") or ""), by=by,
-                   card=(card["id"], aq.digest(proposal)))
-    if "receipt" not in asked:
-        return 1, f"file d'actions : {asked.get('error', '?')}"
-    r = asked["receipt"]
-    said = f"file d'actions ({asked['request'][:8]}) : {r['state']}"
+    return aq.deposit_request("bot", "reset", str(card.get("resource_id") or ""), by=by,
+                              card=(card["id"], aq.digest(proposal)))
+
+
+def _receipt_text(request_id: str, followed: dict) -> tuple[int, str]:
+    """(0, what the receipt says) once ``done``; 1 otherwise — refused, failed, not taken, a receipt
+    not to believe: said, and the card stays open (SEC4c)."""
+    head = f"file d'actions ({request_id[:8]})"
+    if "receipt" not in followed:
+        return 1, f"{head} : {followed.get('state', '?')} — {followed.get('error') or '?'}"
+    r = followed["receipt"]
+    said = f"{head} : {r['state']}"
     if r.get("code"):
         said += f" — {r['code']}"
     if r.get("reason"):
         said += f" : {r['reason']}"
     result = r.get("result") or {}
-    if result.get("status"):
+    if isinstance(result, dict) and result.get("status"):
         said += f"\nreset → {result['status']}"
     return (0 if r["state"] == "done" else 1), said
 
 
+async def _queue_revert(esc: dict, user, channel, poll_s: float | None = None) -> tuple[int, str]:
+    """FS1c: the Revert as a request of the queue — deposited (a thread, briefly), then its receipt
+    followed with no thread held (``asyncio.sleep`` between two reads): « déposée », « reçue »,
+    « acceptée » said in the VM's thread as they come, then what the final receipt says. Never
+    longer than the request's life and the run's (``TAKE_S + RUN_S``): past it, said, the card open."""
+    from eregion_core import action_queue as aq
+    from eregion_core import watch_key
+    poll_s = QUEUE_POLL_S if poll_s is None else poll_s
+    loop = asyncio.get_running_loop()
+    deposited = await loop.run_in_executor(None, _deposit_reset, esc, user)
+    if "error" in deposited:
+        return 1, f"file d'actions : {deposited['error']}"
+    rid = deposited["request"]
+    await channel.send(f"📨 File d'actions ({rid[:8]}) : demande déposée — la watch la juge.")
+    public, _ = watch_key.pinned()
+    said: set[str] = set()
+    started = loop.time()
+    while True:
+        followed = aq.follow("bot", rid, watch_public=public)
+        state = followed["state"]
+        if state in _STATE_SAID and state not in said:
+            said.add(state)
+            await channel.send(_STATE_SAID[state].format(rid=rid[:8]))
+        if followed["final"]:
+            break
+        if loop.time() - started > aq.TAKE_S + aq.RUN_S:
+            return 1, (f"file d'actions ({rid[:8]}) : toujours « {state} » après {aq.TAKE_S + aq.RUN_S:.0f} s — "
+                       "son reçu le dira ; la carte reste ouverte")
+        await asyncio.sleep(poll_s)
+    # FS1c review: the Revert noted, from its receipt, by the read that withdrew its request — once.
+    if aq.withdraw("bot", rid) and "receipt" in followed:
+        _note_revert(followed["receipt"])
+    return _receipt_text(rid, followed)
+
+
+def _note_revert(receipt: dict) -> None:
+    """The bot's Revert by the queue noted in runs/bot/manual_actions.jsonl (the bot's hand), from
+    its receipt — the feed, the overview and the containment analysis read it as the CLI's."""
+    if receipt.get("state") not in ("done", "failed"):
+        return
+    try:
+        from eregion_core import runs_layout
+        from glorfindel.cli import _record_manual_action
+        _record_manual_action("reset", str(receipt.get("resource_id") or ""), {
+            **(receipt.get("result") if isinstance(receipt.get("result"), dict) else {}),
+            "via": "queue", "request": str(receipt.get("request") or ""),
+            **({"approved_escalation": receipt["card"]} if receipt.get("card") else {})}, hand=runs_layout.BOT)
+    except Exception:
+        pass
+
+
 def _run_cli(cli_args: list[str]) -> tuple[int, str]:
-    """(return code, output) of a glorfindel command."""
+    """(return code, output) of a glorfindel command — its gestures noted in the bot's own
+    directory, runs/bot (FS1c, ``EREGION_RUNS_WRITER=bot``): the bot never writes the console's."""
     import subprocess
+    from eregion_core import runs_layout
     result = subprocess.run(
         [_glorfindel_bin()] + cli_args,
         capture_output=True,
         text=True,
         timeout=1800,  # 30 min max (restore ~20 min)
+        env={**os.environ, runs_layout.WRITER_ENV: runs_layout.BOT},
     )
     return result.returncode, (result.stdout + result.stderr).strip()
 
 
 async def _execute_and_report(esc: dict, cli_args: list[str], channel, run, card_message=None,
-                              card_view=None, on_done=None) -> None:
+                              card_view=None, on_done=None, arun=None) -> None:
     """Run the command, say its output in the thread; the card is acknowledged only once it
     succeeded (SEC4c) — a refusal or a failure is said, the card stays open and its buttons
-    come back."""
+    come back. ``arun``: a coroutine's maker that gives (code, output) without a thread (FS1c, the
+    queue's Revert), in place of ``run``."""
     try:
         loop = asyncio.get_running_loop()
-        code, output = await loop.run_in_executor(None, run)
+        code, output = (await arun()) if arun is not None else await loop.run_in_executor(None, run)
         # The CLI's output (names from Azure in it): no ``` of its own closes the block.
         short = output.strip()[:1800].replace("`", "ˋ") or "(pas de sortie)"
         await channel.send(f"```\n{short}\n```")

@@ -401,19 +401,23 @@ class QueueWatch:
             from glorfindel import escalations
             escalations.resolve(card["id"], note="exécutée par la file d'actions (FS1b)")
 
-    def _check(self, card, action: str, rid: str, result, ip: str = "") -> dict:
+    def _check(self, req, card, action: str, result, ip: str = "") -> dict:
+        """``approval.verify_approved``; a card ``verification_failed`` it leaves bears the request's
+        own signal (FS1c: ``queue-<service>-<id>``, as its receipt — never the console's
+        ``approve-<card>``)."""
         from glorfindel import approval
-        return approval.verify_approved(self.connector, card or {"id": ""}, action, rid, result, ip)
+        return approval.verify_approved(self.connector, card or {"id": ""}, action, req.resource_id, result, ip,
+                                        signal_id=f"queue-{req.service}-{req.id}")
 
     def _do_isolate_vm(self, req, card, ctx):
         result = self.connector.isolate_vm(req.resource_id)
         self._settle(card)
-        return "done", result, self._check(card, "isolate_vm", req.resource_id, result), ""
+        return "done", result, self._check(req, card, "isolate_vm", result), ""
 
     def _do_block_ip(self, req, card, ctx):
         result = self.connector.block_suspicious_ip(ctx["ip"], req.resource_id, ctx["scope"], False, ctx["port"])
         self._settle(card)
-        return "done", result, self._check(card, "block_suspicious_ip", req.resource_id, result, ctx["ip"]), ""
+        return "done", result, self._check(req, card, "block_suspicious_ip", result, ctx["ip"]), ""
 
     def _do_snapshot(self, req, card, ctx):
         from glorfindel.jobs import start_snapshot
@@ -431,7 +435,7 @@ class QueueWatch:
             return "failed", result, None, "released in part: rules still in place — " + "; ".join(
                 str(x) for x in result.get("failed", []))[:600]
         self._settle(card)
-        return "done", result, self._check(card, "release_isolation", req.resource_id, {"status": "released"}), ""
+        return "done", result, self._check(req, card, "release_isolation", {"status": "released"}), ""
 
     def _do_reset(self, req, card, ctx):
         from glorfindel.gestures import reset_apply, reset_targets
@@ -542,12 +546,9 @@ def start(connector, signer_of, *, say=print, root=None) -> QueueWatch | None:
         say("File d'actions : la clé de la watch est indisponible — la file n'est pas relevée")
         return None
     pins, wrong = aq.pinned_keys()
-    for line in wrong:
+    # FS1c: the start says each key that is missing or wrong — the same words as host_env.py --check.
+    for line in aq.pin_problems(pins, wrong):
         say(f"File d'actions : {line}")
-    for service in aq.SERVICES:
-        if service not in pins:
-            say(f"File d'actions : aucune clé épinglée pour {service} — ses demandes sont refusées "
-                f"(no_key_pinned) : {aq.PIN_GESTURE}")
     q = QueueWatch(signer, connector, root=root, pins=pins, pin_errors=wrong, say=say)
     q.start()
     say(f"File d'actions relevée : runs/console/queue, runs/bot/queue → runs/glorfindel/queue "

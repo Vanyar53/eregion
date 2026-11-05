@@ -51,6 +51,26 @@ seul sur le banc, dans le mode de chaque VM.
     restore_neutralize` dit où elle est donnée. Une VM hors de la liste est restaurée quand même ;
     sa neutralisation est refusée, et dite sur la carte.
     Le test du module la tient (`tests/session_drain.tftest.hcl`).
+  - **L'application de l'exécuteur d'identité** (IR1b, #572), **désactivée par défaut** : son
+    principal à lui, jamais l'identité de la VM (celle de la watch), avec deux permissions
+    d'application de Microsoft Graph, `Application.ReadWrite.OwnedBy` et `User.RevokeSessions.All`,
+    et `Log Analytics Reader` sur le workspace du banc (`identity_executor.tf`). Rien dans le tenant
+    tant que `identity_executor_enabled` est faux (`identity_executor.auto.tfvars`, ignoré par git ;
+    `identity_executor.auto.tfvars.example`). Jonathan l'applique et consent les permissions :
+    `docs/operations.md`, « L'exécuteur d'identité ». Le conteneur qui s'en servira est celui
+    d'IR1c ; son contrat le relit au démarrage (`glorfindel identity-contract`). Le test du module :
+    `tests/identity_executor.tftest.hcl`.
+  - **La liste `never_target` va à la watch** (NT1, #583) : `EREGION_OPERATOR_OBJECT_ID`,
+    `EREGION_PROTECTED_IDENTITIES`, `EREGION_IDENTITY_EXECUTOR_CLIENT_ID`, recopiées dans
+    `host.env` par `host_env.py`, passées par le compose à la watch seule (le plan d'une carte
+    d'identité, IR1a). Chacune vient d'une sortie Terraform (`host.env.example`, et
+    `docs/operations.md`, « L'exécuteur d'identité », geste 6). Vide ou mal écrite, l'écriture et
+    `--check` le disent, sans refuser : la liste est alors illisible, et chaque verbe d'un plan une
+    étape de l'humain. Une valeur recopiée (de n'importe quelle variable) qui porte un saut de
+    ligne, un retour chariot, un guillemet, un `$` ou une barre oblique inverse est en revanche
+    refusée, la variable nommée, jamais sa valeur : elle injecterait une variable dans `host.env`,
+    serait interpolée par compose, ou ferait refuser tout le fichier ; `--check` refuse un guillemet
+    ouvert jamais fermé, et une barre oblique inverse entre guillemets.
   - **Un `make glorfindel-host-push` garde le mode de chaque VM** tel qu'il est sur H0
     (décision de Jonathan, 02/11 ; avant, SEC7 remettait toutes les VM en `human_only` à
     chaque push, et la posture se redonnait dans la console). Le push lit la config en place

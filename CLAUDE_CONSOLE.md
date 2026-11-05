@@ -75,6 +75,8 @@ GET  /api/dagorlad/requests/<id>      → la demande écrite ici ou non, ses fil
 GET  /api/dagorlad/stop               → « Stop all » : make orodruin-kill, les fenêtres ouvertes et leurs cibles, ce qui reste en vol
      (injecteurs : un run part d'Orodruin armé, porté par l'opérateur, jamais d'une route de la console)
 
+GET  /api/queue/<id>                  → FS1c, derrière EREGION_ACTION_QUEUE=1 : une route d'écriture rend l'id de sa demande
+     (pending) ; ici, son reçu — waiting, received, accepted, puis la réponse de la route ; not_taken, untrusted, unknown
 POST /api/action/release/<vm>         → lever isolation NSG
 POST /api/action/revert/<vm>          → reset complet (release + unblock toutes IPs)
 POST /api/action/block-promote/<vm>?ip=<ip> → étend CE blocage au sous-réseau ; `said`/`whole` : ce que la règle laisse de côté (CON-K)

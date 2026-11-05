@@ -6,10 +6,12 @@ by those who read it (docs/fichiers-cles.md, « runs/ — qui écrit, qui lit, q
   ``<run_id>.json`` and ``.pulled-runs/``, ``exercises/``, ``orodruin/``), and what the analysis
   writes of a campaign (``campaigns/<id>/report.md``, ``report.error``, ``triage.*``,
   ``replay.json``) — wherever the campaign itself was written;
-- ``runs/console/`` — the console, Glorfindel's CLI and the bot: ``manual_actions.jsonl``; the
-  console's requests of the action queue (``queue/``, FS1b);
+- ``runs/console/`` — the console and Glorfindel's CLI: ``manual_actions.jsonl``; the console's
+  requests of the action queue (``queue/``, FS1b);
 - ``runs/bot/`` — the bot (FS1b): its requests of the action queue (``queue/``), signed by its
-  key — a writer of its own, so the directory says the writer, and the key must be its;
+  key — a writer of its own, so the directory says the writer, and the key must be its; and, since
+  FS1c, its gestures (``manual_actions.jsonl``, the CLI it runs — ``EREGION_RUNS_WRITER=bot``): the
+  bot no longer mounts ``runs/console``, nor can it replace or drown the console's requests;
 - ``runs/glorfindel/queue/`` — the watch's receipts of those requests and its status, signed;
 - ``runs/annatar/`` — Annatar: ``*_signals.jsonl``, ``<run_id>.json``, ``exercises/``,
   ``campaigns/``;
@@ -52,6 +54,12 @@ GLORFINDEL, CONSOLE, ANNATAR, GOTHMOG, ORODRUIN = "glorfindel", "console", "anna
 VERDICTS = "verdicts"   # written by the watch, read-only to the red (SEC18)
 BOT = "bot"             # FS1b: the bot's requests of the action queue — a writer of its own
 WRITERS = (GLORFINDEL, CONSOLE, ANNATAR, GOTHMOG, ORODRUIN, VERDICTS, BOT)
+# FS1c: the directories of an operator's hand — the console's (and the CLI's), the bot's: each
+# writes its own manual_actions.jsonl, and the feed, the indicators and the containment read both.
+HANDS = (CONSOLE, BOT)
+# Which hand writes a gesture: the bot sets it for the CLI it runs; unset, or anything else, the
+# console's (the console, the operator's CLI).
+WRITER_ENV = "EREGION_RUNS_WRITER"
 # What Orodruin's host holds: no watch there — its verdicts come by the storage channel.
 ORODRUIN_HOST = (ANNATAR, GOTHMOG, ORODRUIN)
 INJECTORS = (ANNATAR, GOTHMOG)
@@ -66,7 +74,7 @@ _FILES = {
     GOTHMOG: ("*_signals.jsonl", "*.json"),
     ORODRUIN: ("audit.jsonl",),
     VERDICTS: ("heartbeat.json",),
-    BOT: (),
+    BOT: ("manual_actions.jsonl",),
 }
 # FS1b: ``queue/`` — a service's requests of the action queue (console, bot), the watch's receipts
 # and its status (glorfindel).
@@ -94,6 +102,12 @@ def dir_of(writer: str, root=None) -> Path:
     if writer not in WRITERS:
         raise ValueError(f"no writer of runs/ is called {writer!r}")
     return Path(ROOT if root is None else root) / writer
+
+
+def hand(environ=None) -> str:
+    """FS1c: the hand whose directory a gesture is noted in — ``bot`` when ``EREGION_RUNS_WRITER``
+    says so (the CLI the bot runs), else ``console``."""
+    return BOT if (os.environ if environ is None else environ).get(WRITER_ENV, "") == BOT else CONSOLE
 
 
 def beside(directory, writer: str) -> Path:

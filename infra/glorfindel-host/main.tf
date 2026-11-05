@@ -17,6 +17,11 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
+    # IR1b (#572) : l'application de l'exécuteur d'identité (identity_executor.tf), désactivée par défaut.
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
   }
   required_version = ">= 1.5"
 }
@@ -26,6 +31,14 @@ terraform {
 provider "azurerm" {
   features {}
   subscription_id = var.subscription_id != "" ? var.subscription_id : null
+}
+
+data "azurerm_subscription" "current" {}
+
+# Le tenant de l'abonnement, sous le az login de l'opérateur (comme azurerm) : jamais un principal.
+# Rien n'y est lu ni écrit tant que identity_executor_enabled est faux (identity_executor.tf).
+provider "azuread" {
+  tenant_id = data.azurerm_subscription.current.tenant_id
 }
 
 locals {

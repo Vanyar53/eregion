@@ -152,6 +152,14 @@ services:
       EREGION_QUEUE_KEYS: ${EREGION_QUEUE_KEYS:-}
       DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       DISCORD_ALLOWED_ROLES: ${DISCORD_ALLOWED_ROLES:-}
+      # NT1 (#583) : qui n'est jamais une cible (eregion_core/never_target.py) — la watch lit la liste
+      # pour écrire le plan d'une carte d'identité (IR1a, entra_plan.never_target_protected). Des ids,
+      # aucun secret ; à elle seule : ni la console ni le bot ne la lisent, et les injecteurs ont la
+      # leur sur Orodruin (orodruin.env). Vide ou mal écrite, la liste est illisible : chaque verbe
+      # d'un plan devient une étape de l'humain — fermé, jamais une panne (host_env.py --check le dit).
+      EREGION_OPERATOR_OBJECT_ID: ${EREGION_OPERATOR_OBJECT_ID:-}
+      EREGION_PROTECTED_IDENTITIES: ${EREGION_PROTECTED_IDENTITIES:-}
+      EREGION_IDENTITY_EXECUTOR_CLIENT_ID: ${EREGION_IDENTITY_EXECUTOR_CLIENT_ID:-}
     volumes:
       # SEC18 : son répertoire en écriture (ses cycles ; sur H0, ce qu'elle tire du canal et les
       # rapports de campagne ; FS1b : ses reçus de la file et son statut, queue/) ; ceux des

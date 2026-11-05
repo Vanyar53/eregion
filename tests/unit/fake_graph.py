@@ -24,6 +24,7 @@ class FakeGraph:
         self.eligibilities: list[dict] = []
         self.fics: dict[str, list[dict]] = {}                # application → its federated credentials
         self.roles: dict[str, str] = {}                      # role definition id → display name
+        self.owned: dict[str, list[dict]] = {}               # principal → its owned objects (IR1b)
         self.fail: str = ""                                  # right | error | delay | crash
         self.calls: list[tuple[str, str, dict | None]] = []
 
@@ -56,7 +57,8 @@ class FakeGraph:
     def _expanded(self, rows, params):
         p = self._principal(params)
         return [{**r, "roleDefinition": {"id": r["roleDefinitionId"],
-                                         "displayName": self.roles.get(r["roleDefinitionId"], "")}}
+                                         "displayName": self.roles.get(r["roleDefinitionId"], ""),
+                                         **r.get("definition", {})}}
                 for r in rows if r["principalId"] == p]
 
     def list(self, path: str, params: dict | None = None, deadline: float | None = None):
@@ -73,4 +75,6 @@ class FakeGraph:
             return self._expanded(self.eligibilities, params)
         if m := re.fullmatch(r"/applications/" + _ID + "/federatedIdentityCredentials", path):
             return list(self.fics.get(m.group(1), [])) if m.group(1) in self.apps else None
+        if m := re.fullmatch(r"/servicePrincipals/" + _ID + "/ownedObjects", path):
+            return list(self.owned.get(m.group(1), [])) if m.group(1) in self.sps else None
         raise AssertionError(f"the fake Graph does not know {path}")

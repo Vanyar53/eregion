@@ -2109,6 +2109,26 @@ def watch_key_cmd(create: bool):
     click.echo(f"# empreinte : {watch_key.fingerprint(public)}")
 
 
+@cli.command("identity-contract")
+def identity_contract_cmd():
+    """The identity executor's contract (IR1b): what its own identity holds in Entra ID, read from its
+    Graph token and read only on Graph, against the closed list — armed or passive, each right beyond
+    the contract named. Its environment: EREGION_TENANT_ID, EREGION_IDENTITY_EXECUTOR_CLIENT_ID,
+    EREGION_IDENTITY_EXECUTOR_CERTIFICATE (docs/operations.md, « L'exécuteur d'identité »). Writes
+    nothing; exit 0 only if armed."""
+    from glorfindel.providers.azure import identity_contract
+    verdict = identity_contract.check()
+    click.echo(f"identity executor: {verdict.verdict}")
+    for m in verdict.missing:
+        click.echo(f"  ✗ {m['code']}: {m['detail']}")
+    if verdict.held:
+        click.echo(f"  held: {', '.join(sorted(verdict.held))}")
+    if verdict.armed:
+        verbs = sorted(v for v in identity_contract.VERB_RIGHTS if verdict.allows(v))
+        click.echo(f"  verbs its rights allow: {', '.join(verbs) or 'none'}")
+    sys.exit(0 if verdict.armed else 1)
+
+
 @cli.command()
 @click.option("--memory-path", default=None)
 def memory_stats(memory_path: str | None):

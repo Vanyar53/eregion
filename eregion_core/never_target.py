@@ -7,6 +7,8 @@ is being able to act as it. Here, in the shared core, so that both read the same
                                                AZURE_CLIENT_ID; the watches' identities, listed
         Orodruin                               the reader's own token (oid, appid); listed
         Annatar                                ANNATAR_AZURE_CLIENT_ID; on Orodruin, Orodruin's own
+        the identity executor (IR1b)           EREGION_IDENTITY_EXECUTOR_CLIENT_ID: never its own
+                                               target, nor a technique's
         the operators                          EREGION_OPERATOR_OBJECT_ID (one at least, required)
         the listed ones                        EREGION_PROTECTED_IDENTITIES (infra/orodruin output)
         Microsoft's applications, and any      registered in another tenant than the bench's
@@ -44,7 +46,8 @@ from dataclasses import dataclass
 OPERATOR_ENV = "EREGION_OPERATOR_OBJECT_ID"
 PROTECTED_ENV = "EREGION_PROTECTED_IDENTITIES"
 # Each a list of object ids or client ids, read strictly: an entry that is no id refuses all.
-STRICT_ENVS = (OPERATOR_ENV, PROTECTED_ENV, "ANNATAR_AZURE_CLIENT_ID", "GLORFINDEL_AZURE_CLIENT_ID")
+STRICT_ENVS = (OPERATOR_ENV, PROTECTED_ENV, "ANNATAR_AZURE_CLIENT_ID", "GLORFINDEL_AZURE_CLIENT_ID",
+               "EREGION_IDENTITY_EXECUTOR_CLIENT_ID")
 # Glorfindel's own callers (glorfindel/providers/azure/activity.py): a name may sit among the ids
 # there, read loosely — only its ids count.
 LOOSE_ENVS = ("GLORFINDEL_OWN_CALLERS", "AZURE_CLIENT_ID")

@@ -1,17 +1,18 @@
-# La clé de la watch (SEC19, N-03 ; SEC21) — et ce que FS1 en reprendra
+# La clé de la watch (SEC19, N-03 ; SEC21, SEC21b) — et ce que FS1 en reprendra
 
 La garde « jamais sans Glorfindel » (V1) lit un battement. Avant SEC19, ce battement était
 **lié** (SEC5 : le condensé de l'abonnement que la watch lit) mais pas **authentifié** : qui
 pouvait écrire le fichier des injecteurs ou le blob du canal retour pouvait écrire un battement
 que la garde croyait. Depuis SEC19, la garde ne croit qu'un battement signé par la clé de la watch,
 vérifié avec une clé publique épinglée du côté de l'injecteur. Depuis SEC21 (#530), il en va de même
-de chaque détection que la watch publie sur le canal retour : ce que les injecteurs mesurent.
+de chaque détection que la watch publie sur le canal retour : ce que les injecteurs mesurent. Depuis
+SEC21b (#535), le battement signé dit aussi quelles détections il couvre.
 
 Code : `eregion_core/watch_key.py` (la clé, la signature, la vérification), `eregion_core/watch_gate.py`
 (la garde), `eregion_core/watch_channel.py` (le battement du canal), `glorfindel/cli.py` (la copie
 pour les injecteurs, la commande `glorfindel watch-key`), `annatar/runner/engine.py` (la détection
 crue ou refusée). Tests : `tests/unit/test_watch_key.py`, `tests/unit/test_watch_gate.py`,
-`tests/unit/test_signed_detections.py` (SEC21).
+`tests/unit/test_signed_detections.py` (SEC21), `tests/unit/test_beat_covers.py` (SEC21b).
 
 ## La clé
 
@@ -44,7 +45,7 @@ dans le canal retour (`heartbeat.json`). Elle y ajoute trois champs :
 - `key`, l'empreinte de sa clé — dite, jamais crue : la vérification se fait avec la clé épinglée ;
 - `sig`, la signature Ed25519 de **`eregion.watch-beat/1`, un saut de ligne, puis le JSON canonique
   de tous les autres champs** (clés triées, sans espace) : la date, le périmètre, et sur le canal
-  `since` et `windows` aussi.
+  `since`, `windows` et `covers` (SEC21b) aussi.
 
 Le canal local des verdicts (SEC18, `runs/verdicts/heartbeat.json`) n'est pas signé : il porte
 exactement ses champs, et la garde ne le lit jamais.
@@ -141,6 +142,78 @@ de canal de stockage.
   `make glorfindel-restart` après la mise à jour. Aucune clé nouvelle, aucune épingle nouvelle :
   `EREGION_WATCH_KEY` reste celle de SEC19.
 
+## Ce que le battement couvre (SEC21b, #535)
+
+Avec SEC21, un « missed » ne reposait que sur un battement signé. Mais ce battement ne disait pas
+quelles détections il couvrait. Une détection retirée du canal, sous un vrai battement, ne se voyait
+donc pas : le run concluait « missed » au lieu de « detected ». Aucune action n'en dépendait, seule
+la mesure.
+
+**Ce que la watch écrit.** Le battement du canal porte un champ de plus, `covers`
+(`eregion_core/watch_channel.py`, `Publisher._covers`). Pour chaque fenêtre qu'il nomme dans
+`windows`, c'est la liste triée des `signal_id` de chaque détection livrée pour elle, une fenêtre
+sans détection a une liste vide. Par exemple : `"covers": {"20261104T101500Z": ["rule-t1136-001-v1-ab12cd34"]}`.
+- **Livrée** veut dire écrite et acquittée par le stockage avant ce battement. La watch ne bat
+  jamais tant qu'une détection attend : chaque détection listée était donc dans le canal avant que
+  le battement y soit.
+- **Sous la signature existante**, sans changer de domaine (`eregion.watch-beat/1`). Retirer une
+  détection de la liste, ou retirer le champ, défait la signature. Un domaine nouveau aurait fait
+  refuser tout battement par la garde des injecteurs d'avant, donc tout run.
+- **Borné** : 256 détections par fenêtre au plus (`MAX_COVERED`). Au-delà, la fenêtre reste dans
+  `windows` mais sort de `covers` : son run ne peut pas conclure à un « missed ». Un run du banc en
+  voit quelques-unes ; une liste vaut une quarantaine d'octets par détection.
+- **La watch garde ce qu'elle a livré** aussi longtemps qu'une fenêtre peut vivre : elle oublie une
+  détection après `KEEP_S` (deux heures plus la grâce), la plus longue vie d'une fenêtre.
+- **Le canal local des verdicts (SEC18) ne change pas** : son battement garde exactement
+  `BEAT_FIELDS`, sans `covers`, et un run qui le lit ne fait pas cette comparaison.
+
+**Ce que le lecteur compare.** Annatar ne compare qu'à la fin de l'attente, sur le canal de
+stockage, et seulement si aucune détection n'a été vue (`annatar/runner/engine.py`,
+`_settle_through_channel` ; `watch_channel.uncovered`). Le battement de fin d'attente doit d'abord
+tenir : SEC21, puis `miss_unprovable`. **L'ordre est fixe** : le battement d'abord, puis la liste
+des détections. Chaque détection que le battement couvre doit être dans cette liste, signée par la
+clé épinglée (`vouched_detections`).
+
+| Ce que le run lit | Ce qu'il conclut |
+|---|---|
+| chaque détection couverte, relue | un silence est un « missed », comme avant |
+| une détection relue que le battement ne liste pas (livrée après lui) | admise : rien ne manque |
+| une détection couverte absente (retirée, ou remplacée par un blob refusé) | `unknown`, jamais `missed` ; le blob manquant dit |
+| un battement sans `covers` (une watch d'avant ce lot) | `unknown`, avec la raison et le geste : mettre Glorfindel à jour |
+| un battement qui ne liste pas le run (plus de 256 détections) | `unknown`, et c'est dit |
+| un `covers` réécrit par une main | la signature ne tient pas (SEC21) : `unknown` |
+
+**Une détection manquante est dite à trois endroits :**
+- dans la sortie du run ;
+- dans le journal d'Orodruin, par la ligne du run (`detection_missing`) ;
+- dans son rapport (`metrics.detection_missing`, et `metrics.detection_missing_total` pour le
+  nombre entier).
+
+Chaque blob n'est dit qu'une fois, et seulement les vingt premiers (`MAX_MISSING`) ; les autres sont
+comptés. Le nom d'un signal n'y est dit qu'en caractères de nom de blob, jamais une séquence
+d'échappement. Une détection du run relue et vouchée donne toujours « detected », même si une autre
+couverte manque : une preuve du « vu » n'est jamais retirée.
+
+**L'ordre, et pourquoi.** Lu dans l'autre sens, la liste puis le battement, une détection livrée
+entre les deux serait couverte sans avoir été lue : un `unknown` à tort, jamais un faux « missed ».
+Dans l'ordre retenu, la comparaison est exacte, et l'ordre est tenu par un mutant (M3746).
+
+**Le passage d'une version à l'autre.** Il est strict. Aucune option ne fait prouver un « missed »
+par un battement qui ne dit pas ce qu'il couvre.
+- **Une watch à jour, des injecteurs d'avant** : le champ de plus est ignoré, la signature tient.
+  Rien ne casse, mais rien n'est encore comparé.
+- **Une watch d'avant, des injecteurs à jour** : un silence donne `unknown`, avec la raison (« the
+  heartbeat does not say which detections it covers ») et le geste. Un « detected » n'est pas
+  touché. La garde passe toujours.
+- **Le passage est borné par la mise à jour de la watch** :
+  - la release publiée, le CD de H0 la déploie d'abord ;
+  - puis Orodruin, par OI3 ou par `make orodruin-push REF=<tag>` ;
+  - une watch de poste ou d'équipe (WC1) se met à jour par `make glorfindel-restart`.
+- **Aucune clé nouvelle, aucune épingle nouvelle.**
+- **Un vieux battement rejoué ne rouvre pas le passage.** Il faut un battement écrit après la fin de
+  l'attente, et une watch à jour n'en écrit plus sans `covers`. Seul un retour arrière de la watch
+  elle-même le rouvre, et il donne `unknown`.
+
 ## Ce que cela prouve, et ce que non
 
 **Prouvé** : la watch qui détient cette clé a écrit ce battement, pour cet abonnement, il y a moins
@@ -154,10 +227,18 @@ injecteur.
 ce signal, telle qu'elle est lue — un « vu » ne vient plus que d'elle, quelle que soit l'identité
 qui écrit le canal ; un « missed » ne repose que sur un battement qu'elle a signé.
 
-**Ouvert** :
-- le battement ne dit pas quelles détections il couvre (ni leur nombre, ni un condensé de chaque
-  fenêtre) ;
-- une détection retirée du canal, sous un battement vrai, ne se voit pas.
+**Pour un « missed » (SEC21b)** : prouvé, la watch a signé un battement, écrit après l'attente, qui
+nomme chaque détection qu'elle a livrée pour ce run, et le run les a toutes relues après lui. Une
+détection retirée du canal sous un battement vrai donne `unknown`, dite, jamais `missed`.
+
+**Fermé** (SEC21b, #535) : le battement dit ce qu'il couvre, et une détection retirée se voit.
+
+**Ce qui reste** :
+- une détection que la watch n'a jamais notée (sa règle n'a pas tiré, l'ingestion a dépassé
+  l'attente) : un vrai raté, mesuré comme tel ;
+- le canal local des verdicts (SEC18) : ni signé ni couvert, le répertoire de la seule watch du
+  poste, que le rouge monte en lecture seule ;
+- qui lit la clé privée signe comme la watch, comme avant.
 
 ## FS1 reprend cette clé (#413)
 

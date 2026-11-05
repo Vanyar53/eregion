@@ -37,7 +37,11 @@ Glorfindel voit », plus bas).
     campagne : non retenu, il ne donne aucun temps, et la tuile dit combien (« T0 not believed: no
     time counted », `docs/analysis.md`, « D'où vient chaque entrée »). L'accueil, lui, compte le
     trafic réel (OV1) ;
-  - les fenêtres d'exercice, et pour chacune ce que Glorfindel a fait pendant ;
+  - les fenêtres d'exercice, et pour chacune ce que Glorfindel a fait pendant. « read the return
+    channel » montre les détections que la watch a déposées pour ce run. Chacune est marquée `SIGNED`
+    par la clé épinglée sur la console (`EREGION_WATCH_KEY`), ou `REFUSED` avec la raison, comme le
+    run la juge : une détection refusée ne compte jamais. Sans clé épinglée, aucune n'est dite
+    vérifiée, et la page donne le geste (CON-S, `design/console.md`) ;
   - les campagnes ;
   - la matrice de couverture : chaque technique et chaque panne, son dernier run, sa dernière preuve,
     son état.

@@ -3,7 +3,8 @@ rights read again on Graph, read only, against a closed list; a right too many i
 contract it cannot read contract_unreadable, both passive, and a passive executor refuses to start
 (glorfindel/providers/azure/identity_contract.py). Its application in H0's Terraform holds exactly
 the contract's two Graph permissions (infra/glorfindel-host/identity_executor.tf).
-M4070–M4083 measured by tests/unit/test_identity_contract.py (a fake Graph), M4084 by
+M4070–M4083 and M4145–M4154 (the first review) measured by tests/unit/test_identity_contract.py
+(a fake Graph), M4084 by
 tests/unit/test_identity_executor_host.py (its plan: infra/glorfindel-host/tests/
 identity_executor.tftest.hcl, `terraform test`)."""
 IC = "glorfindel/providers/azure/identity_contract.py"
@@ -59,6 +60,39 @@ MUTANTS = [
     ("M4084", "the executor's application given a right that grants privileges (IR1b)", HOST_TF,
      'toset(["Application.ReadWrite.OwnedBy", "User.RevokeSessions.All"])',
      'toset(["Application.ReadWrite.OwnedBy", "User.RevokeSessions.All", "Application.ReadWrite.All"])'),
+    # Relecture 1 (05/11): M4145–M4154.
+    ("M4145", "a scoped role seen in its token, held at the tenant, admitted (IR1b r1)", IC,
+     "        elif w in ADMITTED_ROLES and w != DIRECTORY_READERS:\n",
+     "        elif False:\n"),
+    ("M4146", "the executor a member of a group, and nothing said (IR1b r1)", IC,
+     "a member of none (a group can carry a role)\")] if member_of else []\n",
+     "a member of none (a group can carry a role)\")] if False else []\n"),
+    ("M4147", "owning an identity that holds a directory role accepted (IR1b r1)", IC,
+     "    if held[\"roles\"] or held[\"eligible\"]:\n",
+     "    if held[\"eligible\"]:\n"),
+    ("M4148", "owning an identity eligible to a directory role accepted (IR1b r1)", IC,
+     "    if held[\"roles\"] or held[\"eligible\"]:\n",
+     "    if held[\"roles\"]:\n"),
+    ("M4149", "owning an identity that is a member of a group accepted (IR1b r1)", IC,
+     "    if held[\"member_of\"]:\n",
+     "    if False:\n"),
+    ("M4150", "owning an identity that holds an application permission but a read accepted (IR1b r1)", IC,
+     "        if not _READ_ONLY.fullmatch(value) or \"write\" in value.lower():\n",
+     "        if \"write\" in value.lower():\n"),
+    ("M4151", "an owned application's principal never looked up: what it holds never read (IR1b r1)", IC,
+     "            principal = guid((sp or {}).get(\"id\"))\n",
+     "            principal = \"\"\n"),
+    ("M4152", "what an owned object holds, not read, taken for nothing held (IR1b r1)", IC,
+     "            missing.append(_miss(UNREADABLE, \"what an object it owns holds is not read\"))\n",
+     "            pass\n"),
+    ("M4153", "the identity executor out of never_target: a target like any other (IR1b r1)", "eregion_core/never_target.py",
+     "STRICT_ENVS = (OPERATOR_ENV, PROTECTED_ENV, \"ANNATAR_AZURE_CLIENT_ID\", \"GLORFINDEL_AZURE_CLIENT_ID\",\n"
+     "               \"EREGION_IDENTITY_EXECUTOR_CLIENT_ID\")\n",
+     "STRICT_ENVS = (OPERATOR_ENV, PROTECTED_ENV, \"ANNATAR_AZURE_CLIENT_ID\", \"GLORFINDEL_AZURE_CLIENT_ID\")\n"),
+    ("M4154", "its eligible roles never read (IR1b r1)", IC,
+     "                \"eligible\": listed(\"/roleManagement/directory/roleEligibilityScheduleInstances\", flt),\n",
+     "                \"eligible\": [],\n"),
 ]
 TESTS = {f"M{n}": _CONTRACT for n in range(4070, 4084)}
 TESTS["M4084"] = _HOST
+TESTS.update({f"M{n}": _CONTRACT for n in range(4145, 4155)})

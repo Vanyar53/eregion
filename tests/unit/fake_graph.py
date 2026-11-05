@@ -25,6 +25,7 @@ class FakeGraph:
         self.fics: dict[str, list[dict]] = {}                # application → its federated credentials
         self.roles: dict[str, str] = {}                      # role definition id → display name
         self.owned: dict[str, list[dict]] = {}               # principal → its owned objects (IR1b)
+        self.member_of: dict[str, list[dict]] = {}           # principal → its groups, transitively (IR1b)
         self.fail: str = ""                                  # right | error | delay | crash
         self.calls: list[tuple[str, str, dict | None]] = []
 
@@ -45,6 +46,8 @@ class FakeGraph:
             return next((a for a in self.apps.values() if a.get("appId") == m.group(1)), None)
         if m := re.fullmatch(r"/servicePrincipals/" + _ID, path):
             return self.sps.get(m.group(1))
+        if m := re.fullmatch(r"/servicePrincipals\(appId='" + _ID + r"'\)", path):
+            return next((s for s in self.sps.values() if s.get("appId") == m.group(1)), None)
         if m := re.fullmatch(r"/users/" + _ID, path):
             return self.users.get(m.group(1))
         raise AssertionError(f"the fake Graph does not know {path}")
@@ -73,8 +76,13 @@ class FakeGraph:
             return self._expanded(self.role_assignments, params)
         if path == "/roleManagement/directory/roleEligibilitySchedules":
             return self._expanded(self.eligibilities, params)
+        if path == "/roleManagement/directory/roleEligibilityScheduleInstances":     # IR1b: no $expand
+            p = self._principal(params)
+            return [dict(r) for r in self.eligibilities if r["principalId"] == p]
         if m := re.fullmatch(r"/applications/" + _ID + "/federatedIdentityCredentials", path):
             return list(self.fics.get(m.group(1), [])) if m.group(1) in self.apps else None
         if m := re.fullmatch(r"/servicePrincipals/" + _ID + "/ownedObjects", path):
             return list(self.owned.get(m.group(1), [])) if m.group(1) in self.sps else None
+        if m := re.fullmatch(r"/servicePrincipals/" + _ID + "/transitiveMemberOf", path):
+            return list(self.member_of.get(m.group(1), [])) if m.group(1) in self.sps else None
         raise AssertionError(f"the fake Graph does not know {path}")

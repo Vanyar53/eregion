@@ -865,35 +865,49 @@ il n'écrit encore rien : ses verbes sont le travail d'IR1c.
 Administrator, Privileged Authentication Administrator, Application Administrator, Cloud
 Application Administrator, et User Administrator ailleurs qu'à l'unité du banc) ; retirer un rôle
 ou un consentement (un plan, que l'humain exécute avec son compte) ; prendre l'identité managée de
-H0 (celle de la watch : il n'a que son certificat, jamais `DefaultAzureCredential`) ; posséder
-autre chose qu'une application inscrite et son principal (ni lui-même, ni une identité de
-Glorfindel, d'Orodruin, d'Annatar ou d'un opérateur, ni un groupe) ; être la cible de qui que ce
-soit (`EREGION_IDENTITY_EXECUTOR_CLIENT_ID` rejoint `eregion_core/never_target.py`).
+H0 (celle de la watch : il n'a que son certificat, jamais `DefaultAzureCredential`) ; être
+membre d'un groupe (un groupe peut porter un rôle) ; posséder autre chose qu'une application
+inscrite et son principal (ni lui-même, ni une identité de Glorfindel, d'Orodruin, d'Annatar ou
+d'un opérateur, ni un groupe) ; posséder une identité **privilégiée** (décision du Q6) : le principal
+de chaque objet qu'il possède ne tient aucun rôle d'annuaire, actif ou éligible, aucun groupe,
+aucune permission d'application qui ne soit une lecture — comme la garde d'IDI1
+(`privilege_refusal`), lu avec les mêmes droits de lecture que les siens (hypothèse 10). **La
+limite** : comme la garde d'IDI1, le contrat ne lit ni les rôles Azure (RBAC) d'un objet possédé,
+ni ses consentements délégués (`oauth2PermissionGrants`) — l'identité de test de Celebrimbor n'en a
+aucun (IDI2, #556, lèvera la limite) ; être la cible de qui que ce soit
+(`EREGION_IDENTITY_EXECUTOR_CLIENT_ID` rejoint `eregion_core/never_target.py`).
 
 **Le contrat, lu à son démarrage** (`identity_contract.start`, `glorfindel identity-contract`) —
 comme celui d'Orodruin, rien n'est écrit :
 - son **jeton Graph**, sans appel : un jeton d'application (pas de `scp`), du tenant déclaré
   (`tid`) et de son application (`appid`) ; ses permissions (`roles`) et ses rôles d'annuaire au
-  tenant (`wids`) dans la liste ;
+  tenant (`wids`) dans la liste — Directory Readers seul : `wids` ne porte que les rôles au tenant,
+  et User Administrator ou Attribute Assignment Reader qui y figure (par un groupe compris, que ses
+  attributions ne montrent pas) est un rôle borné tenu au tenant, `beyond_contract` ;
 - **Graph, en lecture seule** (un GET, `graph.GraphReader`) : ses permissions d'application, chacune
   nommée par sa ressource (Microsoft Graph seule) ; ses rôles d'annuaire, actifs, chacun reconnu par
   l'`id` de sa définition (jamais son nom, ni le `templateId` qu'un rôle personnalisé peut choisir),
-  à sa seule portée, et aucun rôle éligible ; ce qu'il possède. Une permission ne compte comme tenue
-  que si le jeton **et** les attributions la disent.
+  à sa seule portée, et aucun rôle éligible (`roleEligibilityScheduleInstances`, sans `$expand`,
+  comme IDI1 : tout rôle éligible est refusé) ; aucun groupe (`transitiveMemberOf`) ; ce qu'il
+  possède, et ce que tient le principal de chaque objet possédé. Une permission ne compte comme
+  tenue que si le jeton **et** les attributions la disent.
 - **`armed`** : rien en trop. Un droit qui manque n'arme ni ne désarme : il retire seulement les
   verbes qui en ont besoin (`Verdict.allows`, `VERB_RIGHTS`).
 - **`passive`**, et il refuse de démarrer (`Passive`) : un droit en trop, `beyond_contract` (le
-  droit nommé : refusé, inconnu, hors de sa portée, éligible, sur une autre API, une identité
-  protégée possédée) ; un contrat illisible, `contract_unreadable` (une variable absente ou mal
-  formée, un jeton qu'il n'a pas, un jeton d'un autre tenant ou d'une autre application, une
-  lecture de Graph qui échoue, la liste `never_target` illisible alors qu'il possède des objets).
+  droit nommé : refusé, inconnu, hors de sa portée, un rôle borné au tenant, éligible, sur une autre
+  API, un groupe, une identité protégée ou privilégiée possédée) ; un contrat illisible,
+  `contract_unreadable` (une variable absente ou mal formée, un jeton qu'il n'a pas, un jeton d'un
+  autre tenant ou d'une autre application, une lecture de Graph qui échoue — les siennes comme
+  celles d'un objet possédé —, la liste `never_target` illisible alors qu'il possède des objets).
 
 **Son environnement** (jamais dans le dépôt) : `EREGION_TENANT_ID` (le tenant du banc, le nom
 d'IDI1), `EREGION_IDENTITY_EXECUTOR_CLIENT_ID` (`terraform output identity_executor_client_id`),
 `EREGION_IDENTITY_EXECUTOR_CERTIFICATE` (le chemin de son certificat et de sa clé, sur H0), et pour
-ses rôles bornés `EREGION_BENCH_ADMIN_UNIT_ID` et `EREGION_IDENTITY_ATTRIBUTE_SET` (les sorties
-d'IDI1b ; sans elles, User Administrator ou Attribute Assignment Reader le rendent passif) ; et
-`EREGION_OPERATOR_OBJECT_ID`, pour lire `never_target`.
+ses rôles bornés `EREGION_BENCH_ADMIN_UNIT_ID` (la sortie de l'unité du banc d'IDI1b) et
+`EREGION_IDENTITY_ATTRIBUTE_SET=Eregion` (l'ensemble qu'IDI1b fige : la sortie `entra_attribute_set`
+de Celebrimbor). Aucune n'a de valeur par défaut, fermé : non déclarée, User Administrator ou
+Attribute Assignment Reader le rendent passif. Et `EREGION_OPERATOR_OBJECT_ID`, pour lire
+`never_target`.
 
 **Les gestes de Jonathan, dans l'ordre** (rien n'est appliqué par une session) :
 
@@ -917,9 +931,15 @@ d'IDI1b ; sans elles, User Administrator ou Attribute Assignment Reader le rende
    `az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/<object id>/appRoleAssignments"`
    montre les deux permissions, et rien d'autre ; `az role assignment list --assignee <object id>
    --all -o table` montre `Log Analytics Reader` sur le workspace seul.
-6. **Le protéger** : `EREGION_IDENTITY_EXECUTOR_CLIENT_ID=<client id>` dans `orodruin.env` (la garde
-   d'une identité ne le vise jamais) ; et transmettre l'object id à IDI1b (ses rôles bornés) et à
-   IDI1 (la propriété des applications inscrites).
+6. **Le protéger** (§3.5 de la conception) : `EREGION_IDENTITY_EXECUTOR_CLIENT_ID=<client id>`
+   dans `orodruin.env` (la garde d'une identité ne le vise jamais) **et** dans `host.env` (la watch
+   lit `never_target` pour écrire son plan, IR1a) ; l'**object id de son principal**
+   (`identity_executor_object_id`) ajouté à `EREGION_PROTECTED_IDENTITIES`, pas seulement le client
+   id : `never_target` compare l'un et l'autre. Puis transmettre l'object id à IDI1b (ses rôles
+   bornés, `entra_identity_executor_object_id` de Celebrimbor) et à IDI1 (la propriété des
+   applications inscrites). **Limite** : le compose ne passe pas encore à la watch les variables de
+   `never_target` (ni celle-ci, ni `EREGION_OPERATOR_OBJECT_ID`) ; sans elles, sa liste est illisible
+   et tout verbe de son plan devient une étape de l'humain — fermé, mais à brancher (IR1c).
 7. **Le certificat** (avec IR1c, qui monte le conteneur) : la clé tirée sur H0, dans un répertoire
    que seul l'exécuteur monte ; sa partie publique (PEM, `BEGIN CERTIFICATE`, jamais une clé : le
    plan la refuse) dans `identity_executor_certificate`, puis les gestes 3 et 4 (une création de
@@ -928,14 +948,20 @@ d'IDI1b ; sans elles, User Administrator ou Attribute Assignment Reader le rende
    une fois IDI1b appliqué ; avant IDI1b, ses propres lectures de Graph échouent sans Directory
    Readers (hypothèse 10) : `passive`, `contract_unreadable`, ce qui est juste.
 
-**Retirer** : `identity_executor_enabled = false` (ou le fichier ôté), puis les gestes 3 et 4 : le
-plan montre les mêmes destructions. `make glorfindel-host-down` le retire avec le reste de l'état de H0.
+**Retirer**, dans cet ordre : d'abord ses rôles bornés dans Celebrimbor — retirer
+`entra_identity_executor_object_id` (IDI1b), puis son plan et son apply —, sans quoi l'état de
+Celebrimbor viserait un principal supprimé ; ensuite l'exécuteur : `identity_executor_enabled =
+false` (ou le fichier ôté), puis les gestes 3 et 4 : le plan montre les mêmes destructions. `make
+glorfindel-host-down` le retire avec le reste de l'état de H0 (même ordre : Celebrimbor d'abord).
 
 **Les hypothèses** (§5 de la conception, à mesurer sur le tenant du banc) : les droits qu'il faut
-pour lire ses propres droits (10) ; `wids` ne porte que les rôles au tenant, jamais un rôle borné à
-une unité ; les identifiants des rôles intégrés que le contrat épingle (`DIRECTORY_READERS`,
-`USER_ADMINISTRATOR`, `ATTRIBUTE_ASSIGNMENT_READER`, `REFUSED_ROLES`) — un identifiant faux rend
-l'exécuteur passif, jamais armé à tort.
+pour lire ses propres droits et ceux de ce qu'il possède (10) — Directory Readers est celui que le
+contrat attend, pour les attributions de rôles, les appartenances, les permissions d'application et
+les instances éligibles de PIM ; **si Directory Readers ne lit pas PIM, le contrat ne s'arme
+jamais**, et un droit de lecture serait à ajouter après la mesure (jamais une écriture) ; `wids` ne
+porte que les rôles au tenant, jamais un rôle borné à une unité. Les identifiants des rôles intégrés
+que le contrat épingle (`DIRECTORY_READERS`, `USER_ADMINISTRATOR`, `ATTRIBUTE_ASSIGNMENT_READER`,
+`REFUSED_ROLES`) sont ceux de « Microsoft Entra built-in roles » (relus le 05/11).
 
 ## Le canari azurerm, sans secret (P-04, 30/10)
 

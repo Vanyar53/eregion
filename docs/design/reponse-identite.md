@@ -502,9 +502,15 @@ les siens.
 - le **jeton Graph** est lu d'abord, sans appel : un jeton d'application (pas de `scp`), du tenant
   et de l'application déclarés, ses `roles` et ses `wids` dans la liste ; puis Graph, en lecture
   seule : ses permissions (chacune nommée par sa ressource, Microsoft Graph seule), ses rôles
-  d'annuaire actifs (chacun à sa seule portée) et éligibles (aucun), et **ce qu'il possède** — des
-  applications et leurs principaux, jamais lui-même ni une identité de `never_target` : posséder
-  une identité, c'est pouvoir agir comme elle, et ce serait un droit en trop ;
+  d'annuaire actifs (chacun à sa seule portée) et éligibles (aucun : `roleEligibilityScheduleInstances`,
+  sans `$expand`), ses groupes (aucun : un groupe peut porter un rôle), et **ce qu'il possède** — des
+  applications et leurs principaux, jamais lui-même ni une identité de `never_target`, ni une
+  identité privilégiée (Q6 : le principal de chacune ne tient ni rôle d'annuaire, actif ou éligible,
+  ni groupe, ni permission d'application autre qu'une lecture, comme `privilege_refusal` d'IDI1 ;
+  ni ses rôles Azure ni ses consentements délégués ne sont lus, la limite d'IDI1) : posséder une
+  identité, c'est pouvoir agir comme elle, et ce serait un droit en trop ;
+- `wids` ne porte que les rôles au tenant : User Administrator ou Attribute Assignment Reader qui
+  y figure (par un groupe compris) est un rôle borné tenu au tenant, refusé ;
 - un rôle se reconnaît à l'`id` de sa définition, celui de son modèle pour un rôle intégré —
   jamais à son nom, ni à son `templateId`, qu'un rôle personnalisé peut choisir ;
 - une permission n'est tenue que si le jeton **et** ses attributions la disent ; un droit qui
@@ -718,8 +724,10 @@ Jonathan, avant d'être écrite comme un fait.
 8. Les codes d'erreur d'une connexion refusée après chaque action, lisibles dans les journaux.
 9. Les noms d'opération de `AuditLogs` pour chaque écriture de l'exécuteur, et leur latence
    (pour IR1d).
-10. Les droits qu'il faut à l'exécuteur pour lire ses propres permissions et ses rôles (le
-    contrat), et à la watch pour lire le plan (IR1a).
+10. Les droits qu'il faut à l'exécuteur pour lire ses propres permissions, ses rôles, ses groupes et
+    ceux de ce qu'il possède (le contrat, IR1b : Directory Readers est celui qu'il attend ; s'il ne
+    lit pas les instances éligibles de PIM, le contrat ne s'arme jamais), et à la watch pour lire le
+    plan (IR1a).
 11. L'accès conditionnel pour les identités de charge de travail : ce qu'il borne (l'adresse), et
     sa licence.
 12. Dans une unité restreinte, `User.RevokeSessions.All` ne touche pas ses membres, et le User

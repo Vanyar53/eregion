@@ -28,6 +28,7 @@ OPERATOR = "00000000-0000-0000-0000-0000000000ee"
 WATCH = "00000000-0000-0000-0000-0000000000b0"
 ENROLLED_APP = "00000000-0000-0000-0000-0000000000d0"
 ENROLLED_APP_ID = "00000000-0000-0000-0000-0000000000d9"
+ENROLLED_SP = "00000000-0000-0000-0000-0000000000d8"       # the enrolled application's principal
 DEFAULT_WIDS = sorted(ic.APP_DEFAULT_WIDS)[0]
 ROLE_IDS = {"Application.ReadWrite.OwnedBy": "00000000-0000-0000-0000-000000000d01",
             "User.RevokeSessions.All": "00000000-0000-0000-0000-000000000d02",
@@ -52,6 +53,7 @@ def _graph() -> FakeGraph:
                           _role(ic.USER_ADMINISTRATOR, f"/administrativeUnits/{UNIT}"),
                           _role(ic.ATTRIBUTE_ASSIGNMENT_READER, "/attributeSets/Eregion")]
     g.owned[OID] = [{"@odata.type": "#microsoft.graph.application", "id": ENROLLED_APP, "appId": ENROLLED_APP_ID}]
+    g.sps[ENROLLED_SP] = {"id": ENROLLED_SP, "appId": ENROLLED_APP_ID}
     return g
 
 
@@ -253,7 +255,95 @@ def test_an_eligible_role_is_beyond_the_contract():
 def test_owning_what_is_no_enrolled_application_is_beyond_the_contract(owned, words):
     g = _graph()
     g.owned[OID].append(owned)
+    g.sps.setdefault(owned["id"], {"id": owned["id"], "appId": owned.get("appId", "")})
     _beyond(_assess(g), *words)
+
+
+# ── Its groups, and what it owns: never privileged (Q6) ───────────────────────────────────
+
+def test_a_membership_of_its_own_is_beyond_the_contract():
+    """A group can carry a role: the executor is a member of none (as IDI1 for an enrolled one)."""
+    g = _graph()
+    g.member_of[OID] = [{"@odata.type": "#microsoft.graph.group", "id": "00000000-0000-0000-0000-0000000000a1"}]
+    _beyond(_assess(g), "member of 1 group")
+
+
+@pytest.mark.parametrize("role", [ic.USER_ADMINISTRATOR, ic.ATTRIBUTE_ASSIGNMENT_READER])
+def test_a_scoped_role_in_its_token_is_held_at_the_tenant_beyond_the_contract(role):
+    """``wids`` carries the tenant-wide roles only: there, a scoped role is held at the tenant —
+    even one that comes from a group, which its assignments do not show."""
+    _beyond(_assess(claims=_claims(wids=[ic.DIRECTORY_READERS, role])), ic.ADMITTED_ROLES[role],
+            "scoped role held at the tenant")
+
+
+def test_an_owned_application_whose_principal_holds_nothing_is_fine_and_was_read():
+    g = _graph()
+    assert _assess(g).armed
+    assert ("list", "/servicePrincipals/" + ENROLLED_SP + "/appRoleAssignments", None) in g.calls
+    assert any(c[1] == "/roleManagement/directory/roleEligibilityScheduleInstances"
+               and "$expand" not in (c[2] or {}) for c in g.calls)
+
+
+@pytest.mark.parametrize("give, words", [
+    ("role", "directory role"),
+    ("eligible", "directory role"),
+    ("member", "member of"),
+    ("write", "Application.ReadWrite.All"),
+    ("send", "Mail.Send"),
+])
+def test_owning_a_privileged_identity_is_beyond_the_contract(give, words):
+    """Owning an application is acting as it (Q6, IDI1's privilege_refusal): the principal of what
+    it owns holds no role, active or eligible, no group, no application permission but a read."""
+    g = _graph()
+    if give == "role":
+        g.role_assignments.append({"principalId": ENROLLED_SP, "roleDefinitionId": ic.DIRECTORY_READERS,
+                                   "directoryScopeId": "/"})
+    elif give == "eligible":
+        g.eligibilities.append({"principalId": ENROLLED_SP, "roleDefinitionId": GA, "directoryScopeId": "/"})
+    elif give == "member":
+        g.member_of[ENROLLED_SP] = [{"id": "00000000-0000-0000-0000-0000000000a2"}]
+    else:
+        name = "Application.ReadWrite.All" if give == "write" else "Mail.Send"
+        g.app_roles[ENROLLED_SP] = [{"principalId": ENROLLED_SP, "resourceId": GRAPH_SP, "appRoleId": ROLE_IDS[name]}]
+    _beyond(_assess(g), "privileged identity", words)
+
+
+def test_an_owned_principal_holding_a_read_only_is_fine():
+    g = _graph()
+    g.sps[GRAPH_SP]["appRoles"].append({"id": "00000000-0000-0000-0000-000000000d06", "value": "User.Read.All"})
+    g.app_roles[ENROLLED_SP] = [{"principalId": ENROLLED_SP, "resourceId": GRAPH_SP,
+                                 "appRoleId": "00000000-0000-0000-0000-000000000d06"}]
+    assert _assess(g).armed
+
+
+def test_what_an_owned_principal_holds_not_read_leaves_it_passive():
+    """Its memberships not given (Directory Readers short of a right, hypothesis 10): unreadable."""
+    g = _graph()
+
+    class Partial(FakeGraph):
+        def list(self, path, params=None, deadline=None):
+            if path == f"/servicePrincipals/{ENROLLED_SP}/transitiveMemberOf":
+                return None
+            return super().list(path, params, deadline)
+    h = Partial()
+    h.__dict__.update(g.__dict__)
+    v = _assess(h)
+    assert not v.armed and _codes(v) == {ic.UNREADABLE}
+
+
+def test_an_owned_object_whose_holdings_were_not_read_leaves_it_unreadable():
+    decl, _ = ic.declared(ENV)
+    owned = [{"@odata.type": "#microsoft.graph.application", "id": ENROLLED_APP, "appId": ENROLLED_APP_ID}]
+    got = ic.assess_owned(owned, decl, OID, NeverTarget.from_env(ENV), privileges={})
+    assert [m["code"] for m in got] == [ic.UNREADABLE]
+
+
+def test_an_owned_principal_is_checked_too():
+    g = _graph()
+    g.owned[OID] = [{"@odata.type": "#microsoft.graph.servicePrincipal", "id": ENROLLED_SP, "appId": ENROLLED_APP_ID}]
+    assert _assess(g).armed
+    g.member_of[ENROLLED_SP] = [{"id": "00000000-0000-0000-0000-0000000000a2"}]
+    _beyond(_assess(g), "privileged identity")
 
 
 def test_what_it_owns_with_the_never_target_list_unreadable_leaves_it_passive():

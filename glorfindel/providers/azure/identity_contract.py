@@ -9,9 +9,14 @@ within a closed list, else ``passive`` — and a passive executor refuses to sta
                                                  each named by its resource's own list of roles
         its directory roles                      the token's ``wids`` (the tenant-wide ones), and its
                                                  role assignments with their scope, active and eligible
+        its memberships                          its groups, transitively: none (a group can carry
+                                                 a role)
         what it owns                             its owned objects: never one of Eregion's identities,
                                                  never itself, never anything but an application or
-                                                 its principal
+                                                 its principal — and none of them privileged (Q6):
+                                                 the principal of each holds no directory role, active
+                                                 or eligible, no group, no application permission but
+                                                 a read
 
 What it may hold — the closed list (§3.4, decisions of 05/11, Q2 and Q3):
   - in Microsoft Graph, ``Application.ReadWrite.OwnedBy`` (the credentials and the state of the
@@ -36,10 +41,17 @@ from the executor's own credential, its certificate (``executor_credential``; ne
 is the watch's). No verb is run here: that is IR1c's executor, which calls ``start`` first and
 asks ``Verdict.allows`` before each verb.
 
-Hypotheses (§5 of the design, to measure on the bench's tenant): the rights its own reads need
-(hypothesis 10 — Directory Readers, given by IDI1b, is the one this contract expects; without it,
-the reads fail and the executor stays passive); ``wids`` carries the tenant-wide roles only, never
-a role scoped to a unit; the template ids of the built-in roles below.
+Hypotheses (§5 of the design, to measure on the bench's tenant): the rights its reads need
+(hypothesis 10 — Directory Readers, given by IDI1b, is the one this contract expects, for its own
+rights and for those of what it owns: role assignments, eligible role instances (PIM),
+memberships, app role assignments; any read it does not allow fails, and the executor stays
+passive — if Directory Readers does not read PIM's instances, the contract never arms, and a read
+right is to be added after the measure); ``wids`` carries the tenant-wide roles only — so User
+Administrator or Attribute Assignment Reader seen there is held at the tenant, beyond. The template
+ids of the built-in roles below are those of Microsoft's « Microsoft Entra built-in roles ».
+
+What the owned rule does not see: a principal's Azure roles (RBAC) and its delegated grants
+(``oauth2PermissionGrants``) — as IDI1's enrollment guard, the same limit accepted on the bench.
 """
 from __future__ import annotations
 
@@ -109,6 +121,8 @@ VERB_RIGHTS = {
 # What it may own: the applications IDI1 enrolls and their principals, nothing else.
 _OWNABLE = frozenset({"#microsoft.graph.application", "#microsoft.graph.serviceprincipal"})
 _ATTRIBUTE_SET = re.compile(r"[A-Za-z0-9]{1,32}")
+# What an owned principal may hold among application permissions: a read (IDI1's own pattern).
+_READ_ONLY = re.compile(r"[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*\.Read(?:\.All)?")
 # Its reads have this long in all: a start, not a card being written.
 READ_BUDGET_S = 60.0
 
@@ -200,6 +214,9 @@ def assess_token(claims: dict, decl: Declared) -> tuple[list[dict], set[str], st
     for w in {str(w).lower() for w in wids} - APP_DEFAULT_WIDS:
         if w in REFUSED_ROLES:
             missing.append(_miss(BEYOND, f"{REFUSED_ROLES[w]} in its token: a refused directory role"))
+        elif w in ADMITTED_ROLES and w != DIRECTORY_READERS:
+            # wids carries the tenant-wide roles only: a scoped role there is held at the tenant.
+            missing.append(_miss(BEYOND, f"{ADMITTED_ROLES[w]} in its token: a scoped role held at the tenant"))
         elif w not in ADMITTED_ROLES:
             missing.append(_miss(BEYOND, f"directory role {w} in its token: a role outside the contract"))
     return missing, held, oid
@@ -266,11 +283,35 @@ def assess_permissions(assignments: list, resources: dict[str, dict]) -> tuple[l
     return missing, held
 
 
-def assess_owned(owned: list, decl: Declared, oid: str, never: NeverTarget) -> list[dict]:
+def assess_member_of(member_of: list) -> list[dict]:
+    """Its groups, transitively: none — a group can carry a role, and adding a member to one is a
+    right of whoever owns it."""
+    return [_miss(BEYOND, f"it is a member of {len(member_of)} group(s) or role(s): the executor is "
+                          "a member of none (a group can carry a role)")] if member_of else []
+
+
+def privileged(held: dict) -> str:
+    """Why the principal of an owned object is privileged (Q6, as IDI1's ``privilege_refusal``), or
+    "": a directory role active or eligible, a membership, an application permission but a read."""
+    if held["roles"] or held["eligible"]:
+        return f"{len(held['roles']) + len(held['eligible'])} directory role(s), active or eligible"
+    if held["member_of"]:
+        return "a group or a role it is a member of (a group can carry a role)"
+    for value in held["permissions"]:
+        if not _READ_ONLY.fullmatch(value) or "write" in value.lower():
+            return f"the application permission '{value or 'unnamed'}', not a read"
+    return ""
+
+
+def assess_owned(owned: list, decl: Declared, oid: str, never: NeverTarget,
+                 privileges: dict[str, dict] | None = None) -> list[dict]:
     """What it owns: applications and their principals only, never itself, never an identity that is
-    never a target (Glorfindel's, Orodruin's, an operator's — owning one is acting as it)."""
+    never a target (Glorfindel's, Orodruin's, an operator's — owning one is acting as it), and none
+    privileged: ``privileges``, what the principal of each owned object holds, read (``read``) —
+    one not read leaves the contract unreadable."""
     missing = []
     unreadable = never.refusal()
+    privileges = privileges or {}
     for o in owned:
         o = o if isinstance(o, dict) else {}
         kind = str(o.get("@odata.type") or "").lower()
@@ -285,6 +326,10 @@ def assess_owned(owned: list, decl: Declared, oid: str, never: NeverTarget) -> l
         elif ids & never.ids:
             missing.append(_miss(BEYOND, "it owns an identity that is never a target (Glorfindel, Orodruin, "
                                          "Annatar, an operator)"))
+        elif not isinstance(privileges.get(guid(o.get("id"))), dict):
+            missing.append(_miss(UNREADABLE, "what an object it owns holds is not read"))
+        elif why := privileged(privileges[guid(o.get("id"))]):
+            missing.append(_miss(BEYOND, f"it owns a privileged identity ({why}): owning it is acting as it (Q6)"))
     return missing
 
 
@@ -300,16 +345,53 @@ def read(reader, oid: str, deadline: float | None = None) -> dict:
             raise ValueError(f"{path.split('?')[0].rsplit('/', 1)[-1]} not given by Graph")
         return got
 
-    flt = {"$filter": f"principalId eq '{oid}'", "$expand": "roleDefinition"}
-    assignments = listed(f"/servicePrincipals/{oid}/appRoleAssignments")
-    resources = {}
-    for rid in {guid((a or {}).get("resourceId")) for a in assignments if isinstance(a, dict)} - {""}:
-        resources[rid] = reader.get(f"/servicePrincipals/{rid}", {"$select": "id,appId,displayName,appRoles"},
-                                    deadline)
-    return {"assignments": assignments, "resources": resources,
-            "active": listed("/roleManagement/directory/roleAssignments", flt),
-            "eligible": listed("/roleManagement/directory/roleEligibilitySchedules", flt),
-            "owned": listed(f"/servicePrincipals/{oid}/ownedObjects", {"$select": "id,appId"})}
+    resources: dict[str, dict | None] = {}
+
+    def named(assignments):
+        """Each application permission's value, read in its resource's list of roles ("": not named)."""
+        for rid in {guid(a.get("resourceId")) for a in assignments if isinstance(a, dict)} - {""} - set(resources):
+            resources[rid] = reader.get(f"/servicePrincipals/{rid}", {"$select": "id,appId,displayName,appRoles"},
+                                        deadline)
+        out = []
+        for a in assignments:
+            res = resources.get(guid((a if isinstance(a, dict) else {}).get("resourceId")))
+            names = {guid(r.get("id")): str(r.get("value") or "") for r in (res or {}).get("appRoles") or []
+                     if isinstance(r, dict)}
+            out.append(names.get(guid(a.get("appRoleId")), "") if isinstance(a, dict) else "")
+        return out
+
+    def held_by(principal):
+        """What a principal holds: its directory roles active and eligible (every eligible role is
+        refused: read without $expand, as IDI1), its memberships, its application permissions."""
+        flt = {"$filter": f"principalId eq '{principal}'"}
+        return {"roles": listed("/roleManagement/directory/roleAssignments", {**flt, "$expand": "roleDefinition"}),
+                "eligible": listed("/roleManagement/directory/roleEligibilityScheduleInstances", flt),
+                "member_of": listed(f"/servicePrincipals/{principal}/transitiveMemberOf", {"$select": "id"}),
+                "assignments": listed(f"/servicePrincipals/{principal}/appRoleAssignments")}
+
+    own = held_by(oid)
+    named(own["assignments"])
+    owned = listed(f"/servicePrincipals/{oid}/ownedObjects", {"$select": "id,appId"})
+    # The principal of each application or principal it owns, and what that principal holds.
+    privileges: dict[str, dict] = {}
+    for o in owned:
+        o = o if isinstance(o, dict) else {}
+        kind, obj = str(o.get("@odata.type") or "").lower(), guid(o.get("id"))
+        if kind not in _OWNABLE or not obj or obj == oid:
+            continue
+        principal = obj
+        if kind == "#microsoft.graph.application":
+            sp = reader.get(f"/servicePrincipals(appId='{guid(o.get('appId'))}')", {"$select": "id"}, deadline) \
+                if guid(o.get("appId")) else None
+            principal = guid((sp or {}).get("id"))
+            if not principal:            # an application without a principal holds nothing
+                privileges[obj] = {"roles": [], "eligible": [], "member_of": [], "permissions": []}
+                continue
+        held = held_by(principal)
+        privileges[obj] = {**held, "permissions": named(held.pop("assignments"))}
+    return {"assignments": own["assignments"], "resources": resources, "active": own["roles"],
+            "eligible": own["eligible"], "member_of": own["member_of"], "owned": owned,
+            "privileges": privileges}
 
 
 def assess(claims: dict, reader, *, env=None, never: NeverTarget | None = None) -> Verdict:
@@ -328,8 +410,8 @@ def assess(claims: dict, reader, *, env=None, never: NeverTarget | None = None) 
         return Verdict(PASSIVE, tuple(missing + [_miss(UNREADABLE, f"its own rights not read: {why}")]))
     m, assigned = assess_permissions(got["assignments"], got["resources"])
     r, roles = assess_roles(got["active"], got["eligible"], decl)
-    o = assess_owned(got["owned"], decl, oid, never or NeverTarget.from_env(env))
-    missing += m + r + o
+    o = assess_owned(got["owned"], decl, oid, never or NeverTarget.from_env(env), got["privileges"])
+    missing += m + r + assess_member_of(got["member_of"]) + o
     # A right is held when both its token and its assignments say so: one of them alone, the
     # token is older than the assignment, or the other way round.
     held = (token_held & assigned) | roles

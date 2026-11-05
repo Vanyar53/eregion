@@ -80,7 +80,7 @@ Tenue par l'Orchestre (RM1, 02/11). Une ligne par release qui se prépare : sa v
 |---|---|---|---|
 | 0.5.4 | rien de non lu | OI2 (un run de contrôle avant le tag d'Orodruin), SEC20b, L1W ; CAN1, MUT1 (le harnais mesure de nouveau) | publiée (04/11) |
 | 0.5.5 | la preuve de bout en bout | CI5, CI6 (une CI plus rapide, une porte de release), H1c (le CD sur les checks requis) ; SEC21 (les détections signées), WC1 (sans H0), OI3 (Orodruin à jour au démarrage), OL1 ; GS1 (les guides de démarrage), AV1 ; DG-e, L1O, I11g ; CI6b (la porte au premier run) | brouillon |
-| 0.5.6 | — | SEC21b (le battement dit ce qu'il couvre), CON-S (la console marque les détections signées) | en préparation |
+| 0.5.6 | — | SEC21b (le battement dit ce qu'il couvre), CON-S (la console marque les détections signées) | brouillon |
 | 0.5.x | — | ID1, G1 au banc | plus tard |
 
 ### Les lots

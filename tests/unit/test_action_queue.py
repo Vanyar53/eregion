@@ -2,7 +2,7 @@
 domains, its signatures, its freshness, its nonce, and each refusal of its closed list.
 
 The keys come from fixed seeds, or are drawn in tmp (tests/unit/conftest.py): never a real key. A
-throwaway HOME, no Azure, no network, no model. Mutants M3865–M3879 (scripts/mutants/FS1a.py) are
+throwaway HOME, no Azure, no network, no model. Mutants M3865–M3879, M3945–M3954 (scripts/mutants/FS1a.py) are
 measured here and in test_action_proposal.py.
 """
 from __future__ import annotations
@@ -373,7 +373,8 @@ def test_the_register_forgets_a_nonce_once_its_request_cannot_be_taken(tmp_path)
     assert old["id"] not in json.loads(path.read_text())
 
 
-@pytest.mark.parametrize("content", ["not json", "[]", '{"a": 1}', '{"a": "not a time"}'])
+@pytest.mark.parametrize("content", ["not json", "[]", '{"a": 1}', '{"a": "not a time"}',
+                                     '{"a": "2026-11-05T09:00:00"}'])     # a time without its zone
 def test_an_unreadable_register_file_refuses(tmp_path, content):
     path = tmp_path / "seen.json"
     path.write_text(content)
@@ -581,3 +582,70 @@ def test_the_watch_s_key_keeps_its_name_its_place_and_its_words(tmp_path):
 
 def test_the_watch_and_a_service_draw_two_keys_never_one():
     assert watch_key.load_or_create().public != aq.load_service_key("console").public
+
+
+# ── A signature in its one canonical form (FS1a review) ──────────────────────────────
+
+_B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+
+def _spellings(sig: str) -> list[str]:
+    """The 15 other spellings of a signature that a lax decoder reads alike: the last character
+    before ``==`` carries 2 bits of the signature and 4 unused ones."""
+    last = _B64.index(sig[85])
+    return [sig[:85] + _B64[(last & 0b110000) | low] + "==" for low in range(16)
+            if (last & 0b110000) | low != last]
+
+
+def test_what_the_watch_and_a_service_sign_is_in_canonical_form():
+    """Every signature the code writes (a heartbeat, a detection, a proposal, a request) is the
+    one form now believed — the watch of today is not refused."""
+    for seed in range(8):
+        signer = watch_key.Signer(bytes((seed + i) % 256 for i in range(32)))
+        for i in range(8):
+            at = NOW + timedelta(seconds=i)
+            sigs = [
+                watch_key.sign_beat({"at": at.isoformat(), "perimeter": f"sha256:{i}"}, signer, at)["sig"],
+                watch_key.sign_detection({"exercise_run": f"r{i}", "signal_id": f"s{seed}"}, signer)["sig"],
+                aq.sign_proposal({"id": f"c{i}", "action": "isolate_vm", "resource_id": VM,
+                                  "escalation_type": "mode_hold"}, signer, at)["sig"],
+                aq.new_request(signer, service="console", verb="snapshot", resource_id=VM, now=at)["sig"],
+            ]
+            for sig in sigs:
+                raw = watch_key.signature_bytes(sig)
+                assert raw is not None and len(raw) == 64, sig
+
+
+def test_the_fifteen_other_spellings_of_a_request_s_signature_are_refused():
+    """M3953: one request, one signature, one digest — never 16 (the register of the proposals
+    consumed would be gone round)."""
+    doc = _request()
+    variants = _spellings(doc["sig"])
+    assert len(variants) == 15 and doc["sig"] not in variants
+    for sig in variants:
+        assert _code({**doc, "sig": sig}) == "bad_signature", sig
+    for sig in (doc["sig"] + "\n", " " + doc["sig"], doc["sig"][:-2] + "=", doc["sig"].replace("+", "-")):
+        if sig != doc["sig"]:
+            assert _code({**doc, "sig": sig}) == "bad_signature", sig
+    assert _verify(doc).id
+
+
+def test_the_other_spellings_of_a_proposal_s_signature_are_refused():
+    p = aq.sign_proposal({"id": "c1", "action": "isolate_vm", "resource_id": VM,
+                          "escalation_type": "mode_hold"}, WATCH, NOW)
+    assert aq.watch_refusal(p, "proposal", WATCH.public) == ""
+    for sig in _spellings(p["sig"]):
+        assert aq.watch_refusal({**p, "sig": sig}, "proposal", WATCH.public) == "its signature does not hold"
+
+
+def test_the_other_spellings_of_a_heartbeat_s_or_a_detection_s_signature_are_refused():
+    """SEC19, SEC21: the same canonical form for what the injectors believe."""
+    beat = watch_key.sign_beat({"at": NOW.isoformat(), "perimeter": "sha256:00"}, WATCH, NOW)
+    det = watch_key.sign_detection({"exercise_run": "r1", "signal_id": "s1", "event": "x"}, WATCH)
+    assert watch_key.verify_beat(beat, WATCH.public) == ""
+    assert watch_key.detection_refusal(det, WATCH.public, run_id="r1", signal_id="s1") == ""
+    for sig in _spellings(beat["sig"]) + [beat["sig"] + "\n"]:
+        assert "not one" in watch_key.verify_beat({**beat, "sig": sig}, WATCH.public), sig
+    for sig in _spellings(det["sig"]) + [det["sig"] + "\n"]:
+        assert "not one" in watch_key.detection_refusal({**det, "sig": sig}, WATCH.public,
+                                                        run_id="r1", signal_id="s1"), sig

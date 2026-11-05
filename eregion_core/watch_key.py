@@ -73,7 +73,7 @@ SEEN_NAME = ".watch_seen.json"
 SIGNED = ("seq", "key", "sig")       # what signing adds to a heartbeat
 SIGNED_DETECTION = ("key", "sig")    # what signing adds to a detection (SEC21)
 _PIN = re.compile(r"^ed25519:([A-Za-z0-9+/]{43}=)$")
-_SIG = re.compile(r"^[A-Za-z0-9+/]{86}==$")
+_SIG = re.compile(r"[A-Za-z0-9+/]{86}==")
 
 # The tests point these at their own tmp dir (tests/unit/conftest.py): never the operator's.
 KEY_DIR: Path | None = None
@@ -323,12 +323,27 @@ def sign_beat(body: dict, signer: Signer, at: datetime) -> dict:
     return out
 
 
+def signature_bytes(sig) -> bytes | None:
+    """The 64 bytes of a signature written in its one canonical form — None for any other: not a
+    string, not 86 base64 characters and ``==`` (matched whole: no newline after), a character out
+    of the alphabet, or a last character whose unused bits are set (FS1a review: 16 spellings of a
+    single signature decoded alike, so one body had 16 digests). The watch writes this form only
+    (``base64.b64encode``)."""
+    if not isinstance(sig, str) or not _SIG.fullmatch(sig):
+        return None
+    try:
+        raw = base64.b64decode(sig, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return raw if base64.b64encode(raw).decode() == sig else None
+
+
 def holds(public: bytes, domain: str, body) -> bool:
     """Does ``body["sig"]`` hold for ``public`` under ``domain`` (FS1a: the queue's requests and
     proposals)? Never raises: a body or a signature that is not one, a key that is not one,
     cryptography absent — False."""
-    sig = body.get("sig") if isinstance(body, dict) else None
-    if not isinstance(sig, str) or not _SIG.match(sig):
+    raw = signature_bytes(body.get("sig") if isinstance(body, dict) else None)
+    if raw is None:
         return False
     try:
         from cryptography.exceptions import InvalidSignature
@@ -336,7 +351,7 @@ def holds(public: bytes, domain: str, body) -> bool:
     except ImportError:
         return False
     try:
-        Ed25519PublicKey.from_public_bytes(public).verify(base64.b64decode(sig), message(domain, body))
+        Ed25519PublicKey.from_public_bytes(public).verify(raw, message(domain, body))
     except (InvalidSignature, ValueError, TypeError, binascii.Error):
         return False
     return True
@@ -395,7 +410,7 @@ def verify_beat(body: dict, key: bytes) -> str:
     seq = body.get("seq")
     if not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
         return "its counter (seq) is not a number"
-    if not isinstance(sig, str) or not _SIG.match(sig):
+    if signature_bytes(sig) is None:
         return "its signature is not one (64 bytes in base64)"
     try:
         from cryptography.exceptions import InvalidSignature
@@ -427,7 +442,7 @@ def detection_refusal(body, key: bytes, *, run_id: str, signal_id: str) -> str:
     if body.get("key") != want:
         return (f"signed by another key ({_short(str(body.get('key') or 'none'))}) than the one "
                 f"pinned ({_short(want)}): another watch, or a key drawn again — pin the new one if it is yours")
-    if not isinstance(sig, str) or not _SIG.match(sig):
+    if signature_bytes(sig) is None:
         return "its signature is not one (64 bytes in base64)"
     try:
         from cryptography.exceptions import InvalidSignature

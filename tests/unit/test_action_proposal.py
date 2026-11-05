@@ -3,7 +3,7 @@ that holds an action — with its own key (SEC19), under eregion.action-queue/1 
 (§2.8, step 10). Nobody reads it yet to act (FS1b): the console and the bot keep their direct call.
 
 The keys come from fixed seeds, or are drawn in tmp (tests/unit/conftest.py): never a real key. A
-throwaway HOME, the store in tmp, no Azure, no network, no model. Mutants M3878–M3879
+throwaway HOME, the store in tmp, no Azure, no network, no model. Mutants M3878–M3879, M3945–M3954
 (scripts/mutants/FS1a.py) are measured here.
 """
 from __future__ import annotations
@@ -79,6 +79,27 @@ def test_the_proposal_binds_the_address_and_the_port(watch):
     assert aq.proposal_refusal(card, _request(card, "block_ip", ip=IP), watch_public=WATCH.public) is None
     assert aq.proposal_refusal(card, _request(card, "block_ip"), watch_public=WATCH.public) is None
     assert _refusal(card, _request(card, "block_ip", ip="198.51.100.1")) == "proposal_mismatch"
+    # The port the console's approval takes from the card (threat_port): changed on the card after
+    # the proposal, the request no longer runs (M3950).
+    req = _request(card, "block_ip", ip=IP)
+    for port in (3389, None, "22"):
+        changed = {**card, "action_params": {"ip": IP, "port": port}}
+        assert _refusal(changed, req) == "proposal_mismatch", port
+    assert aq.proposal_refusal({**card, "action_params": {"ip": IP, "port": 22}}, req,
+                               watch_public=WATCH.public) is None
+
+
+def test_a_proposal_without_a_port_refuses_a_card_that_gained_one(watch):
+    card = _card(_record(action="block_suspicious_ip", etype="mode_hold", ip=IP))
+    assert card["proposal"]["port"] is None
+    req = _request(card, "block_ip", ip=IP)
+    assert _refusal({**card, "action_params": {"ip": IP, "port": 22}}, req) == "proposal_mismatch"
+
+
+def test_a_request_bound_to_another_card_finds_no_card_waiting(watch):
+    """M3954: the card the watch reads is the one the request names, by its id."""
+    one, other = _card(_record()), _card(_record(action="snapshot"))
+    assert _refusal(other, _request(one, "isolate_vm")) == "card_not_pending"
 
 
 def test_a_card_verification_failed_proposes_its_reset_alone(watch):

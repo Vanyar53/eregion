@@ -485,6 +485,10 @@ class SeenFile:
         doc = json.loads(data.decode("utf-8"))
         if not isinstance(doc, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in doc.items()):
             raise ValueError(f"{self.path} is not a register of nonces")
+        for nonce, until in doc.items():
+            when = datetime.fromisoformat(until)
+            if when.tzinfo is None:          # compared with an aware time, it would raise TypeError
+                raise ValueError(f"{self.path}: {nonce[:40]!r} is kept until a time without its zone")
         return doc
 
     def claim(self, nonce: str, until: datetime, now: datetime) -> bool:
@@ -595,7 +599,8 @@ def proposal_refusal(card, request: Request, *, watch_public: bytes, consumed=fr
         raise Refused("proposal_mismatch", f"the card's proposal: {why}")
     if (proposal["card"] != card.get("id") or proposal["action"] != card.get("action")
             or str(proposal["resource_id"]).lower() != str(card.get("resource_id") or "").lower()
-            or proposal["escalation_type"] != card.get("escalation_type") or proposal["ip"] != _card_ip(card)):
+            or proposal["escalation_type"] != card.get("escalation_type") or proposal["ip"] != _card_ip(card)
+            or proposal["port"] != _card_port(card)):
         raise Refused("proposal_mismatch", "the card changed since the watch proposed it")
     if digest(proposal) != request.proposal:
         raise Refused("proposal_mismatch", "the request names another proposal than the card's")

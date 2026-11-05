@@ -73,3 +73,9 @@ output "glorfindel_config_fragment" {
         restore_staging_storage: ${azurerm_storage_account.restore_staging.name}
   YAML
 }
+
+# IDI1 (#546) : l'identité de test du banc, inscrite par les deux clés — `make orodruin-identity ID=<elle>`.
+output "entra_test_identity_object_id" {
+  value       = local.entra_test_identity_enabled ? azuread_application.bench_test[0].object_id : ""
+  description = "Object id de l'application de test du banc (entra_test_identity_enabled), vide sinon : ce que eregion-identities nomme sur le groupe du banc."
+}

@@ -28,6 +28,15 @@ Contrat (garanties, vérifications, kill, mutants) :
   Run Command passe par l'API de contrôle.
 - **Entrée** : SSH depuis ton IP seulement.
 - Pas de tag `eregion-target` : Orodruin n'est pas une cible.
+- **La lecture de Microsoft Graph** (IDI1, #546), désactivée par défaut : `graph_read_enabled = true`
+  donne à l'identité d'Orodruin les rôles d'application `Application.Read.All` et
+  `RoleManagement.Read.Directory` de Graph, et rien d'autre — la garde d'une identité d'Entra ID
+  (`eregion_core/inscription.py`) lit l'application, son principal, ses permissions et ses rôles
+  d'annuaire (une identité privilégiée n'est jamais inscrite). Le contrat relit son jeton Graph : un autre droit, ou un rôle d'annuaire, et il est
+  passif. L'apply demande un `az login` Administrateur des rôles privilégiés (ou général). Trois
+  sorties pour `orodruin.env` : `tenant_id`, `operator_object_id`, `protected_identities` (sans
+  l'opérateur, la garde refuse toute identité). Les gestes, dans l'ordre : `docs/operations.md`,
+  « L'identité de test du banc (IDI1) ». Test : `infra/orodruin/tests/graph_read.tftest.hcl`.
 - **Le canal des fenêtres d'exercice** : un conteneur `exercises` (compte `storodruin…`, sans clé
   partagée). Orodruin y écrit, le Glorfindel hébergé le lit (`watch_principal_id`, lu dans l'état
   de `infra/glorfindel-host` ; cet état illisible sur le poste, `orodruin-plan`, `-up` et `-lock`

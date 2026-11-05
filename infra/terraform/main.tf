@@ -9,6 +9,11 @@ terraform {
       source  = "Azure/azapi"
       version = "~> 2.0"
     }
+    # IDI1 : l'identité de test du banc dans Entra ID (entra_identity.tf), désactivée par défaut.
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
   }
   required_version = ">= 1.5"
 }
@@ -26,10 +31,17 @@ provider "azapi" {
   subscription_id = var.subscription_id != "" ? var.subscription_id : null
 }
 
+# Le az login de l'opérateur, sur son tenant courant (celui de l'abonnement du banc) : jamais un
+# principal. Ne sert qu'à entra_identity.tf.
+provider "azuread" {}
+
 # Baseline resource group — porte le nom canonique sur le workspace "default",
 # suffixé "-<instance>" sur tout autre workspace (stack éphémère).
+#
+# IDI1 : il nomme aussi l'identité de test du banc qu'il inscrit (eregion-identities,
+# entra_identity.tf) — la clé ARM de l'inscription d'une identité ; sans l'identité, rien de plus.
 resource "azurerm_resource_group" "celebrimbor" {
   name     = local.base_rg
   location = local.cfg.location
-  tags     = local.common_tags
+  tags     = merge(local.common_tags, local.identity_tags)
 }

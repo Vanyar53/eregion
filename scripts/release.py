@@ -21,7 +21,9 @@ the notes given or else the CHANGELOG's section. Refused: a tag or a release vX.
 and, with no way past it, the release gate (CI6, .github/workflows/release-gate.yml) not green on
 a commit whose tree is origin/main's — read by `gh api` (GET, the workflow's runs; and a pull
 request's run's base by every pull request of its head, closed ones too, and their events, CI6c), said with
-its commit, its state and its link.
+its commit, its state and its link. Green by its jobs, never by the run's conclusion (REL3, #569):
+its total « release gate » and every job that blocks green; a job that informs (macOS) red,
+cancelled or without a runner is said, never refusing.
 The draft is put on #agents' board, pinged (scripts/agents_discord.py), its line and its ping
 deleted when the release is published (notify.yml); and its card goes to #releases, with a
 button to it and its notes in short, never pinged nor deleted (REL2, notify_discord.release_ready).
@@ -70,6 +72,16 @@ GATE_AGAIN = f"relance-la sur main : gh workflow run {GATE} --ref main (30 à 60
 GATE_STATES = {"failure": "rouge", "cancelled": "annulée", "timed_out": "arrêtée à sa borne",
                "skipped": "sautée", "startup_failure": "jamais démarrée", "action_required": "en attente d'une approbation",
                "neutral": "neutre", "stale": "périmée"}
+# REL3 (#569): the gate is judged by its jobs, never by its run's conclusion — a job that informs
+# red, cancelled or never given a runner (macOS, the 0.5.6's) sets the run's conclusion to failure,
+# every job that blocks green. GATE_JOB, the total job's name; INFORMATIVE, the jobs that inform, by
+# their id and their name — release-gate.yml's own, read against it by tests/unit/test_release.py
+# (the total's `INFORMATIVE`, each job's `name:`). Every other job of the run blocks.
+GATE_JOB = "release gate"
+INFORMATIVE = {"macos": "tests (macOS, case-insensitive file system — informs, never blocks)"}
+JOB_STATES = {"success": "vert", "failure": "rouge", "cancelled": "annulé", "timed_out": "arrêté à sa borne",
+              "skipped": "sauté", "startup_failure": "jamais démarré", "action_required": "en attente d'une approbation",
+              "neutral": "neutre", "stale": "périmé"}
 SHA = re.compile(r"[0-9a-f]{40}")
 RUN_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/actions/runs/\d+")
 # CI6c (#541): a version's branch, checked before it goes into a path; one page of GitHub's lists,
@@ -614,10 +626,11 @@ def _into_main(root: Path, r: dict, read: dict) -> tuple[bool | None, str]:
 def gate(root: Path, sha: str) -> tuple[bool, str]:
     """(green, what to say): the gate's last run on a commit whose tree is the one of `sha`. The
     tree, not the commit: the version's pull request is squash-merged, its head is never main's
-    commit — but its tree is, when nothing else merged in between. That run must be complete and
-    green; one running, red, cancelled or skipped refuses. A pull request's run counts into main
-    only, read after the merge too (_into_main, CI6c); a read that fails refuses. Nothing lets a
-    draft past it."""
+    commit — but its tree is, when nothing else merged in between. That run must be complete, and
+    green by its jobs, never its conclusion (_jobs, REL3): one running, its total red, cancelled,
+    skipped or absent, or a job that blocks not green, refuses; a job that informs is said. A pull
+    request's run counts into main only, read after the merge too (_into_main, CI6c); a read that
+    fails refuses. Nothing lets a draft past it."""
     tree = git(root, "rev-parse", f"{sha}^{{tree}}")
     p = run(["gh", "api", "--method", "GET", "repos/{owner}/{repo}/actions/workflows/release-gate.yml/runs?per_page=100"],
             root, check=False)
@@ -658,10 +671,82 @@ def gate(root: Path, sha: str) -> tuple[bool, str]:
     if r.get("status") != "completed":
         return False, (f"la porte de release est en cours ({_plain(r.get('status'), 20)}), {_where(r)} : "
                        "attends-la, verte (30 à 60 minutes)")
-    if r.get("conclusion") != "success":
-        state = GATE_STATES.get(str(r.get("conclusion")), _plain(r.get("conclusion"), 20))
+    green, said = _jobs(root, r)
+    if not green:
+        return False, said
+    return True, f"la porte de release est verte sur l'arbre d'origin/main ({tree[:9]}), {_where(r)}{said}"
+
+
+def _attempt(job: dict) -> tuple[int, int]:
+    """A job's attempt, then its id: of two jobs of the same name, the later one stands."""
+    a, i = job.get("run_attempt"), job.get("id")
+    return (a if isinstance(a, int) and not isinstance(a, bool) else 0,
+            i if isinstance(i, int) and not isinstance(i, bool) else 0)
+
+
+def _job_state(job: dict) -> str:
+    if job.get("status") != "completed":
+        return f"en cours ({_plain(job.get('status'), 20)})"
+    return JOB_STATES.get(str(job.get("conclusion")), _plain(job.get("conclusion"), 20))
+
+
+def _jobs(root: Path, r: dict) -> tuple[bool, str]:
+    """(green, what to say) of a completed run of the gate, by its jobs — never by its conclusion
+    (REL3, #569: the 0.5.6's macOS, cancelled for want of a runner, set it to failure, every job
+    that blocks green). Read by one GET of the run's jobs, its last attempt's (filter=latest; and
+    of two jobs of the same name, the later attempt stands: a job re-run). Its total, GATE_JOB,
+    present, completed and green; every job that blocks — all but INFORMATIVE's — green: a
+    cancelled or a skipped one is red, as the total holds them. A job that informs, whatever it
+    is, is said, never blocking. A page of PAGE jobs or more, or fewer than GitHub counts, refuses."""
+    n = r.get("id")
+    if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+        return False, f"les jobs de la porte de release ne se lisent pas, {_where(r)} : un run sans numéro"
+    run_id = str(n)
+    p = run(["gh", "api", "--method", "GET", "repos/{owner}/{repo}/actions/runs/" + run_id + "/jobs?filter=latest&per_page=100"],
+            root, check=False)
+    if p.returncode != 0:
+        return False, (f"les jobs de la porte de release ne se lisent pas, {_where(r)} (gh api, code {p.returncode} : "
+                       f"{_plain(p.stderr or p.stdout, 200)}) — l'App les lit par son droit Actions en lecture")
+    try:
+        doc = json.loads(p.stdout or "")
+    except ValueError:
+        doc = None
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    if not isinstance(jobs, list) or not all(isinstance(j, dict) for j in jobs):
+        return False, (f"les jobs de la porte de release ne se lisent pas, {_where(r)} : la réponse de gh api n'est "
+                       "pas une liste de jobs")
+    total = doc.get("total_count")
+    if len(jobs) >= PAGE or (isinstance(total, int) and not isinstance(total, bool) and total > len(jobs)):
+        return False, (f"les jobs de la porte de release ne se lisent pas, {_where(r)} : la page lue ne les montre "
+                       "pas tous")
+    last: dict[str, dict] = {}
+    for job in jobs:
+        name = job.get("name")
+        if not isinstance(name, str) or not name:
+            return False, f"les jobs de la porte de release ne se lisent pas, {_where(r)} : un job sans nom"
+        if name not in last or _attempt(job) >= _attempt(last[name]):
+            last[name] = job
+    total_job = last.get(GATE_JOB)
+    if total_job is None:
+        return False, (f"la porte de release n'a pas de job « {GATE_JOB} », {_where(r)} : lis-la ; corrigée, "
+                       f"{GATE_AGAIN}")
+    if total_job.get("status") != "completed":
+        return False, (f"la porte de release est en cours (son job « {GATE_JOB} » : "
+                       f"{_plain(total_job.get('status'), 20)}), {_where(r)} : attends-la, verte (30 à 60 minutes)")
+    if total_job.get("conclusion") != "success":
+        state = GATE_STATES.get(str(total_job.get("conclusion")), _plain(total_job.get("conclusion"), 20))
         return False, f"la porte de release est {state}, {_where(r)} : lis-la ; corrigée, {GATE_AGAIN}"
-    return True, f"la porte de release est verte sur l'arbre d'origin/main ({tree[:9]}), {_where(r)}"
+    informative = set(INFORMATIVE.values())
+    red = [(name, job) for name, job in sorted(last.items()) if name not in informative and name != GATE_JOB
+           and (job.get("status") != "completed" or job.get("conclusion") != "success")]
+    if red:
+        name, job = red[0]
+        more = f" (et {len(red) - 1} autre{'s' if len(red) > 2 else ''})" if len(red) > 1 else ""
+        return False, (f"la porte de release a un job qui bloque {_job_state(job)}, « {_plain(name, 80)} »{more}, "
+                       f"{_where(r)} : lis-la ; corrigée, {GATE_AGAIN}")
+    said = [f"« {name} » " + (_job_state(last[name]) if name in last else "absent") for name in sorted(informative)
+            if name not in last or last[name].get("status") != "completed" or last[name].get("conclusion") != "success"]
+    return True, (f" ; informe sans bloquer : {', '.join(said)}" if said else "")
 
 
 def _where(r: dict) -> str:

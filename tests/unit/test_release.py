@@ -7,6 +7,7 @@ no remote branch but the throwaway origin's.
 """
 import ast
 import importlib.util
+import itertools
 import json
 import os
 import re
@@ -101,6 +102,15 @@ elif args[:2] == ["api", "--method"] and args[2] == "GET" and ("/pulls?head=" in
     if which == "pulls" and "&state=all" not in args[3]:   # GitHub's default: the open ones only
         listed = [pr for pr in listed if pr.get("state") == "open"]
     out = data["raw_" + which] if "raw_" + which in data else json.dumps(listed)
+elif args[:2] == ["api", "--method"] and args[2] == "GET" and "/actions/runs/" in args[3] and "/jobs?" in args[3]:
+    # REL3: a run's jobs, as GitHub lists them. What filter=latest gives after a job re-run is not
+    # measured here: the fake gives every attempt's it is told, the later must stand.
+    if os.environ.get("FAKE_GH_FAIL_JOBS"):
+        state.write_text(json.dumps(data))
+        print("HTTP 403: Resource not accessible by integration", file=sys.stderr)
+        sys.exit(1)
+    listed = data.get("jobs", {}).get(args[3].split("/actions/runs/", 1)[1].split("/", 1)[0], [])
+    out = data["raw_jobs"] if "raw_jobs" in data else json.dumps({"total_count": len(listed), "jobs": listed})
 elif args[:2] == ["api", "--method"] and args[2] == "GET":
     # CI6: the release gate's runs, as GitHub lists a workflow's runs (most recent first).
     runs = data.get("runs", [])
@@ -173,21 +183,63 @@ def files(work):
     return {n: (work / n).read_text(encoding="utf-8") for n in ("CHANGELOG.md", "README.md", "pyproject.toml")}
 
 
+def _workflow_jobs() -> list[str]:
+    """The names of release-gate.yml's jobs, each matrix's expanded, as GitHub names them: the jobs
+    the fake GitHub gives, read from the workflow itself (REL3)."""
+    import yaml
+    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "release-gate.yml").read_text(encoding="utf-8"))
+    names = []
+    for job in doc["jobs"].values():
+        matrix = (job.get("strategy") or {}).get("matrix") or {}
+        if not matrix:
+            names.append(job["name"])
+            continue
+        ((key, values),) = matrix.items()
+        names += [re.sub(r"\$\{\{\s*matrix\." + key + r"\s*\}\}", str(v), job["name"]) for v in values]
+    return names
+
+
+WORKFLOW_JOBS = _workflow_jobs()
+MACOS_JOB = rel.INFORMATIVE["macos"]
+SHARD_JOB = "mutants (shard 3/14)"
+_JOB_IDS = itertools.count(5000)
+
+
+def job(name, conclusion="success", *, status="completed", attempt=1, job_id=None):
+    """A job of a run, as GET …/actions/runs/{id}/jobs gives it."""
+    return {"id": job_id or next(_JOB_IDS), "name": name, "status": status,
+            "conclusion": conclusion if status == "completed" else None, "run_attempt": attempt}
+
+
+def jobs_of(total="success", *, status="completed", **conclusions):
+    """Every job of the workflow green but those given by name ({name: conclusion, or None: absent}),
+    its total « release gate » `total` (None: absent)."""
+    out = []
+    for name in WORKFLOW_JOBS:
+        c = total if name == rel.GATE_JOB else conclusions.get(name, "success")
+        if c is not None:
+            out.append(job(name, c, status=status if name == rel.GATE_JOB else "completed"))
+    return out
+
+
 def gate_run(work, ref="origin/main", *, conclusion="success", status="completed", event="pull_request",
              branch="chore/release-0.4.4", head_repo="o/r", run_id=41, created="2026-11-04T10:00:00Z",
-             started=None, base="main"):
+             started=None, base="main", jobs=None, run_conclusion=None):
     """A run of release-gate.yml, as GitHub lists it, on `ref`'s commit and tree (CI6): a pull
-    request's names its pull request, its base `base`; `started` is its last attempt's start."""
+    request's names its pull request, its base `base`; `started` is its last attempt's start. Its
+    jobs (REL3): `jobs`, or every job of the workflow green and its total `conclusion`; the run's
+    own conclusion `run_conclusion`, else `conclusion` — release-draft never reads it."""
     sha = git(work, "rev-parse", f"{ref}^{{commit}}")
     prs = ([{"number": 300, "head": {"ref": branch, "sha": sha}, "base": {"ref": base}}]
            if event == "pull_request" and base is not None else [])
     return {"id": run_id, "event": event, "status": status,
-            "conclusion": conclusion if status == "completed" else None,
+            "conclusion": (run_conclusion or conclusion) if status == "completed" else None,
             "head_sha": sha, "head_branch": branch, "created_at": created,
-            "run_started_at": started or created, "pull_requests": prs,
+            "run_started_at": started or created, "pull_requests": prs, "run_attempt": 1,
             "html_url": f"https://github.com/o/r/actions/runs/{run_id}",
             "head_commit": {"id": sha, "tree_id": git(work, "rev-parse", f"{ref}^{{tree}}")},
-            "repository": {"full_name": "o/r"}, "head_repository": {"full_name": head_repo}}
+            "repository": {"full_name": "o/r"}, "head_repository": {"full_name": head_repo},
+            "_jobs": jobs if jobs is not None else jobs_of(conclusion, status=status)}
 
 
 def set_gate(*runs, merged=True, pulls=None, events=None):
@@ -199,6 +251,7 @@ def set_gate(*runs, merged=True, pulls=None, events=None):
     state = Path(os.environ["FAKE_GH_STATE"])
     data = json.loads(state.read_text()) if state.exists() else {"releases": [], "calls": []}
     runs = [dict(r) for r in runs]
+    data["jobs"] = {str(r["id"]): r.pop("_jobs", []) for r in runs}
     found: dict = {}
     for r in runs:
         for pr in r["pull_requests"]:
@@ -662,7 +715,8 @@ def test_without_a_gate_the_draft_is_refused_and_says_how_to_run_it(repo, tmp_pa
     ("startup_failure", "jamais démarrée"), ("neutral", "neutre"), ("action_required", "en attente d'une approbation"),
 ])
 def test_a_gate_that_is_not_green_refuses_with_its_state_and_its_link(repo, tmp_path, capsys, conclusion, said):
-    """Cancelled or skipped is not green: only `success` passes."""
+    """Cancelled or skipped is not green: only `success` passes — the total job's (REL3), the run's
+    conclusion the same here."""
     assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
     merge_release(repo, gate=False)
     set_gate(gate_run(repo, conclusion=conclusion, run_id=9))
@@ -1121,13 +1175,165 @@ def test_the_dry_run_shows_the_gate_green_and_refuses_it_red(repo, tmp_path, cap
 
 def test_the_gate_is_read_by_one_get_of_the_workflow_s_runs(repo, tmp_path, capsys):
     """Then, its run a pull request's (CI6c), one GET of its head's pull requests, one of each one's
-    events."""
+    events; then one of the run's jobs, its last attempt's (REL3)."""
     prepared(repo, capsys)
     assert rel.main(["release-draft", "0.4.4"]) == 0
-    runs, pulls, events = [c["args"] for c in gh_calls(tmp_path) if c["args"][0] == "api"]
+    runs, pulls, events, jobs = [c["args"] for c in gh_calls(tmp_path) if c["args"][0] == "api"]
     assert runs == ["api", "--method", "GET", "repos/{owner}/{repo}/actions/workflows/release-gate.yml/runs?per_page=100"]
     assert pulls == ["api", "--method", "GET", HEAD_READ]
     assert events == ["api", "--method", "GET", "repos/{owner}/{repo}/issues/300/events?per_page=100"]
+    assert jobs == ["api", "--method", "GET", JOBS_READ]
+
+
+
+# ── REL3 (#569): the gate judged by its jobs, never by its run's conclusion ─────────────────────
+# Found at the 0.5.6 (05/11): macOS cancelled for want of a runner set the run to failure, the total
+# « release gate » and every job that blocks green — and the draft was refused.
+
+def _gate_with(repo, capsys, jobs, *, run_conclusion="failure"):
+    """The version merged, its gate's run given `jobs`; the run's conclusion as GitHub would set it
+    — never read."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, jobs=jobs, run_conclusion=run_conclusion))
+    capsys.readouterr()
+
+
+def test_the_jobs_that_inform_and_the_total_are_the_workflow_s():
+    """One source: release.py's INFORMATIVE is the total's own (its step's INFORMATIVE, by id), each
+    named as the workflow names it; GATE_JOB is the total's name; the total needs every other job,
+    and a job that informs, and only one, has continue-on-error. Every job that is neither blocks."""
+    import yaml
+    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "release-gate.yml").read_text(encoding="utf-8"))
+    jobs = doc["jobs"]
+    (total_id,) = [k for k, v in jobs.items() if v["name"] == rel.GATE_JOB]
+    (step,) = [s for s in jobs[total_id]["steps"] if "INFORMATIVE" in (s.get("env") or {})]
+    assert set(step["env"]["INFORMATIVE"].split()) == set(rel.INFORMATIVE)
+    assert {k: jobs[k]["name"] for k in rel.INFORMATIVE} == rel.INFORMATIVE
+    assert sorted(jobs[total_id]["needs"]) == sorted(k for k in jobs if k != total_id)
+    assert [k for k, v in jobs.items() if v.get("continue-on-error") is True] == list(rel.INFORMATIVE)
+    assert MACOS_JOB in WORKFLOW_JOBS and SHARD_JOB in WORKFLOW_JOBS and rel.GATE_JOB in WORKFLOW_JOBS
+
+
+@pytest.mark.parametrize("macos, said", [
+    ("cancelled", "annulé"), ("failure", "rouge"), ("timed_out", "arrêté à sa borne"), ("skipped", "sauté"),
+    (None, "absent"),
+])
+def test_a_job_that_informs_red_cancelled_or_absent_never_holds_the_draft(repo, tmp_path, capsys, macos, said):
+    """The 0.5.6: macOS cancelled for want of a runner, the run's conclusion failure, the total and
+    every job that blocks green — the draft is made, macOS said."""
+    _gate_with(repo, capsys, jobs_of(**{MACOS_JOB: macos}))
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    out = capsys.readouterr().out
+    (line,) = [x for x in out.splitlines() if x.startswith("  ✓ la porte de release est verte")]
+    assert line.endswith(f"(https://github.com/o/r/actions/runs/41) ; informe sans bloquer : « {MACOS_JOB} » {said}")
+    assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "create"]]
+
+
+def test_every_job_green_says_nothing_more_whatever_the_run_s_conclusion(repo, tmp_path, capsys):
+    _gate_with(repo, capsys, jobs_of(), run_conclusion="failure")
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    (line,) = [x for x in capsys.readouterr().out.splitlines() if x.startswith("  ✓ la porte de release")]
+    assert line.endswith("(https://github.com/o/r/actions/runs/41)")
+
+
+@pytest.mark.parametrize("name", [SHARD_JOB, "tests, 2 000 invariant sequences (Linux)", "control set (shard 2/2)",
+                                  "mutants (every shard, the count)", "terraform test (release gate)"])
+@pytest.mark.parametrize("conclusion, said", [
+    ("failure", "rouge"), ("cancelled", "annulé"), ("skipped", "sauté"), ("timed_out", "arrêté à sa borne"),
+])
+def test_a_job_that_blocks_not_green_refuses_its_total_green_or_not(repo, tmp_path, capsys, name, conclusion, said):
+    """A shard red refuses — even beside a total green, and a run's conclusion success: each job
+    that blocks is read, not only the total that holds them."""
+    _gate_with(repo, capsys, jobs_of(**{name: conclusion}), run_conclusion="success")
+    _gate_refuses(capsys, tmp_path, f"la porte de release a un job qui bloque {said}, « {name} », sur ",
+                  f"(https://github.com/o/r/actions/runs/41) : lis-la ; corrigée, {AGAIN}")
+
+
+def test_a_job_that_blocks_still_running_refuses(repo, tmp_path, capsys):
+    _gate_with(repo, capsys, [j for j in jobs_of() if j["name"] != SHARD_JOB] + [job(SHARD_JOB, status="queued")])
+    _gate_refuses(capsys, tmp_path, f"la porte de release a un job qui bloque en cours (queued), « {SHARD_JOB} »")
+
+
+def test_two_jobs_that_block_red_the_first_said_the_other_counted(repo, tmp_path, capsys):
+    """A name GitHub gives is said as text only."""
+    _gate_with(repo, capsys, jobs_of(**{SHARD_JOB: "failure"}) + [job("x\x1b[2J", "cancelled")])
+    line = _gate_refuses(capsys, tmp_path, f"un job qui bloque rouge, « {SHARD_JOB} » (et 1 autre), sur ")
+    assert "\x1b" not in line
+
+
+def test_the_total_absent_refuses(repo, tmp_path, capsys):
+    """Every other job green, the run's conclusion success, no « release gate »: refused."""
+    _gate_with(repo, capsys, jobs_of(total=None), run_conclusion="success")
+    _gate_refuses(capsys, tmp_path, "la porte de release n'a pas de job « release gate », sur ",
+                  f"(https://github.com/o/r/actions/runs/41) : lis-la ; corrigée, {AGAIN}")
+
+
+@pytest.mark.parametrize("total, said", [
+    ("failure", "rouge"), ("cancelled", "annulée"), ("skipped", "sautée"), ("timed_out", "arrêtée à sa borne"),
+    ("neutral", "neutre"),
+])
+def test_the_total_not_green_refuses_every_other_job_green(repo, tmp_path, capsys, total, said):
+    """The total red, every job it holds green, the run's conclusion success: the total decides."""
+    _gate_with(repo, capsys, jobs_of(total=total), run_conclusion="success")
+    _gate_refuses(capsys, tmp_path, f"la porte de release est {said}, sur ",
+                  f"(https://github.com/o/r/actions/runs/41) : lis-la ; corrigée, {AGAIN}")
+
+
+def test_the_total_still_running_refuses(repo, tmp_path, capsys):
+    _gate_with(repo, capsys, jobs_of(status="in_progress"))
+    _gate_refuses(capsys, tmp_path, "la porte de release est en cours (son job « release gate » : in_progress), sur ",
+                  "attends-la, verte (30 à 60 minutes)")
+
+
+@pytest.mark.parametrize("newer_first", [False, True])
+@pytest.mark.parametrize("first, again, passes", [
+    ("failure", "success", True),        # a shard red, re-run green (« Re-run failed jobs »): the total green again
+    ("success", "failure", False),       # green, then re-run and red
+])
+def test_a_job_re_run_its_last_attempt_stands(repo, tmp_path, capsys, newer_first, first, again, passes):
+    """A run re-run: of two jobs of the same name, the later attempt's stands — in whatever order
+    GitHub lists them."""
+    older = jobs_of(total=first, **{SHARD_JOB: first})
+    newer = [job(rel.GATE_JOB, again, attempt=2), job(SHARD_JOB, again, attempt=2)]
+    _gate_with(repo, capsys, newer + older if newer_first else older + newer, run_conclusion=first)
+    if passes:
+        assert rel.main(["release-draft", "0.4.4"]) == 0
+        assert "  ✓ la porte de release est verte" in capsys.readouterr().out
+    else:
+        _gate_refuses(capsys, tmp_path, "la porte de release est rouge, sur ")
+
+
+@pytest.mark.parametrize("setup, said", [
+    ({"env": "FAKE_GH_FAIL_JOBS"}, "(gh api, code 1 : HTTP 403: Resource not accessible by integration) — l'App les "
+                                   "lit par son droit Actions en lecture"),
+    ({"raw_jobs": "not json"}, "la réponse de gh api n'est pas une liste de jobs"),
+    ({"raw_jobs": "[]"}, "la réponse de gh api n'est pas une liste de jobs"),
+    ({"raw_jobs": '{"jobs": 3}'}, "la réponse de gh api n'est pas une liste de jobs"),
+    ({"raw_jobs": '{"jobs": ["x"]}'}, "la réponse de gh api n'est pas une liste de jobs"),
+    ({"raw_jobs": json.dumps({"total_count": 30, "jobs": [job(rel.GATE_JOB)]})}, "la page lue ne les montre pas tous"),
+    ({"raw_jobs": json.dumps({"total_count": 100, "jobs": [job(f"j{i}") for i in range(99)] + [job(rel.GATE_JOB)]})},
+     "la page lue ne les montre pas tous"),
+    ({"raw_jobs": json.dumps({"jobs": [job(rel.GATE_JOB), {"status": "completed", "conclusion": "success"}]})},
+     "un job sans nom"),
+    ({"run_id": True}, "un run sans numéro"),
+    ({"run_id": 0}, "un run sans numéro"),
+])
+def test_jobs_that_cannot_be_read_refuse(repo, tmp_path, capsys, monkeypatch, setup, said):
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, run_id=setup.get("run_id", 41)))
+    if "env" in setup:
+        monkeypatch.setenv(setup["env"], "1")
+    if "raw_jobs" in setup:
+        _set_answer(tmp_path, "raw_jobs", setup["raw_jobs"])
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "les jobs de la porte de release ne se lisent pas, sur ", said)
+
+
+def test_99_jobs_still_read(repo, tmp_path, capsys):
+    _gate_with(repo, capsys, jobs_of() + [job(f"j{i}") for i in range(99 - len(WORKFLOW_JOBS))])
+    assert rel.main(["release-draft", "0.4.4"]) == 0
 
 
 @pytest.mark.parametrize("extra", [["--force"], ["--no-gate"], ["--skip-gate"], ["--yes"]])
@@ -1193,7 +1399,10 @@ GATE_READ = ["gh", "api", "--method", "GET", "repos/{owner}/{repo}/actions/workf
 # around one name alone: the head's pull requests, closed ones too (release.py checks `branch` with
 # VERSION_BRANCH before), and a pull request's events (`number`, from an int it checked).
 GATE_PATHS = {"heads": ("repos/{owner}/{repo}/pulls?head={owner}:", "branch", "&state=all&per_page=100"),
-              "events": ("repos/{owner}/{repo}/issues/", "number", "/events?per_page=100")}
+              "events": ("repos/{owner}/{repo}/issues/", "number", "/events?per_page=100"),
+              # REL3: a run's jobs (`run_id`, from an int it checked), its last attempt's.
+              "jobs": ("repos/{owner}/{repo}/actions/runs/", "run_id", "/jobs?filter=latest&per_page=100")}
+JOBS_READ = "repos/{owner}/{repo}/actions/runs/41/jobs?filter=latest&per_page=100"
 
 
 def _gate_read(n) -> str | None:
@@ -1407,9 +1616,10 @@ def test_no_path_publishes_in_the_code():
     heads = sorted(tuple(_const(e) for e in n.elts[1:3]) for n in _gh_lists(ast.parse(code["release.py"])))
     assert heads == sorted([("pr", "create")] * 2 + [("release", "list"), ("release", "create"), ("release", "create"),
                                                       ("release", "edit")]
-                           + [("api", "--method")] * 3)   # each command shown and run; the gate's three reads
+                           + [("api", "--method")] * 4)   # each command shown and run; the gate's four reads
     apis = [n for n in _gh_lists(ast.parse(code["release.py"])) if tuple(_const(e) for e in n.elts[1:3]) == ("api", "--method")]
-    assert sorted(str(_gate_read(n)) for n in apis) == ["None", "events", "heads"]   # the runs' (CI6), the others (CI6c)
+    # the runs' (CI6), a pull request's base (CI6c), the run's jobs (REL3)
+    assert sorted(str(_gate_read(n)) for n in apis) == ["None", "events", "heads", "jobs"]
     for name, text in code.items():
         assert publishes_words(text) == [], name
     for name in ("release.py", "agents_discord.py", "notify_discord.py"):
@@ -1501,8 +1711,10 @@ def test_the_allow_list_sees_a_path_that_would_publish(snippet):
     assert publishes(snippet), snippet
 
 
-def test_the_allow_list_lets_the_gate_s_three_reads_through():
+def test_the_allow_list_lets_the_gate_s_four_reads_through():
     for snippet in (str(GATE_READ),
+                    '["gh", "api", "--method", "GET", "repos/{owner}/{repo}/actions/runs/" + run_id'
+                    ' + "/jobs?filter=latest&per_page=100"]',
                     '["gh", "api", "--method", "GET", "repos/{owner}/{repo}/pulls?head={owner}:" + branch'
                     ' + "&state=all&per_page=100"]',
                     '["gh", "api", "--method", "GET", "repos/{owner}/{repo}/issues/" + number + "/events?per_page=100"]'):
@@ -1544,12 +1756,13 @@ def test_no_call_publishes(repo, tmp_path, capsys, monkeypatch):
         f.close()
     calls = [c["args"] for c in gh_calls(tmp_path)]
     assert [c[:2] for c in calls] == [["pr", "create"], ["release", "list"], ["api", "--method"],
-                                      ["api", "--method"], ["api", "--method"], ["release", "create"],
-                                      ["release", "edit"]]
+                                      ["api", "--method"], ["api", "--method"], ["api", "--method"],
+                                      ["release", "create"], ["release", "edit"]]
     assert calls[2] == GATE_READ[1:]                                    # a GET, the gate's runs
     assert calls[3] == ["api", "--method", "GET", HEAD_READ]           # a GET, its head's pulls (CI6c)
     assert calls[4] == ["api", "--method", "GET", "repos/{owner}/{repo}/issues/300/events?per_page=100"]
-    create, edit = calls[5], calls[6]
+    assert calls[5] == ["api", "--method", "GET", JOBS_READ]           # a GET, the run's jobs (REL3)
+    create, edit = calls[6], calls[7]
     assert [a for a in create if "draft" in a.lower()] == ["--draft"]
     assert create[create.index("--draft") + 1].startswith("--")
     assert edit[:4] == ["release", "edit", "v0.4.4", "--notes-file"] and len(edit) == 5
@@ -1764,8 +1977,8 @@ def test_the_link_posted_never_moves_when_github_moves_the_draft_s(repo, tmp_pat
     given = [c for c in gh_calls(tmp_path) if c["args"][:2] in (["release", "create"], ["release", "edit"])]
     assert len(given) == 2
     urls = {r["url"] for r in gh_releases(tmp_path)}
-    first = "https://github.com/o/r/releases/tag/untagged-0006c"       # after the gate's three reads (CI6, CI6c)
-    assert urls == {"https://github.com/o/r/releases/tag/untagged-0007e"} and first not in urls   # moved
+    first = "https://github.com/o/r/releases/tag/untagged-0007c"       # after the gate's four reads (CI6, CI6c, REL3)
+    assert urls == {"https://github.com/o/r/releases/tag/untagged-0008e"} and first not in urls   # moved
     sent = json.dumps([r["body"] for r in releases.requests if r["method"] in ("POST", "PATCH")])
     assert "untagged-" not in sent                                    # neither the first URL nor the last
     (ping,) = [b for b in releases.webhook_posts(AGENTS_TOKEN) if b.get("content")]

@@ -1106,8 +1106,10 @@ TF_RUNS = {
         "terraform -chdir=infra/glorfindel-host validate -no-color\n"
         "terraform -chdir=infra/glorfindel-host test -no-color\n",
     "Terraform init — Orodruin (the locked providers, retried)": _TF_INIT.format("orodruin"),
+    # CI7 (#554): the watch channel's writers (WC1) and Microsoft Graph's reads (IDI1).
     "Terraform validate — Orodruin":
-        "terraform -chdir=infra/orodruin validate -no-color\n",
+        "terraform -chdir=infra/orodruin validate -no-color\n"
+        "terraform -chdir=infra/orodruin test -no-color\n",
 }
 
 
@@ -1129,26 +1131,30 @@ def test_the_terraform_tests_run_on_each_push_and_pull_request():
     (checkout,) = [s for s in steps if str(s.get("uses") or "").startswith("actions/checkout@")]
     assert checkout["with"]["persist-credentials"] is False
     assert job["env"]["CHECKPOINT_DISABLE"] == "1"
-    # Every module with Terraform tests has them run here: Celebrimbor's, and Glorfindel's host
-    # since SEC11 — each named in a step that runs its `test`. Orodruin's since WC1, once its step
-    # is in the workflow (TF_AWAITING_STEP): until then its `validate` still runs.
+    # Every module with Terraform tests has them run here: Celebrimbor's, Glorfindel's host since
+    # SEC11, Orodruin's since CI7 (#554) — each in a step that runs its `test`, after the retried
+    # step of its `init` (CI8).
     tested = {p.parent.parent.name for p in ROOT.glob("infra/*/tests/*.tftest.hcl")}
     assert tested == {"terraform", "glorfindel-host", "orodruin"}
     for module in tested:
-        runs_it = any(f"terraform -chdir=infra/{module} test -no-color" in str(s.get("run") or "") for s in steps)
+        runs = [i for i, s in enumerate(steps)
+                if f"terraform -chdir=infra/{module} test -no-color" in str(s.get("run") or "")]
+        inits = [i for i, s in enumerate(steps)
+                 if f"terraform -chdir=infra/{module} init " in str(s.get("run") or "")]
         # Awaiting, it is not run yet; run, it is awaiting no more — the list empties itself.
-        assert runs_it is (module not in TF_AWAITING_STEP), module
+        assert bool(runs) is (module not in TF_AWAITING_STEP), module
+        if runs:
+            assert len(runs) == len(inits) == 1 and inits[0] < runs[0], (module, inits, runs)
     for module in TF_AWAITING_STEP:
         assert any(f"terraform -chdir=infra/{module} validate -no-color" in str(s.get("run") or "")
                    for s in steps), module
 
 
-# A module whose tests wait for their step in ci.yml: a session never writes under .github/ (the
-# agents' App has no Workflows permission, SEC12) — Jonathan adds the step, then empties this. WC1
-# (#523): `terraform -chdir=infra/orodruin test -no-color` after its `validate`, in « Terraform
-# validate — Orodruin » (and TF_RUNS above).
-TF_AWAITING_STEP = {"orodruin": "WC1 (#523): infra/orodruin/tests/watch_writers.tftest.hcl; "
-                                "IDI1 (#546): infra/orodruin/tests/graph_read.tftest.hcl"}
+# A module whose tests wait for their step in ci.yml (Jonathan pushes what touches .github/: the
+# agents' App has no Workflows permission, SEC12). Empty since CI7 (#554): Orodruin's tests
+# (WC1 watch_writers, IDI1 graph_read) run in « Terraform validate — Orodruin ». A module that
+# gains tests before its step is listed here, with its reason, and the test above holds it.
+TF_AWAITING_STEP: dict[str, str] = {}
 
 
 def test_every_terraform_test_only_plans():

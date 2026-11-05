@@ -326,6 +326,7 @@ jobs:
       - name: Terraform validate — Orodruin
         run: |
           terraform -chdir=infra/orodruin validate -no-color
+          terraform -chdir=infra/orodruin test -no-color
 
   # Green only when every job that blocks is: `always()`, so it runs and says so when one failed,
   # was cancelled (its bound, a runner never acquired) or skipped — each of those is red here.

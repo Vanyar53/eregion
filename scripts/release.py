@@ -555,8 +555,9 @@ def _into_main(root: Path, r: dict, read: dict) -> tuple[bool | None, str]:
     repository, one of them has the run's commit for head, and none ever changed its base
     (GET repos/{owner}/{repo}/issues/{n}/events: a `base_ref_changed`, measured on #353 — a version's
     pull request keeps the base it was opened on). Any the run still names, into main too.
-    (True, ""): the gate. (False, why): not the gate, passed over. (None, why): unreadable, or a base
-    changed — the draft refused for it. `read` keeps each answer: one read per head, per pull request."""
+    (True, ""): the gate. (False, why): not the gate, passed over — no pull request with its commit,
+    or all of them elsewhere. (None, why): unreadable, ambiguous (one into main, another elsewhere),
+    or a base changed — the draft refused for it, an older run never deciding in its place. `read` keeps each answer: one read per head, per pull request."""
     sha, repo, branch = str(r.get("head_sha") or ""), _obj(r.get("repository")).get("full_name"), r.get("head_branch")
     if not SHA.fullmatch(sha):
         return None, f"la PR de la porte de release ne se lit pas, {_where(r)} : son commit est illisible"
@@ -582,6 +583,11 @@ def _into_main(root: Path, r: dict, read: dict) -> tuple[bool | None, str]:
     if not bases or any(b != "main" for b in bases):
         other = next((b for b in bases if b != "main"), None)
         other = _plain(other, 60) if isinstance(other, str) and other else "la branche d'un autre dépôt"
+        # One into main beside one elsewhere, or the run and its head's pulls disagreeing: which one
+        # the run ran for, nothing says — refused, never passed over for an older run (review of CI6c).
+        if "main" in bases:
+            return None, (f"la porte de release est ambiguë, {_where(r)} : {branch} a une PR vers main et une "
+                          f"vers {other} ; {GATE_AGAIN}")
         return False, f"la dernière, {_where(r)}, a une PR de {branch} vers {other}, pas vers main"
     for pr in prs:
         n = pr.get("number")
@@ -595,7 +601,10 @@ def _into_main(root: Path, r: dict, read: dict) -> tuple[bool | None, str]:
         events, why = _listed(read["events", number], "événements")
         if events is None:
             return None, f"l'historique de la PR #{number} de la porte de release ne se lit pas, {_where(r)} : {why}"
-        changed = [str(e.get("event")) for e in events if e.get("event") in BASE_CHANGES]
+        if not all(isinstance(e.get("event"), str) for e in events):
+            return None, (f"l'historique de la PR #{number} de la porte de release ne se lit pas, {_where(r)} : "
+                          "un événement sans nom")
+        changed = [e["event"] for e in events if isinstance(e.get("event"), str) and e.get("event") in BASE_CHANGES]
         if changed:
             return None, (f"la base de la PR #{number} de la porte de release a changé ({changed[0]}), {_where(r)} : "
                           "une PR de version garde la base main où elle a été ouverte ; refusé")

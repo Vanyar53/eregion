@@ -813,7 +813,7 @@ def test_a_pr_closed_unmerged_into_another_branch_from_the_same_head_refuses(rep
     """The review of CI6c (05/11): a commit's pulls leave out a pull request closed unmerged (#385's
     head gives `[]`). #A, from the version's head into develop (its release-gate.yml changed there),
     closed; #B, the same head into main, merged. Which one the run ran for, nothing says: the head's
-    pulls, closed ones included, hold #A — never the gate. Its head on the run's commit, or not."""
+    pulls, closed ones included, hold #A — ambiguous, refused. Its head on the run's commit, or not."""
     assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
     merge_release(repo, gate=False)
     sha = git(repo, "rev-parse", "origin/main")
@@ -822,8 +822,28 @@ def test_a_pr_closed_unmerged_into_another_branch_from_the_same_head_refuses(rep
     set_gate(gate_run(repo, run_id=7, created="2026-11-04T12:00:00Z", started="2026-11-04T13:00:00Z"),
              pulls={BRANCH: [pull(BRANCH, sha=sha, number=300), a]})
     capsys.readouterr()
-    _gate_refuses(capsys, tmp_path, "aucune porte de release sur l'arbre d'origin/main",
-                  f"a une PR de {BRANCH} vers develop, pas vers main")
+    _gate_refuses(capsys, tmp_path, f"la porte de release est ambiguë, sur {sha[:9]} "
+                                    f"(https://github.com/o/r/actions/runs/7) : {BRANCH} a une PR vers main et une "
+                                    f"vers develop ; {AGAIN}")
+
+
+def test_an_ambiguous_run_is_never_passed_over_for_an_older_green_one(repo, tmp_path, capsys):
+    """The second review of CI6c: the version's pull request's run red, a sister pull request of its
+    head into develop, an older dispatch green on the tree. Which pull request the red run ran for,
+    nothing says: refused — a dispatch newer than it, on main, is the way out (GATE_AGAIN)."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    sha = git(repo, "rev-parse", "origin/main")
+    _with_dispatch(repo, gate_run(repo, conclusion="failure", run_id=3, created="2026-11-04T11:00:00Z"),
+                   pulls={BRANCH: [pull(BRANCH, sha=sha, number=300), pull(BRANCH, "develop", sha=sha, number=301)]})
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "la porte de release est ambiguë", "(https://github.com/o/r/actions/runs/3)", AGAIN)
+    # The way out: a dispatch on main, newer than the ambiguous run, decides.
+    _with_dispatch(repo, gate_run(repo, conclusion="failure", run_id=3, created="2026-11-04T11:00:00Z"),
+                   gate_run(repo, event="workflow_dispatch", branch="main", run_id=4, created="2026-11-04T12:00:00Z"),
+                   pulls={BRANCH: [pull(BRANCH, sha=sha, number=300), pull(BRANCH, "develop", sha=sha, number=301)]})
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    assert "(https://github.com/o/r/actions/runs/4)" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("fail, said", [
@@ -950,14 +970,29 @@ def test_only_this_repository_s_version_pr_into_its_main_counts(repo, tmp_path, 
 
 @pytest.mark.parametrize("named", ["develop", "main"])
 def test_the_run_and_its_head_s_pulls_must_both_say_main(repo, tmp_path, capsys, named):
-    """An open PR's run names its base: it and the head's pulls, into main both, or refused."""
+    """An open PR's run names its base: it and the head's pulls, into main both — disagreeing, the
+    run is ambiguous: refused, an older green dispatch never deciding in its place."""
     assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
     merge_release(repo, gate=False)
     sha = git(repo, "rev-parse", "origin/main")
     other = "main" if named == "develop" else "develop"
-    set_gate(gate_run(repo, base=named), merged=False, pulls={BRANCH: [pull(BRANCH, other, sha=sha)]})
+    _with_dispatch(repo, gate_run(repo, base=named, run_id=3), merged=False, pulls={BRANCH: [pull(BRANCH, other, sha=sha)]})
     capsys.readouterr()
-    _gate_refuses(capsys, tmp_path, "vers develop, pas vers main")
+    _gate_refuses(capsys, tmp_path, f"la porte de release est ambiguë, sur {sha[:9]} (https://github.com/o/r/actions/runs/3)"
+                                    f" : {BRANCH} a une PR vers main et une vers develop ; {AGAIN}")
+
+
+@pytest.mark.parametrize("event", [None, ["base_ref_changed"], {"name": "base_ref_changed"}, 3, "missing"])
+def test_an_event_without_a_name_refuses(repo, tmp_path, capsys, event):
+    """An event whose name is not a string (unhashable, absent): unread, refused and said — never
+    a crash, never taken for no base change."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    e = {} if event == "missing" else {"event": event}
+    _with_dispatch(repo, gate_run(repo, run_id=3), events={"300": [{"event": "referenced"}, e]})
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "l'historique de la PR #300 de la porte de release ne se lit pas, sur ",
+                  "(https://github.com/o/r/actions/runs/3) : un événement sans nom")
 
 
 def test_a_newer_pr_run_into_another_branch_never_hides_the_gate(repo, tmp_path, capsys):

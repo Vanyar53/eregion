@@ -2256,19 +2256,25 @@ des PR du commit : elle les contient toutes, et le lien au commit se fait par `h
   `referenced`, `merged`, `closed`.
 - **Une page, jamais plus** : 100 PR ou 100 événements ou plus refusent, la page lue peut ne pas tout
   montrer.
-- **Écarté ou refusé.** Une réponse vide (aucune PR de la tête n'a ce commit pour tête), une PR vers une
-  autre branche : le run n'est pas la porte, il est **écarté** et la commande le dit. Un run plus ancien
-  sur le même arbre peut alors décider (un dispatch sur `main`). Une lecture qui échoue, une réponse qui
-  n'est pas une liste, une page pleine, un commit ou une branche illisible, une PR sans numéro, une base
-  changée **refusent** tout de suite, et la commande le dit : un run illisible n'est jamais écarté pour
-  laisser décider un plus ancien.
+- **Écarté ou refusé.** Quand rien n'est ambigu, le run n'est pas la porte : il est **écarté**, et la
+  commande le dit. C'est le cas d'une réponse vide (aucune PR de la tête n'a ce commit pour tête), ou de
+  PR qui vont toutes ailleurs que vers `main`. Un run plus ancien sur le même arbre peut alors décider (un
+  dispatch sur `main`) ; sans lui, refus. D'autres cas **refusent** tout de suite, et la commande le dit :
+  - **l'ambiguïté** : une PR de la tête vers `main` et une autre ailleurs, ou le run et la liste en
+    désaccord. On ne sait pas pour laquelle le run a tourné ;
+  - une lecture qui échoue, une réponse qui n'est pas une liste, une page pleine ;
+  - un commit ou une branche illisible, une PR sans numéro ;
+  - un événement dont le nom n'est pas une chaîne, une base changée.
+
+  Un run ambigu ou illisible n'est jamais écarté pour laisser décider un plus ancien : il faut un
+  dispatch sur `main` plus récent que lui (`gh workflow run release-gate.yml --ref main`).
 - Une lecture par tête et une par PR, seulement pour les runs `pull_request` sur l'arbre d'`origin/main`.
 
 Ces lectures demandent le droit *Pull requests* en lecture (`X-Accepted-GitHub-Permissions:
 pull_requests=read` pour les PR d'une tête ; `issues=read; pull_requests=read`, l'un ou l'autre, pour les
 événements, mesuré le 05/11). L'App l'a déjà, puisqu'elle ouvre les PR (*Pull requests* en écriture) :
 les lectures réelles ci-dessus ont rendu 200 sous son jeton d'installation. Tests :
-`tests/unit/test_release.py`, sur des réponses simulées du faux `gh` ; mutants M3770–M3784
+`tests/unit/test_release.py`, sur des réponses simulées du faux `gh` ; mutants M3770–M3785
 (`scripts/mutants/CI6c.py`).
 
 **Sa durée : de 45 à 50 minutes estimées, au plus 60** (04/11 ; à remesurer sur le premier run réel).

@@ -1,8 +1,8 @@
 """CI6c (#541): the version's pull request's gate counts after its merge — its base read by every
 pull request of its head, closed ones too, GitHub having emptied the run's `pull_requests` (M3770,
 M3782); this repository's head and main only, every pull request of the head, the run's commit one
-of their heads, what the run names (M3771, M3774, M3775, M3783, M3784); a base changed after the
-run refuses (M3776); a read that fails, an answer that does not read, a full page, a commit or a
+of their heads, what the run names (M3771, M3774, M3775, M3783, M3784); an ambiguous run, one
+into main beside another elsewhere, refuses (M3785); a base changed after the run refuses (M3776); a read that fails, an answer that does not read, a full page, a commit or a
 branch GitHub would not give refuses and says it (M3772, M3773, M3777–M3780); one read per head
 (M3781).
 """
@@ -58,6 +58,9 @@ MUTANTS = [
     ("M3784", "the run's commit tied to no pull request of its head: any head's list will do (CI6c, review)",
      RELEASE,
      '    ours = [pr for pr in prs if _obj(pr.get("head")).get("sha") == sha]\n', "    ours = prs\n"),
+    ("M3785", "an ambiguous run passed over: one pull request of its head into main, another elsewhere, and an "
+              "older green run decides (CI6c, second review)", RELEASE,
+     '        if "main" in bases:\n', "        if False:\n"),
 ]
 TESTS = {
     "M3770": f"{_REL}test_the_version_s_pr_merged_its_run_naming_no_pr_still_counts",
@@ -75,4 +78,5 @@ TESTS = {
     "M3782": f"{_REL}test_a_pr_closed_unmerged_into_another_branch_from_the_same_head_refuses",
     "M3783": f"{_REL}test_the_run_and_its_head_s_pulls_must_both_say_main",
     "M3784": f"{_REL}test_only_this_repository_s_version_pr_into_its_main_counts",
+    "M3785": f"{_REL}test_an_ambiguous_run_is_never_passed_over_for_an_older_green_one",
 }

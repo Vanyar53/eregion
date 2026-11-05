@@ -456,7 +456,7 @@ def test_a_graph_directory_role_is_passive_declared_or_not(env, wid, capsys, mon
                                   ["0997A1D0-0D1D-4ACB-B408-D5CA73121E90"]])
 def test_the_measured_graph_wids_holds_declared_or_not(env, wids):
     """What the 05/11 measure saw (no note, armed): no wids, or the value of a principal without a
-    role — whatever its case. The list is that value alone (M4229)."""
+    role — whatever its case. The list is that value alone, never emptied (M4229, M4240)."""
     assert orodruin.APP_DEFAULT_WIDS == frozenset({"0997a1d0-0d1d-4acb-b408-d5ca73121e90"})
     claims = {"wids": wids} if wids else {}
     assert orodruin.read_graph(credential=_GraphCredential(_graph_token(**claims)), env=env) == []

@@ -3109,8 +3109,11 @@ terraform -chdir=infra/orodruin output -raw protected_identities   # → EREGION
 make orodruin-push REF=<le commit de main de ce lot, ou la release qui le porte>   # l'image et orodruin.env
 
 # 3. Le contrat, relu : armed attendu.
-make orodruin-check                # passive « graph_directory_role <valeur> » : un rôle d'application changerait le
-                                   # `wids` du jeton (mesuré le 05/11 sans eux) — la noter, s'arrêter ;
+make orodruin-check                # passive « graph_directory_role <valeur> » : un rôle d'annuaire posé sur l'identité
+                                   # d'Orodruin (à retirer), ou une valeur par défaut changée par Microsoft — les
+                                   # rôles d'application vont dans `roles`, pas dans `wids`. S'arrêter, comparer le
+                                   # GUID à la liste des rôles intégrés, vérifier dans Graph qu'aucun rôle n'est
+                                   # attribué à l'identité ;
                                    # passive « graph_unlisted_right » : un droit de plus dans Graph, le retirer ;
                                    # passive « graph_unreadable » : le droit déclaré, le jeton Graph introuvable
 

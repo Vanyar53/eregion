@@ -2,8 +2,8 @@
 05/11 (the first orodruin-check after v0.5.6, armed, no Graph note): a wids outside APP_DEFAULT_WIDS
 is passive, EREGION_TENANT_ID set or not; a Graph token that cannot be had is passive declared, only
 said undeclared — an Orodruin without a Graph right does not fall, and having no token is no
-privilege (eregion_core/orodruin.py, assess_graph, read_graph). M4225–M4229; M3941 (IDI1), whose
-code is gone, is retired with it.
+privilege (eregion_core/orodruin.py, assess_graph, read_graph). M4225–M4229, M4240 (the review);
+M3941 (IDI1), whose code is gone, is retired with it — M4240 keeps its case in today's form.
 
 Caught by tests/unit/test_orodruin.py -k graph.
 """
@@ -25,5 +25,10 @@ MUTANTS = [
      ORO, 'APP_DEFAULT_WIDS = frozenset({"0997a1d0-0d1d-4acb-b408-d5ca73121e90"})',
      'APP_DEFAULT_WIDS = frozenset({"0997a1d0-0d1d-4acb-b408-d5ca73121e90", '
      '"62e90394-69f5-4237-9190-012177145e10"})'),
+    # The review of 9714132b: what M3941 kept, in its form of now — every Orodruin falls at the release.
+    ("M4240", "APP_DEFAULT_WIDS emptied: the value of a principal without a role is a role, every Orodruin "
+     "falls at the release (IDI1s)", ORO,
+     'APP_DEFAULT_WIDS = frozenset({"0997a1d0-0d1d-4acb-b408-d5ca73121e90"})',
+     "APP_DEFAULT_WIDS = frozenset()"),
 ]
-TESTS = {f"M{n}": _CONTRACT for n in range(4225, 4230)}
+TESTS = {**{f"M{n}": _CONTRACT for n in range(4225, 4230)}, "M4240": _CONTRACT}

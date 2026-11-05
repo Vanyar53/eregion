@@ -122,7 +122,9 @@ GRAPH_READ_ONLY = frozenset({"Application.Read.All", "RoleManagement.Read.Direct
 # The ``wids`` value of an app-only token whose principal holds no directory role (published decoded
 # tokens of managed identities) — not a built-in role's template id. Measured on 05/11 (#559): the
 # first orodruin-check after v0.5.6, armed, said nothing of Graph — the token of Orodruin's managed
-# identity carries no ``wids``, or this one alone. Any other value is a role: passive.
+# identity carries no ``wids``, or this one alone. Any other value is a role: passive. Microsoft does
+# not document this value: should it change on their side, the contract turns passive — closed (A0),
+# never armed on a value nobody read.
 APP_DEFAULT_WIDS = frozenset({"0997a1d0-0d1d-4acb-b408-d5ca73121e90"})
 # The Graph read is declared when orodruin.env names the bench's tenant (``EREGION_TENANT_ID``, the
 # step that makes the identity guard read Entra ID). It decides two things, and only those:

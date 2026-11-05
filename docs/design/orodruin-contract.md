@@ -642,10 +642,16 @@ d'elle-même), et l'absence de jeton n'est pas un privilège : ce qu'on ne peut 
 ne s'en sert. Déclaré, la garde lit Graph avec ce même jeton : une lecture déclarée qui ne peut se faire
 est un contrat illisible, `passive`.
 
+**Limite acceptée** : sans déclaration, un échec passager du seul jeton Graph au démarrage laisse
+Orodruin `armed` sans que ses `roles` ni ses `wids` aient été vus. L'effet est borné : un IMDS en panne
+fait aussi tomber la lecture ARM (`identity_unreadable`, `passive`) ; sans déclaration, la garde d'une
+identité refuse toute identité, donc aucune technique d'identité ne part ; et aucun injecteur ne se sert
+d'un jeton qu'on ne peut obtenir. Le prochain `orodruin-check` relit le jeton.
+
 Ce qui est dit (`Verdict.notes`) n'arme ni ne désarme, et n'est pas publié pour la console. Mutants
-M3940, M3860, M3861, M3906 (le contrat), M3862, M3863 (Terraform) ; M4225–M4229 (IDI1s : le `wids` strict
-sans déclaration, le jeton introuvable dit ou `passive` selon elle, la liste réduite à la valeur
-mesurée). M3941 (IDI1 : le `wids` non déclaré seulement dit) est retiré, son code n'existe plus. Tests :
+M3940, M3860, M3861, M3906 (le contrat), M3862, M3863 (Terraform) ; M4225–M4229, M4240 (IDI1s : le `wids`
+strict sans déclaration, le jeton introuvable dit ou `passive` selon elle, la liste réduite à la valeur
+mesurée, et jamais vidée — tout Orodruin tomberait). M3941 (IDI1 : le `wids` non déclaré seulement dit) est retiré, son code n'existe plus. Tests :
 `tests/unit/test_orodruin.py`, `infra/orodruin/tests/graph_read.tftest.hcl`.
 
 La garde sait aussi, avant de lire, ce que Terraform lui donne (`terraform output`, dans
@@ -658,9 +664,12 @@ La garde sait aussi, avant de lire, ce que Terraform lui donne (`terraform outpu
 
 **À mesurer au banc, avec Jonathan** :
 - `make orodruin-check` après les gestes d'IDI1 (les deux rôles d'application posés, le droit
-  déclaré) : `armed` attendu. Un `passive` `graph_directory_role` voudrait dire qu'un rôle
-  d'application change le `wids` du jeton : lire la valeur dans le détail, s'arrêter, et ne corriger
-  la liste qu'après avoir vérifié qu'elle n'est le modèle d'aucun rôle intégré ;
+  déclaré) : `armed` attendu — les rôles d'application vont dans `roles`, `wids` ne porte que les
+  modèles des rôles d'annuaire au tenant. Un `passive` `graph_directory_role` a l'une de deux causes :
+  un rôle d'annuaire posé sur l'identité d'Orodruin (à retirer), ou une valeur par défaut que
+  Microsoft a changée. Dans les deux cas : s'arrêter, comparer le GUID du détail à la liste des rôles
+  intégrés, et ne corriger la liste qu'après avoir vérifié dans Graph qu'aucun rôle n'est attribué à
+  l'identité (un rôle personnalisé a lui aussi un GUID hors de la liste des rôles intégrés) ;
 - **le jeton en cache** : IMDS garde le jeton d'une identité managée jusqu'à 24 h ; un rôle ajouté
   entre-temps n'y paraît qu'au jeton suivant. Le contrat dit ce que le jeton porte, pas plus ;
 - la sortie vers Graph : `AzureActiveDirectory` couvre Microsoft Graph selon la documentation des

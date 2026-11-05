@@ -1006,6 +1006,24 @@ def test_a_restore_claims_its_vm_while_it_starts(tmp_path, monkeypatch):
             jobs.restore_claim("vm-example-01").__enter__()
 
 
+def test_the_claim_itself_refuses_a_restore_started_meanwhile_or_left_behind(tmp_path):
+    """CI6e (#553, M1461): the command's check reads outside the claim's lock; between the two,
+    another restore may start — its job InProgress, its claim gone with its process. The claim
+    checks again, under its lock: a job InProgress, or a claim a dead process left, refuses it,
+    whatever the command read before — and the claim left behind is never taken over."""
+    from glorfindel import jobs
+    jobs.save_job("vm-example-01", {"type": "restore", "status": "InProgress", "job_id": "j1",
+                                    "restore_job_name": "rj-1", "started_at": "2026-10-29T08:00:00+00:00"})
+    with pytest.raises(jobs.RestoreBusy, match="rj-1"):
+        jobs.restore_claim("vm-example-01").__enter__()
+    jobs.save_job("vm-example-01", {"type": "restore", "status": "Completed"})
+    claim = jobs._JOBS_DIR / "vm-example-01.restore-claim"
+    claim.write_text("20261029T080000Z host 4242 dead\n")            # nobody holds it, still young
+    with pytest.raises(jobs.RestoreBusy, match="s'est arrêté"):
+        jobs.restore_claim("vm-example-01").__enter__()
+    assert claim.read_text() == "20261029T080000Z host 4242 dead\n"
+
+
 def test_a_claim_left_by_a_dead_process_stops_holding(tmp_path):
     import os
 

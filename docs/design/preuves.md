@@ -274,6 +274,105 @@ un fichier sans mutant ou dont `TESTS` nomme le mutant d'un autre est une faute,
 n'applique jamais ce `TESTS` étranger. Mutants M3585 (un id pris par deux fichiers de lot n'est plus
 vu) et M3586 (les fichiers de lot jamais chargés) : attrapés par `tests/unit/test_mutant_anchors.py`.
 
+### Rouge dès qu'un mutant survit hors de la liste connue (CI6e)
+
+Décision de Jonathan du 05/11 (#553). La porte de release et la mesure du lundi passaient au rouge
+sous `min_caught`, qui valait 14 pour environ 2 850 mutants : le seuil ne retenait presque rien. Six
+survivants n'avaient aucune raison écrite.
+
+**La liste connue.** Un survivant connu est un mutant dont la raison (le sixième champ de son tuple)
+commence par une marque que le harnais lit, suivie de deux-points (`KNOWN_MARKS`) :
+- `EQUIVALENT` : aucun comportement ne le distingue. Non compté.
+- `MULTI-HOST` : il faut un second hôte qui écrit entre deux appels. Non compté.
+- `TIMING` : une course que ses tests ne voient que par moments. Compté, et connu. Sa raison nomme le
+  test de course qui l'attrape par moments (`test_…`). Si le run ne l'attrape à aucun tour, le total le
+  dit à part (« caught in no round of this run », `never_caught`), sans rouge : à 0 sur 2, la course a
+  pu ne pas venir ; à 0 run après run, la raison n'est plus vraie.
+
+`STALE` (le texte n'est plus dans le code) reste non compté, comme avant. Une raison qui commence par
+une autre marque n'est pas lue : son mutant n'est pas connu, et `scripts/mutant_anchors.py` le signale
+avant le push, comme une raison `TIMING` qui ne nomme aucun test. Un mutant `STALE` ne passe plus en
+silence : aucune CI ne lançait `mutant_anchors.py` sur l'arbre, et
+`tests/unit/test_mutant_anchors.py::test_every_mutant_of_the_tree_applies_and_says_a_reason_it_reads`
+le fait désormais dans la suite ordinaire, en moins d'une seconde. Chaque mutant de l'arbre, jeu de
+contrôle compris, doit s'appliquer comme le harnais l'applique, avec un identifiant unique et une
+raison lisible. C'est un méta-test, jamais un tueur. Dans une copie que le harnais mute, le mutant
+appliqué a retiré son propre texte, et ce test y attraperait par construction tout mutant dont la
+cible le contient : M3186 et M3585, qui ciblent `test_mutant_anchors.py` entier (seconde
+relecture). Le harnais pose donc `EREGION_MUTANT_RUN=1` dans chaque run d'une copie (`_run`), et le
+méta-test s'y saute en le disant. Aucun mutant ne peut mesurer ce test lui-même : il échoue dans
+toute copie mutée. La marque et le saut sont mesurés à sa place.
+
+**Le contrôle** (`judge`, dans `scripts/mutation_check.py`) :
+- **Un mutant compté qui survit à un tour** sans raison lue est rouge, avec son identifiant et sa
+  description. Cela vaut pour `SURVIVES`, `flaky` (attrapé un tour sur deux) et `FIXED-ONLY` (attrapé
+  par les seules séquences figées : on ajoute alors `test_invariant_regressions.py` à ses tests). Le
+  total (`--total`) sort en 1. Un run seul (`--only`, sans `--json`) aussi.
+- **Une tranche** (`--json`) écrit son résultat et le dit, puis sort en 0 : son artefact est toujours
+  téléversé, et c'est le total qui tient la porte.
+- **Un survivant connu attrapé à chaque tour** est dit, sans rien faire échouer : on retire sa raison à
+  la main.
+- **Le jeu de contrôle** est dit, jamais tenu.
+
+`--min-caught` disparaît : passé, il est refusé (code 2). Le harnais et les workflows viennent
+toujours du même arbre, alors un passage n'était pas nécessaire, et un drapeau accepté sans effet
+aurait caché qu'il ne tenait plus rien.
+
+**Les six survivants** (rejoués le 05/11, 60 séquences, deux tours : M1014, M1461 et M3007 0/2 ;
+M2915 et M3077 1/2 ; M1223 2/2 ici, mais pas à la porte). Les six sont tués par un test, et aucun
+n'est décrit :
+- **M1014** (le candidat construit comme l'image qui tourne) : depuis CI3, le CD tire l'image publiée
+  et ne construit plus rien, donc `test_host_cd.py`, sa cible, ne pouvait pas le voir. L'image
+  construite à la main, celle de `--build-only`, est éprouvée par
+  `test_host_deploy.py::test_build_only_tags_the_reference_and_never_the_running_image`, désormais
+  ajouté à sa cible (`TESTS_ALSO`).
+- **M1223** (le magasin des escalades réécrit en place) et **M1224** (une carte ajoutée à la fin,
+  seul des deux à être `TIMING` jusqu'ici) : un lecteur lit le magasin au quart, à la moitié, aux trois
+  quarts et à un caractère de la fin de chaque écriture, avec deux cartes de longueurs différentes
+  (`test_locks.py::test_a_concurrent_reader_mid_write_reads_the_store_whole_never_half`). Il doit lire
+  le magasin entier, jamais un magasin coupé ni une demi-ligne. M1224 n'est plus une course : sa raison
+  est retirée.
+
+  **Ce que la relecture a trouvé.** La première version ne lisait qu'à la moitié, avec deux cartes de
+  même longueur. La moitié d'un magasin réécrit en place tombait sur la fin de la première carte et se
+  lisait comme le magasin d'avant : le test seul passait sous M1223, 15 fois sur 15. Les 2/2 du
+  harnais venaient de la course de `-k concurrent`, celle qui l'avait laissé survivre à la porte.
+  Prouvé depuis sur une copie mutée, **ce test seul** : M1223 échoue 15 fois sur 15, M1224 15 sur 15,
+  et le code non muté passe 30 fois sur 30. Les quatre autres tests, seuls de même : M2915, M3077, M1461
+  et M3007 5 sur 5 ; M1014 3 sur 3.
+- **M1461** (la réclamation du restore sans son propre contrôle) : la commande vérifie hors du verrou
+  de la réclamation, et la réclamation refuse seule ce qui a démarré entre-temps (un job `InProgress`)
+  ou ce qu'un processus mort a laissé
+  (`test_entries_calls.py::test_the_claim_itself_refuses_a_restore_started_meanwhile_or_left_behind`).
+- **M2915** (le registre des incidents sous un verrou de thread seulement) et **M3077** (le relevé de
+  la watch sans son `flock`) : un autre processus tient le `flock`, et l'écriture d'ici attend, à
+  chaque fois
+  (`test_locks.py::test_the_incident_registry_waits_for_another_process_s_write`,
+  `test_exercise.py::test_the_record_waits_for_another_process_s_write`). Les tests de course restent
+  en place, mais ne voyaient la perte que par moments.
+- **M3007** (la vue d'ensemble lit ses rapports sans le lecteur de la console) : depuis SEC16, le
+  lecteur par défaut refuse comme celui de la console. Il ne restait qu'une différence : la console
+  dit une fois, dans son journal, le rapport qu'elle refuse. Les autres pages le disaient avant elle
+  dans le test de SEC15. Désormais, la vue d'ensemble le dit seule
+  (`test_indicators.py::test_the_overview_says_a_report_it_refuses_in_the_console_s_log_once`).
+
+Après CI6e, la liste connue ne compte que les deux `EQUIVALENT` (M11, M25). Plus aucun survivant
+compté n'est connu.
+
+**Mesures.** Mutants M3915–M3924 (`scripts/mutants/CI6e.py`), attrapés à chaque tour par
+`tests/unit/test_mutation_shards.py` et `tests/unit/test_mutant_anchors.py` : un total vert quoi qui
+survive (le défaut revenu), la liste connue non lue, un survivant connu attrapé non dit ou rendu
+rouge, les non-comptés comptés, un mutant `flaky` pris pour attrapé, n'importe quel mot pris pour une
+marque, un run seul vert, une tranche rouge, une raison illisible acceptée par
+`mutant_anchors.py`. Mesurés le 05/11, 60 séquences et deux tours (`--only`, avec les six, M1224,
+M1281 et M3731 réancrés) : **19 sur 19 attrapés à chaque tour**. M1224 a été dit « survivant connu
+attrapé : retirer sa raison (TIMING) », avant que sa raison soit retirée. Après la relecture, mutants
+M3965–M3968 : un `TIMING` attrapé à aucun tour que personne ne dit, ou qui rend le total rouge ; un
+`TIMING` attrapé par moments dit jamais attrapé ; une raison `TIMING` sans test acceptée. Un premier
+M3969 (le code du harnais reformulé sans réancrer ses mutants) n'était attrapé que par construction,
+par le méta-test : il est retiré. Après la seconde relecture, M4020 (les runs d'une copie sans la
+marque du harnais) et M4021 (le méta-test qui ne se saute plus dans une copie mutée).
+
 ### Les pannes des dépendances (G2)
 
 Les invariants modélisent les pannes d'Azure sous l'isolation (429, crash, 403, disque plein).

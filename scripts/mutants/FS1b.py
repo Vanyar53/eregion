@@ -148,8 +148,9 @@ MUTANTS += [
      "    if after:\n",
      "    except Exception:\n        return None\n    if after:\n"),
     ("M4031", "a restore record that cannot be read read as no restore (FS1b review)", _AP,
-     '    except OSError as exc:\n        return f"Restore illisible',
-     '    except OSError as exc:\n        return None or f"Restore illisible'),
+     '    except OSError as exc:\n        return f"Restore illisible ({type(exc).__name__}) : agir depuis la CLI."\n'
+     "    # A record there",
+     "    except OSError:\n        return None\n    # A record there"),
     ("M4032", "a pass of the queue's thread that raises goes unsaid (FS1b review)", QW,
      "                self.say(f\"file d'actions : passage en erreur — {type(exc).__name__}: {exc}\")\n",
      "                pass\n"),

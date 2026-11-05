@@ -291,10 +291,18 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
                                    "reasserted_at": now})
         # I4B: what the rewrite left as it was, aimed at another VM — on the card.
         left = f" {put['left_note']}" if isinstance(put, dict) and put.get("left_note") else ""
-        short = _isolation_said(put)
+        # Said from the cloud read again, never from the write alone (RW3, #575), as a block (A0): Azure
+        # confirms each deny as it writes it, never what holds once written — a rule taken off between
+        # two writes, an allow placed after the plan. A read that raises is never « holds ».
+        try:
+            after = connector.verify_isolation(rid)
+        except Exception as exc:
+            after = {"verified": None, "error": f"relecture impossible : {exc}"}
+        reread = _reread_said(after)
+        short = " ; ".join(x for x in (_isolation_said(put), reread) if x)
         if short:
-            # Written, but the provider does not read it whole (RW2, #555): never « reposée une fois »,
-            # nothing promised — marked said after its card, gone again it is « une deuxième fois ».
+            # Written, but the provider or its re-read does not read it whole (RW2, RW3): never « reposée une
+            # fois », nothing promised — marked said after its card, gone again it is « une deuxième fois ».
             reason = (f"L'isolation de {vm} avait disparu d'Azure ; reposée, elle ne tient pas en entier : {short}. "
                       "Glorfindel ne la repose pas de nouveau : "
                       f"`glorfindel release {rid} --yes` si la levée est voulue, sinon ré-isoler." + who + left)
@@ -312,6 +320,10 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
         # No retry-and-alert every minute — marked AFTER the card exists (see blocks).
         _mark_alerted(ref or vm, now)
     report.append({"kind": "isolation", "vm": vm, "outcome": outcome, "detail": reason})
+    if outcome == "partial" and reread:
+        # A bypass its re-read finds: its own card at once, as a block's (RW3) — after the put-back's card
+        # and its mark, so that a write refused here (a full disk) never leaves the put-back unsaid.
+        say_bypass(vm, rid, after, report, ref=ref)
 
 
 def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], ref: str = "",
@@ -549,6 +561,30 @@ def _isolation_said(put) -> str:
     if verified is not True:
         return f"le fournisseur ne la relit pas entière ({named or 'non vérifiée'})"
     return named
+
+
+def _reread_said(after: dict) -> str:
+    """What the re-read of an isolation put back found (RW3, #575): "" when it holds, else why not.
+
+    `isolate_vm` answers as it wrote — on Azure each deny confirmed at its write, never the whole read
+    once written. Read again: unreadable (`verified` None, the read raised) is never « holds », as a
+    block's re-read (A0). Only a put-back follows a check that read the isolation gone: a dry run, whose
+    check reads nothing missing, never comes here."""
+    verified = after.get("verified") if isinstance(after, dict) else None
+    if verified is True:
+        return ""
+    after = after if isinstance(after, dict) else {}
+    why = str(after.get("error") or after.get("reason") or "").rstrip(". ")
+    if verified is not False:
+        named = ", ".join(str(n) for n in (after.get("unreadable_nics") or after.get("unknown") or []))
+        return f"relue, elle n'est pas lisible ({why or named or 'vérification non concluante'})"
+    parts = ["sans isolation : " + ", ".join(str(n) for n in after["uncovered_nics"])] if after.get(
+        "uncovered_nics") else []
+    if why:
+        parts.append(why)
+    elif after.get("missing_rules"):
+        parts.append("règles absentes ou altérées : " + ", ".join(str(n) for n in after["missing_rules"]))
+    return f"relue, elle ne tient pas ({' ; '.join(parts) or 'non vérifiée'})"
 
 
 def _iso_held_partial(ref: str) -> str:

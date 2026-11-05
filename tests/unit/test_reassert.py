@@ -31,7 +31,12 @@ def _connector(verify_iso=None, verify_blk=None):
     c = MagicMock()
     c.verify_isolation.return_value = verify_iso or {"verified": True}
     c.verify_block_ip.return_value = verify_blk or {"verified": True}
-    c.isolate_vm.side_effect = lambda rid: _isolated() or {"status": "isolated"}
+
+    def isolated(rid):               # put back: Azure, read again, has the isolation whole (RW3)
+        _isolated()
+        c.verify_isolation.return_value = {"verified": True}
+        return {"status": "isolated"}
+    c.isolate_vm.side_effect = isolated
 
     def blocked(*a, **k):            # put back: Azure, read again, has the block whole (RB1)
         c.verify_block_ip.return_value = {"verified": True}
@@ -203,6 +208,7 @@ def test_second_removal_is_a_new_card_not_folded_into_the_first():
     _isolated()
     c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
     reassert_active(c, _ACT)                       # first removal: re-applied
+    c.verify_isolation.return_value = {"verified": False, "uncovered_nics": ["nic-a"]}
     reassert_active(c, _ACT)                       # gone again: alert only
     pending = escalations.pending()
     assert len(pending) == 1 and "deuxième fois" in pending[0]["reason"]
@@ -1968,8 +1974,14 @@ def _held_as(rid: str, kind: str) -> None:
 def _gone_from_db(kind: str):
     c = (_connector({"verified": False, "uncovered_nics": ["nic-a"]}) if kind == "isolation"
          else _connector(verify_blk={"verified": False, "missing_rules": ["r"]}))
-    c.isolate_vm.side_effect = lambda rid: {"status": "isolated"}
+    c.isolate_vm.side_effect = lambda rid: _read_whole_again(c)
     return c
+
+
+def _read_whole_again(c) -> dict:
+    """Put back, its state left as it is: Azure, read again, has the isolation whole (RW3)."""
+    c.verify_isolation.return_value = {"verified": True}
+    return {"status": "isolated"}
 
 
 def _older(kind: str, prefix: str = "reassert-", tail: str = "", **card) -> dict:
@@ -2229,7 +2241,7 @@ def test_a_card_still_folds_into_one_of_its_own_origin():
 def _gone_beside(kind: str):
     """Gone; put back (outside human_only), taken off again before the next pass — `again()`."""
     c = _gone(kind)
-    c.isolate_vm.side_effect = lambda rid: {"status": "isolated"}
+    c.isolate_vm.side_effect = lambda rid: _read_whole_again(c)
     verify = c.verify_isolation if kind == "isolation" else c.verify_block_ip
     gone = dict(verify.return_value)
 
@@ -2793,6 +2805,7 @@ def test_an_isolation_gone_again_on_a_full_store_keeps_its_card_and_no_mark(monk
     c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
     reassert_active(c, _ACT)
     (first,) = escalations.pending()
+    c.verify_isolation.return_value = {"verified": False, "uncovered_nics": ["nic-a"]}     # gone again
     give_back = _store_full(monkeypatch)
     assert [r["outcome"] for r in reassert_active(c, _ACT)] == ["failed"]
     give_back()

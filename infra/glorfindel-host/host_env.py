@@ -38,7 +38,13 @@ an identity card's plan (IR1a): ids, no secret, copied from the operator's envir
 rest — each one's source a Terraform output, named in NEVER_TARGET, never read here. One empty,
 or an entry that is no object id, is said, by the writing and by `--check`, never refused: an
 unreadable list refuses every identity — each verb of a plan a human's step, closed, not a
-breakdown. What is said names the variable and its source, never a value.
+breakdown. What is said names the variable and its source, never a value; the executor's client
+id empty is said as information (ℹ): it stays empty as long as the executor is not enabled.
+
+A value written, any of COPIED, never holds a line break, a carriage return or a quote (one pair
+around it is unwrapped, as compose reads it): refused, the variable named, never the value — a
+line break would add a variable of its own to host.env, a quote left open would make compose
+refuse the whole file. `--check` refuses a line whose value opens a quote it never closes.
 """
 from __future__ import annotations
 
@@ -79,6 +85,13 @@ NEVER_TARGET = {
         "l'exécuteur d'identité n'est pas dans la liste never_target de la watch (vide tant qu'il "
         "n'est pas activé, identity_executor_enabled : rien à faire alors)"),
 }
+# Its client id is empty as long as the executor is not enabled: said, never as a warning.
+EXECUTOR = "EREGION_IDENTITY_EXECUTOR_CLIENT_ID"
+# What a value written into host.env never holds (NT1 review, measured with `docker compose
+# config`): a line break adds a line — a variable of its own, which compose reads (the signed
+# queue switched on, its keys); a quote compose opens and never closes refuses the whole file, and
+# no service starts on H0. Every value copied, not only the list's.
+UNSAFE = {"\n": "a line break", "\r": "a carriage return", '"': "a quote", "'": "a quote"}
 COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID",
           "GLORFINDEL_LLM_MODEL", "GLORFINDEL_LLM_BASE_URL", *MODEL_KEYS,
           "GLORFINDEL_WEBHOOK_URL", "GLORFINDEL_BACKUP_VAULT",
@@ -175,8 +188,34 @@ def never_target_warnings(environ: dict) -> list[str]:
                         "never_target de la watch est illisible, chaque verbe d'un plan d'identité "
                         f"devient une étape de l'humain. Sa source : {source}.")
         elif not got:
-            said.append(f"⚠ {name} vide : {left}. Sa source : {source}.")
+            mark = "ℹ" if name == EXECUTOR else "⚠"
+            said.append(f"{mark} {name} vide : {left}. Sa source : {source}.")
     return said
+
+
+def never_target_read(env: dict) -> dict:
+    """The list's variables as the watch receives them (model_value: a pair of quotes removed, a
+    comment alone empty) — `terraform output` without `-raw` gives a quoted value."""
+    return {k: model_value(env.get(k, "")) for k in NEVER_TARGET}
+
+
+def unquoted(value: str) -> str:
+    """A value with one pair of quotes around it, unwrapped — what compose reads of `KEY="…"`;
+    any other value as it is."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def unsafe(out: dict) -> None:
+    """SystemExit if a value to write holds what UNSAFE names: the variable said, never the value."""
+    for k, v in out.items():
+        held = sorted({what for c, what in UNSAFE.items() if c in v})
+        if held:
+            raise SystemExit(f"{k} holds {' and '.join(held)}: written into host.env, it would add a "
+                             "variable that docker compose reads, or make compose refuse the whole file "
+                             "(no service would start on H0). Its value is not printed — set it again, "
+                             "on one line, without quotes.")
 
 
 def carried_keys(environ: dict) -> set[str]:
@@ -198,11 +237,12 @@ def host_env(environ: dict) -> dict:
                           if lacking else [])
         raise SystemExit(f"missing in the environment (load .envrc): {'; '.join(said)}")
     carried = carried_keys(environ)
-    out = {k: environ[k] for k in COPIED if environ.get(k) and (k not in MODEL_KEYS or k in carried)}
+    out = {k: unquoted(environ[k]) for k in COPIED if environ.get(k) and (k not in MODEL_KEYS or k in carried)}
     out["GLORFINDEL_READ_ONLY"] = "1"
     # A powered-off VM stays on the map a week (default 8 h): gondolin, off between
     # exercises, kept vanishing from the observed fleet.
     out.setdefault("GLORFINDEL_DISCOVERY_RETENTION_H", environ.get("GLORFINDEL_DISCOVERY_RETENTION_H") or "168")
+    unsafe(out)                         # NT1 review: no line nor quote injected into host.env
     out[TOKEN] = secrets.token_urlsafe(24)
     return out
 
@@ -242,7 +282,25 @@ def token_name(env: dict) -> str:
     return ""
 
 
+def unclosed(path: Path) -> list[str]:
+    """The variables of a host.env whose value opens a quote it never closes on its line: docker
+    compose refuses the whole file (« unterminated quoted value », measured) — read on the raw
+    line, before read_env cuts a « # » inside quotes."""
+    names = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.lstrip().startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            v = value.strip()
+            if v[:1] in ("\"", "'") and v.find(v[0], 1) == -1:
+                names.append(key.strip())
+    return names
+
+
 def check(dst: str) -> int:
+    if names := unclosed(Path(dst)):
+        raise SystemExit(f"{dst}: {', '.join(names)} opens a quote it never closes — docker compose "
+                         "would refuse the whole file, and no service would start on H0. Close it, or "
+                         "write the value without quotes.")
     env = read_env(Path(dst))
     name = token_name(env)
     if name and env[name].startswith("#"):
@@ -264,7 +322,7 @@ def check(dst: str) -> int:
         raise SystemExit(f"{dst}: the signed action queue would refuse every gesture — " + "; ".join(lacking)
                          + f". The gesture: {QUEUE_GESTURE}.")
     # NT1: the never_target list, as the watch receives it — said, never refused.
-    for warning in never_target_warnings({k: model_value(env.get(k, "")) for k in NEVER_TARGET}):
+    for warning in never_target_warnings(never_target_read(env)):
         print(f"{dst}: {warning}", file=sys.stderr)
     if name == LEGACY_TOKEN:
         print(f"{dst}: console token under its former name, {LEGACY_TOKEN} — valid, nothing to rename")
@@ -287,7 +345,7 @@ def main(dst: str) -> int:
     if os.environ.get(QUEUE_FLAG) or os.environ.get(QUEUE_KEYS):
         print(f"ℹ {QUEUE_FLAG} / {QUEUE_KEYS} de ton environnement ne vont pas dans host.env : ce sont "
               f"les clés de ce poste, H0 a les siennes — {QUEUE_GESTURE}.", file=sys.stderr)
-    for warning in never_target_warnings(env):
+    for warning in never_target_warnings(never_target_read(env)):
         print(warning, file=sys.stderr)
     path.touch(mode=0o600)
     path.write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")

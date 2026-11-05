@@ -961,11 +961,25 @@ Attribute Assignment Reader le rendent passif. Et `EREGION_OPERATOR_OBJECT_ID`, 
    | `EREGION_IDENTITY_EXECUTOR_CLIENT_ID` | `terraform -chdir=infra/glorfindel-host output -raw identity_executor_client_id` (vide tant que l'exécuteur n'est pas activé) |
 
    — ou, sur un `host.env` déjà écrit, ajoute les trois lignes à la main (son jeton ne change pas).
+   Un **principal d'Annatar de poste** dans le tenant du banc (`ANNATAR_AZURE_CLIENT_ID`) : son
+   object id s'ajoute aussi à `EREGION_PROTECTED_IDENTITIES`. Ne recopie dans `host.env` ni
+   `ANNATAR_AZURE_CLIENT_ID` ni `GLORFINDEL_AZURE_CLIENT_ID` : le compose en ferait l'`AZURE_CLIENT_ID`
+   d'un service (V-17), et sur H0, `DefaultAzureCredential` chercherait une identité assignée qui
+   n'existe pas.
    L'écriture de `host.env` et `host_env.py --check` (lancé par `make glorfindel-host-push`) disent
-   une variable vide, ou une entrée qui n'est pas un object id, avec sa source, jamais sa valeur ;
-   **ils ne refusent jamais** : sans la liste, ou mal écrite, elle est illisible et tout verbe d'un
-   plan devient une étape de l'humain — fermé, pas une panne. Puis `make glorfindel-host-push` et le
-   redémarrage de la watch.
+   une variable vide, ou une entrée qui n'est pas un object id, avec sa source, jamais sa valeur
+   (le client id de l'exécuteur vide, en `ℹ` : rien à faire tant qu'il n'est pas activé) ;
+   **ils ne refusent jamais une absence** : sans la liste, ou mal écrite, elle est illisible et
+   tout verbe d'un plan devient une étape de l'humain — fermé, pas une panne. Ils refusent en
+   revanche une valeur **mal écrite**, de n'importe quelle variable recopiée : un saut de ligne, un
+   retour chariot ou un guillemet dans une valeur (une paire autour d'elle est retirée, comme le fait
+   compose), refusés à l'écriture — un saut de ligne ajouterait à `host.env` une variable à lui (la
+   file signée allumée, avec une clé venue de la valeur), un guillemet resté ouvert ferait refuser
+   tout le fichier par compose, et rien ne démarrerait sur H0 ; `--check` refuse une ligne dont la
+   valeur ouvre un guillemet sans le fermer. La variable est nommée, jamais sa valeur. Puis
+   `make glorfindel-host-push`, et sur H0 `cd ~/eregion && docker compose up -d watch` : la watch
+   est recréée avec le nouvel `.env` — un `docker restart` ne relit pas `.env`, elle garderait son
+   ancien environnement.
 7. **Le certificat** (avec IR1c, qui monte le conteneur) : la clé tirée sur H0, dans un répertoire
    que seul l'exécuteur monte ; sa partie publique (PEM, `BEGIN CERTIFICATE`, jamais une clé : le
    plan la refuse) dans `identity_executor_certificate`, puis les gestes 3 et 4 (une création de

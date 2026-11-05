@@ -656,7 +656,10 @@ def test_check_says_a_missing_never_target_variable_without_refusing(tmp_path, c
     assert host_env.check(str(path)) == 0
     err = capsys.readouterr().err
     assert {name for name in NEVER_TARGET_ENV if f"{name} vide" in err} == said
-    assert err.count("⚠") == len(said)                     # nothing else said: no typo seen
+    # The executor's client id empty (not enabled: nothing to do) is information, not a warning.
+    executor = "EREGION_IDENTITY_EXECUTOR_CLIENT_ID"
+    assert err.count("⚠") == len(said - {executor})       # nothing else said: no typo seen
+    assert (f"ℹ {executor} vide" in err) is (executor in said)
     for name in said:
         assert NEVER_TARGET_SOURCES[name] in err, name
     assert "fake-" not in err
@@ -676,6 +679,95 @@ def test_check_says_an_entry_that_is_no_object_id_never_its_value(tmp_path, caps
     assert "illisible" in err and NEVER_TARGET_SOURCES["EREGION_PROTECTED_IDENTITIES"] in err
     assert "fake-" not in err and H0_OID not in err
     assert "EREGION_OPERATOR_OBJECT_ID" not in err and "EREGION_IDENTITY_EXECUTOR_CLIENT_ID" not in err
+
+
+def test_main_reads_the_list_as_the_watch_receives_it(tmp_path, monkeypatch, capsys):
+    """Review 5b: `terraform output` without `-raw` gives the list quoted — what compose unwraps.
+    Written unwrapped, it is neither refused nor said as a typo, and the watch reads it whole."""
+    from eregion_core.never_target import NeverTarget
+
+    for k in list(host_env.COPIED):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    _never_target_env(monkeypatch)
+    monkeypatch.setenv("EREGION_PROTECTED_IDENTITIES", f'"{ORODRUIN_OID},{H0_OID}"')
+    assert host_env.main(str(tmp_path / "a.env")) == 0
+    assert capsys.readouterr().err == ""
+    written = host_env.read_env(tmp_path / "a.env")
+    assert written["EREGION_PROTECTED_IDENTITIES"] == f"{ORODRUIN_OID},{H0_OID}"
+    never = NeverTarget.from_env({k: written[k] for k in NEVER_TARGET_ENV})
+    assert never.refusal() == "" and never.covers(ORODRUIN_OID) and never.covers(H0_OID)
+
+
+# ── NT1, review: nothing a value carries is injected into host.env ──────────────────────────
+# Measured by the review with `docker compose config`: a line break in a value adds variables
+# compose reads (the signed queue switched on, with a key from that value); a quote left open
+# makes compose refuse the whole file — no service starts on H0. Every copied value, not only
+# the list's.
+_INJECTED = f"{H0_OID}\nEREGION_ACTION_QUEUE=1\nEREGION_QUEUE_KEYS=console:fake-planted-key"
+
+
+@pytest.mark.parametrize("name, value, held", [
+    ("EREGION_PROTECTED_IDENTITIES", _INJECTED, "a line break"),
+    ("EREGION_PROTECTED_IDENTITIES", f"{H0_OID}\rEREGION_ACTION_QUEUE=1", "a carriage return"),
+    ("GLORFINDEL_WEBHOOK_URL", 'https://example.invalid/fake-hook"', "a quote"),
+    ("DISCORD_CHANNEL_ID", '"', "a quote"),
+    ("EREGION_OPERATOR_OBJECT_ID", f"'{OPERATOR_OID}", "a quote"),
+], ids=["line-break", "carriage-return", "quote-inside", "quote-alone", "single-quote-open"])
+def test_host_env_refuses_a_value_that_would_inject_into_host_env(tmp_path, monkeypatch, name, value, held):
+    """M4230–M4232, M4234: refused — the variable named, never its value — and nothing written.
+    Refusing a value badly written is not refusing an absent one: the list's absence is still said."""
+    operator = {"AZURE_SUBSCRIPTION_ID": "sub", "ANTHROPIC_API_KEY": "fake-key", **NEVER_TARGET_ENV,
+                name: value}
+    with pytest.raises(SystemExit) as exc:
+        host_env.host_env(operator)
+    message = str(exc.value)
+    assert message.startswith(f"{name} holds") and held in message
+    assert "fake-" not in message and H0_OID not in message and OPERATOR_OID not in message
+    for k in list(host_env.COPIED):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in operator.items():
+        monkeypatch.setenv(k, v)
+    with pytest.raises(SystemExit):
+        host_env.main(str(tmp_path / "host.env"))
+    assert not (tmp_path / "host.env").exists()
+
+
+def test_host_env_writes_a_sane_value_and_unwraps_one_pair_of_quotes():
+    """A sane value passes as it is (a URL with its ?, & and =); one pair of quotes around a value
+    is what compose removes: written without it, the same value reaches the watch."""
+    url = "https://example.invalid/api/webhooks/1/fake-x?wait=true&a=b"
+    operator = {"AZURE_SUBSCRIPTION_ID": "sub", "ANTHROPIC_API_KEY": "fake-key", **NEVER_TARGET_ENV,
+                "GLORFINDEL_WEBHOOK_URL": url, "DISCORD_CHANNEL_ID": "'123'"}
+    out = host_env.host_env(operator)
+    assert out["GLORFINDEL_WEBHOOK_URL"] == url and out["DISCORD_CHANNEL_ID"] == "123"
+    assert {k: out[k] for k in NEVER_TARGET_ENV} == NEVER_TARGET_ENV
+
+
+@pytest.mark.parametrize("line, refused", [
+    ('EREGION_PROTECTED_IDENTITIES="\n', "EREGION_PROTECTED_IDENTITIES"),
+    (f'EREGION_OPERATOR_OBJECT_ID="{OPERATOR_OID}\n', "EREGION_OPERATOR_OBJECT_ID"),
+    ("GLORFINDEL_WEBHOOK_URL='https://example.invalid/fake-hook\n", "GLORFINDEL_WEBHOOK_URL"),
+    # Closed, a « # » inside quotes and a comment after them: compose reads both.
+    ('GLORFINDEL_WEBHOOK_URL="https://example.invalid/fake-x#y"\n', None),
+    (f'EREGION_OPERATOR_OBJECT_ID="{OPERATOR_OID}"   # note\n', None),
+    ("DISCORD_CHANNEL_ID=123\n", None),
+], ids=["quote-alone", "double-open", "single-open", "closed-with-hash", "closed-then-comment", "sane"])
+def test_check_refuses_a_quote_its_line_never_closes(tmp_path, capsys, line, refused):
+    """M4233: compose refuses a whole host.env with a quoted value left open (« unterminated
+    quoted value », measured): `--check` refuses it before the push — the variable named, never
+    the value; a closed one, or none, passes."""
+    path = tmp_path / "host.env"
+    path.write_text("EREGION_CONSOLE_TOKEN=fake-token\nANTHROPIC_API_KEY=fake-key\n" + line, encoding="utf-8")
+    if refused is None:
+        assert host_env.check(str(path)) == 0
+        return
+    with pytest.raises(SystemExit) as exc:
+        host_env.check(str(path))
+    message = str(exc.value)
+    assert f"{refused} opens a quote it never closes" in message
+    assert "fake-" not in message and OPERATOR_OID not in message
 
 
 def test_the_example_names_each_never_target_variable_and_its_source():

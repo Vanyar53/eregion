@@ -1420,6 +1420,32 @@ def test_the_gate_runs_the_whole_mutation_in_shards_control_set_included():
     assert down["with"] == {"path": "mutants-results"}
 
 
+CHROMA_CACHE = {"path": "~/.cache/chroma", "key": "chroma-onnx-v1"}
+
+
+def test_the_gate_s_test_runs_restore_chroma_s_model_as_ci_does():
+    """CI6b (#538): the invariants, the mutants and the control set restore ChromaDB's model before
+    their tests, by the same action pinned by commit, under ci.yml's key — at the gate's first real
+    run, the mutants' unmutated runs fetched it at once into one place, two shards red."""
+    jobs = _gate()["jobs"]
+    pins = set()
+    for name in ("invariants", "mutants", "control"):
+        steps = jobs[name]["steps"]
+        restores = [i for i, s in enumerate(steps) if s.get("with") == CHROMA_CACHE]
+        assert len(restores) == 1, name
+        uses = steps[restores[0]]["uses"]
+        assert re.fullmatch(r"actions/cache/restore@[0-9a-f]{40}", uses), (name, uses)
+        pins.add(uses)
+        (tests,) = [i for i, s in enumerate(steps) if "pytest" in (s.get("run") or "")
+                    or "mutation_check.py" in (s.get("run") or "")]
+        assert restores[0] < tests, name
+    assert len(pins) == 1                                     # one action, one commit
+    ci = _load(ROOT / ".github" / "workflows" / "ci.yml")["jobs"]
+    ci_keys = {s["with"]["key"] for job in ci.values() for s in job.get("steps", [])
+               if (s.get("with") or {}).get("path") == CHROMA_CACHE["path"]}
+    assert ci_keys == {CHROMA_CACHE["key"]}
+
+
 def _run_steps(job: dict) -> list[dict]:
     return [{k: s.get(k) for k in ("name", "run", "env")} for s in job["steps"] if s.get("run")]
 

@@ -2171,7 +2171,21 @@ mesurait en entier le commit publié.
   tranche (`mutation_check.py --shard K/N --json …`) prend des cibles entières, par morceaux de huit
   mutants au plus ; puis `mutants-total` (`--total`) vérifie que chaque tranche est là, une fois, au
   même budget, que chaque mutant de l'arbre a été mesuré une fois exactement, et tient le compte au
-  `min_caught` de `mutants.yml` (14). Le jeu de contrôle est dit, jamais tenu à un compte ;
+  `min_caught` de `mutants.yml` (14). Le jeu de contrôle est dit, jamais tenu à un compte.
+  **Le modèle de ChromaDB, une fois** (CI6b, #538). Les runs du code non muté d'une tranche partent en
+  même temps. Au premier run réel de la porte (PR #537, 05/11), sur un runner neuf, chacun téléchargeait
+  le modèle d'embedding de ChromaDB (environ 80 Mo) dans le même `~/.cache/chroma`, et lisait le fichier
+  à moitié écrit d'un autre : deux tranches sur 14 rouges dès le code non muté (`FileNotFoundError …
+  onnx.tar.gz`, `InvalidProtobuf`). Désormais `mutation_check.py` prépare le modèle une seule fois, dans
+  son propre processus, avant tout run (`prepare_embedding_model`) : la fonction d'embedding par défaut
+  de ChromaDB, appelée sur un mot, ne télécharge que si un fichier du modèle manque, vérifie l'empreinte
+  SHA-256 de l'archive et le charge comme un test. Le modèle déjà là, rien ne part sur le réseau ;
+  sans ChromaDB, rien à préparer. Les runs héritent du `HOME` du harnais, donc du même cache. Un échec
+  (pas de réseau, un cache illisible, un ChromaDB qui ne démarre pas : un sqlite3 trop ancien) est dit,
+  avec son erreur et quoi faire ; les runs continuent comme avant, et cet échec n'arrête jamais une
+  tranche ni n'attrape un mutant. Les jobs `mutants` et
+  `control` restaurent aussi le cache `chroma-onnx-v1`, comme `invariants` et `ci.yml`, par la même
+  action épinglée par commit. La mesure du lundi et un run local en profitent de même ;
 - `terraform` : les tests Terraform de `ci.yml`, mot pour mot (providers simulés) ;
 - `macos` : le job macOS de `ci.yml`, mot pour mot, qu'une PR ne lance plus (CI5). **Il informe, il ne
   bloque pas** (décision de Jonathan du 04/11, H1c, #518 : seuls les checks requis bloquent, comme pour

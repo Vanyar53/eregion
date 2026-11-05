@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import importlib
 import json
 import os
 import re
@@ -10919,6 +10920,47 @@ def total(where: Path, shards: int, control_shards: int, examples: int, rounds: 
     return 1 if problems or caught < min_caught else 0
 
 
+# CI6b (#538): ChromaDB's embedding model, made ready once, here, before any run in parallel. On a
+# runner without it, the unmutated runs started at once (CI6) each fetched it (about 80 MB) into the
+# same ~/.cache/chroma, and read one another's half-written file: two shards of fourteen failed on
+# the unmutated code (FileNotFoundError on onnx.tar.gz, InvalidProtobuf), at the release gate's
+# first real run, on 05/11. ChromaDB's default embedding function (chromadb 1.5.9: the class
+# ONNXMiniLM_L6_V2) fetches the model only when one of its six files is missing, and checks the
+# archive's SHA-256; one call on a word loads it as a test would. Its place is
+# Path.home()/.cache/chroma: the runs inherit this process's environment, HOME included (`_run`).
+EMBEDDING = "chromadb.utils.embedding_functions"
+
+
+def _not_prepared(exc: Exception, say) -> bool:
+    """A preparation that failed, said with its error and what to do: False, never a verdict."""
+    say(f"ChromaDB's embedding model could not be prepared before the runs ({type(exc).__name__}: "
+        f"{exc}). The runs go on as before: each may fetch it into ~/.cache/chroma itself — an "
+        f"unmutated run that fails on it says so below. Without a network, put the model there "
+        f"first; if it is there but unreadable, remove ~/.cache/chroma/onnx_models and run again.",
+        flush=True)
+    return False
+
+
+def prepare_embedding_model(say=print) -> bool | None:
+    """ChromaDB's embedding model, made ready in this process: None when ChromaDB is not here
+    (nothing to prepare), True when it is ready (fetched now, or there already: nothing goes out),
+    False when it could not be — said, with its error, and the runs go on as before: each may
+    fetch it itself, and an error of theirs is theirs (an unmutated run that fails stops the shard;
+    a mutant is never caught by this)."""
+    try:
+        functions = importlib.import_module(EMBEDDING)
+    except ImportError:
+        return None
+    except Exception as exc:          # there, but it cannot start: chromadb 1.5.9 raises a RuntimeError
+        return _not_prepared(exc, say)   # on import when sqlite3 is too old (CI6b, review)
+    try:
+        functions.DefaultEmbeddingFunction()(["eregion"])
+    except Exception as exc:          # said, never hidden, never a verdict
+        return _not_prepared(exc, say)
+    say("ChromaDB's embedding model: ready in ~/.cache/chroma, before any run (CI6b)", flush=True)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--examples", type=int, default=60)
@@ -10947,6 +10989,8 @@ def main(argv: list[str] | None = None) -> int:
         _copy_repo(base)
         todo = [m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only]
         todo = shard_of(todo, k, n) if n > 1 else todo
+        # ChromaDB's model once, here, before any run in parallel (CI6b): never by each of them.
+        prepare_embedding_model()
         # The unmutated copy must pass, or nothing below means anything. Its targets at once, as
         # the mutants are (CI6: one after the other, they outlasted the Monday run's bound).
         targets = sorted({TESTS.get(m[0], INVARIANTS) for m in todo})

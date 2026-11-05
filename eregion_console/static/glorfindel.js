@@ -1940,7 +1940,7 @@ async function doRelease(vmName) {
   _pendingActions.add(vmName); renderInfra();
   try {
     const r = await _post(`/api/action/release/${_seg(vmName)}`);
-    const d = await r.json();
+    const d = await _settled(await r.json());
     if (d.ok) toast('✓ Isolation released — ' + vmName + ' is back online');
     else if (d.capability_gap) toast('✗ ' + d.error, 8000);
     else toast('✗ Release failed: ' + (d.error || _cliTail(d.stdout) || d.stderr || '?'), 10000);
@@ -1976,7 +1976,7 @@ async function doUnblockIp(vmName, ip) {
   _pendingActions.add(vmName); renderInfra();
   try {
     const r = await _post(`/api/action/unblock/${_seg(vmName)}?${new URLSearchParams({ ip })}`);
-    const d = await r.json();
+    const d = await _settled(await r.json());
     if (d.ok && d.not_found) toast(`? No block rule of ${ip} found on ${vmName} — already removed?`, 8000);
     else if (d.ok) toast(`✓ ${ip} unblocked on ${vmName}`);
     else if (d.capability_gap) toast('✗ ' + d.error, 8000);
@@ -2005,7 +2005,7 @@ async function doBlockPromote(vmName, ip) {
   toast(`▶ Extending the block of ${ip} to the subnet…`);
   try {
     const r = await _post(`/api/action/block-promote/${_seg(vmName)}?${new URLSearchParams({ ip })}`);
-    const d = await r.json();
+    const d = await _settled(await r.json());
     if (d.permission_denied) { toast('✗ Cannot execute: read-only credentials'); return; }
     if (d.capability_gap) { toast('✗ ' + d.error, 8000); return; }
     if (d.error) { toast('✗ ' + d.error, 6000); return; }
@@ -2191,7 +2191,7 @@ async function doRevert(vmName) {
   _pendingActions.add(vmName); renderInfra();
   try {
     const r = await _post(`/api/action/revert/${_seg(vmName)}`);
-    const d = await r.json();
+    const d = await _settled(await r.json());
     if (d.ok) toast('✓ Revert complete — ' + vmName + ' is clean');
     else if (d.capability_gap) toast('✗ ' + d.error, 8000);
     else toast('✗ Revert failed: ' + (d.error || _cliTail(d.stdout) || d.stderr || '?'), 10000);
@@ -2204,7 +2204,7 @@ async function doSnapshot(vmName) {
   toast('📸 Snapshot started for ' + vmName + ' — check RSV for job status');
   try {
     const r = await _post(`/api/action/snapshot/${_seg(vmName)}`);
-    const d = await r.json();
+    const d = await _settled(await r.json());
     if (d.error) toast('✗ Snapshot failed: ' + d.error);
     else refreshState();  // triggers re-render with snapshotInProgress badge
   } catch (e) { toast('✗ ' + e.message); }
@@ -2341,12 +2341,45 @@ async function doAck(escId) {
   }
 }
 
+// Why the console's write buttons are greyed, or '' — read-only credentials, or (FS1c, behind
+// EREGION_ACTION_QUEUE=1) the watch not taking the console's gestures now: its signed status
+// missing, stale, read-only, or pinning another key than the console's. Said as the server says it.
+function _writesBlocked() {
+  if (_state?.read_only) return 'Read-only credentials (observe-only) — write actions disabled';
+  const q = _state?.queue;
+  if (q && q.on && !q.ok) return 'Action queue: ' + String(q.why || 'the watch does not take the console\'s gestures');
+  return '';
+}
+
 function _guardReadOnly() {
-  if (_state?.read_only) {
-    toast('✗ Observe-only mode — read-only credentials');
+  const why = _writesBlocked();
+  if (why) {
+    toast('✗ ' + why, 8000);
     return true;
   }
   return false;
+}
+
+// FS1c: a write route of the queue answers at once with its request (`pending`); its receipt is
+// followed here — received, accepted, then the answer the route gave before (ok, error, refused).
+const _QUEUE_SAID = { waiting: 'deposited', received: 'received by the watch', accepted: 'accepted — the watch runs it' };
+async function _settled(d) {
+  if (!d || !d.pending || !d.request) return d;
+  let said = '';
+  // The request's life and the run's (action_queue TAKE_S + RUN_S): past it, said, never a hang.
+  const until = Date.now() + 750 * 1000;
+  for (;;) {
+    if (Date.now() > until) {
+      return { ...d, pending: false, error: `request ${String(d.request).slice(0, 8)} still ${said || 'pending'}: its receipt will say it (GET /api/queue/${String(d.request)})` };
+    }
+    await new Promise(res => setTimeout(res, 1000));
+    let f;
+    try { f = await (await fetch(`/api/queue/${_seg(d.request)}`)).json(); }
+    catch (e) { continue; }
+    if (!f.pending) return { ...d, ...f, pending: false };
+    const now = _QUEUE_SAID[f.state] || String(f.state || '');
+    if (now && now !== said) { said = now; toast('⏳ Request ' + String(d.request).slice(0, 8) + ': ' + now, 4000); }
+  }
 }
 
 // Preventive read-only guard: disable every button that triggers an Azure write,
@@ -2358,12 +2391,13 @@ const _WRITE_HANDLERS = [
   'approveActionAndClose', 'approveScoped', 'snapshotAndClose',
 ];
 function _applyReadOnlyGuards(root) {
-  if (!_state?.read_only) return;
+  const why = _writesBlocked();
+  if (!why) return;
   (root || document).querySelectorAll('button').forEach(b => {
     const action = b.getAttribute('data-on-click') || '';
     if (_WRITE_HANDLERS.includes(action)) {
       b.disabled = true;
-      b.title = 'Read-only credentials (observe-only) — write actions disabled';
+      b.title = why;
     }
   });
 }
@@ -2383,7 +2417,7 @@ async function doApproveAction(escId, vmName, opts) {
     if (opts.scope) qs.set('scope', opts.scope);
     const url = `/api/action/approve/${_seg(escId)}` + (qs.toString() ? `?${qs}` : '');
     const r = await _post(url);
-    const d = await r.json();
+    const d = await _settled(await r.json());
     if (d.permission_denied) { toast('✗ Cannot execute: read-only credentials'); return; }
     // Parameterised action whose param is missing (e.g. pre-fix escalation with no IP) —
     // ask the operator for it and retry, preserving the chosen scope.

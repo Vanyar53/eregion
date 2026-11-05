@@ -211,11 +211,13 @@ def discord_refusal(by: dict, environ=None) -> str:
 
 
 def verify_approved(connector, esc: dict, action: str, resource_id: str, result: dict,
-                    ip: str = "", record=None) -> dict:
+                    ip: str = "", record=None, signal_id: str = "") -> dict:
     """Verify an approved action, as the agent verifies its own, and say it: ``record`` (the
     manual action noted, for the feed — the console's; the watch's receipt says it for the
     queue). The approve route used to execute without either (real run, 2026-10-05). A failed
-    check becomes a verification_failed card — the approval itself resolved the held one."""
+    check becomes a verification_failed card — the approval itself resolved the held one. Its
+    ``signal_id``: the caller's (FS1c: the queue's request, ``queue-<service>-<id>``), else
+    ``approve-<card>``, the console's."""
     from glorfindel import escalations as _esc
     from glorfindel.actions import isolation_verdict
     try:
@@ -239,7 +241,7 @@ def verify_approved(connector, esc: dict, action: str, resource_id: str, result:
     if verification.get("verified") is not True:
         failed = verification.get("verified") is False
         _esc.record(
-            signal_id=f"approve-{esc.get('id', '')}", resource_id=resource_id, action=action,
+            signal_id=signal_id or f"approve-{esc.get('id', '')}", resource_id=resource_id, action=action,
             escalation_type="verification_failed",
             reason=(f"Action '{action}' approuvée et exécutée, mais "
                     + ("la vérification a échoué : " if failed else "elle n'a pas pu être vérifiée : ")

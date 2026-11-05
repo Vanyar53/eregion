@@ -3,7 +3,10 @@
 > **Statut : conception, 04/11 ; décisions de Jonathan le 04/11 (fin du document). FS1a fait le
 > 05/11 (#551, §7) : le format et sa vérification, sans changement de comportement. FS1b fait le
 > 05/11 (#563, §8) : la watch relève la file, la console et le bot y déposent — derrière
-> `EREGION_ACTION_QUEUE=1`, faux par défaut : sans lui, rien ne change.** Ce document
+> `EREGION_ACTION_QUEUE=1`, faux par défaut : sans lui, rien ne change. FS1c fait le 05/11 (#571,
+> §9) : les routes asynchrones, le bot qui dit le reçu, les boutons selon le statut de la watch, les
+> retouches de FS1b, la bascule préparée — le drapeau reste faux par défaut, jusqu'à la mesure au
+> banc.** Ce document
 > prépare FS1, le dernier prérequis de sûreté avant toute VM hors du banc (ROADMAP, « Critères de
 > la 1.0 »).
 >
@@ -556,7 +559,7 @@ En jours de travail effectif, à ±50 %, comme la ROADMAP.
 |---|---|---|---|
 | **FS1a** ✅ 05/11 | Le format et sa vérification : `eregion_core/action_queue.py` (forme, domaines, signature, fraîcheur, nonce, les refus), la clé de service tirée (factorisée avec `watch_key`), la proposition signée sur les cartes par la watch. Tests et mutants. Aucun changement de comportement. | Glorfindel | 2–3 j |
 | **FS1b** ✅ 05/11 | La watch relève la file : le fil, le registre, le rattachement, les gardes rejouées (sorties de la console en code partagé), l'exécution sous `_vm_lock`, les reçus et le statut signés, les cartes critiques. La console et le bot déposent, derrière `EREGION_ACTION_QUEUE=1`. Le nouvel écrivain `runs/bot/`, les montages. | Glorfindel, Console, bot | 4–5 j |
-| **FS1c** | La file par défaut. Les routes d'approbation deviennent asynchrones (`GET /api/queue/<id>`, la page suit le reçu), le bot dit le reçu, les boutons grisés selon le statut de la watch. La mesure au banc avec Jonathan. | Console, bot, Tests | 2–3 j |
+| **FS1c** ✅ 05/11 | Les routes d'écriture asynchrones (`GET /api/queue/<id>`, la page suit le reçu), le bot dit le reçu, les boutons grisés selon le statut de la watch, les retouches de FS1b ; la bascule préparée (§9). La mesure au banc avec Jonathan, puis le défaut : une ligne. | Console, bot, Tests | 2–3 j |
 | **FS1d** | Les identités lectrices : le compose, `docs/operations.md` « Identités Azure », le Terraform de H0 selon le Q3, les rôles de la console et du bot, `GLORFINDEL_OWN_CALLERS`, la préparation (`check_permissions`) qui dit une console qui écrit encore. Les gestes de Jonathan. | H0 (Infra), Glorfindel | 2–3 j + gestes |
 | **FS1e** | Le retrait de l'appel direct, le test de frontière du code, le modèle de menace (§3.3), SID1 resserré. | Glorfindel, Console | 1–2 j |
 | **FS1f** | Selon le Q5 : le mode, les règles approuvées, les acquittements et les verdicts passent par la file ; la console et le bot montent `~/.glorfindel` en lecture seule. | Glorfindel, Console, bot | 3–4 j |
@@ -825,7 +828,79 @@ console et le bot). Chaque point du §7 « Pour FS1b » est tenu :
 - **Les tests sans drapeau** des routes release, revert, unblock, promote et snapshot (celle
   d'approbation l'a déjà).
 
-**Ce qui reste** : FS1c (la file par défaut, les routes asynchrones, les boutons selon le statut, la
-mesure au banc), FS1d (les identités lectrices), FS1e (le retrait de l'appel direct, le modèle de
-menace au « tenu », §3.3), FS1f (les écritures locales), FS1g (l'exécuteur de restore). La machine à
-invariants ne connaît pas encore l'action « demande de la console » (§4.3) : FS1c.
+**Ce qui restait** : FS1c (§9), puis FS1d (les identités lectrices), FS1e (le retrait de l'appel
+direct, le modèle de menace au « tenu », §3.3), FS1f (les écritures locales), FS1g (l'exécuteur de
+restore).
+
+## 9. FS1c, fait (05/11, #571)
+
+**Le drapeau reste faux par défaut.** Sans clés de service épinglées, la console de H0 refuserait
+toute approbation à la release suivante : la bascule est préparée et testée, pas faite. Elle sera
+une ligne (`action_queue.enabled` : `"1"` par défaut, `"0"` pour l'appel direct, le temps d'une
+release), après la mesure au banc (`docs/operations.md`, « La file d'actions signée », l'ordre des
+gestes de Jonathan).
+
+- **Les routes asynchrones** (`eregion_console/api.py`, `_queued`). Une route d'écriture dépose la
+  demande (`action_queue.deposit_request`) et rend aussitôt `{"via": "queue", "request": <id>,
+  "pending": true}` — plus aucun fil de la console n'attend la watch. `GET /api/queue/<id>` dit où
+  elle en est, d'une lecture (`action_queue.follow`) : `waiting`, `received`, `accepted` ; puis, une
+  fois le reçu final, la réponse que la route donnait (`ok`, `result`, `verification`, la promotion et
+  ce qu'elle laisse, le déblocage sans règle, l'instantané et son job ; `error` et `refused`), ou
+  `not_taken` (« the watch did not take the request in 120 s »), `untrusted`, `unknown`. La page suit
+  le reçu (`_settled`, `glorfindel.js`) et dit chaque état.
+- **Le geste noté une fois**, par la lecture qui retire la demande (`withdraw` rend vrai une seule
+  fois) : la page qui suit son reçu, ou l'état de n'importe quelle page (`/api/state` règle chaque
+  demande de la console dont le reçu est venu) — le geste d'une page fermée avant son reçu est noté
+  aussi. Une console redémarrée relit le reçu ; il est gardé 2 h.
+- **Le bot dit le reçu** (`glorfindel/bot.py`, `_queue_revert`) : déposé (un fil, brièvement), puis
+  suivi sans fil tenu (`asyncio.sleep` entre deux lectures) — « déposée », « reçue », « acceptée »,
+  puis ce que dit le reçu final, dans le fil de la VM ; jamais plus longtemps que la vie de la demande
+  et celle d'une exécution (`TAKE_S + RUN_S`), puis dit, la carte ouverte (SEC4c).
+- **Les boutons selon le statut de la watch** (`action_queue.posture`) : avec le drapeau, `/api/state`
+  porte `queue` (`on`, `ok`, `why`), lu dans le `status.json` que la watch signe — jamais dans
+  l'environnement de la console. Grisés, avec la raison, quand le statut manque, n'est pas à croire
+  (d'une autre clé que celle de la watch épinglée), a plus de 60 s, dit la watch en lecture seule, ou
+  n'épingle pas la clé de la console, ou en épingle une autre. Le démarrage de la console le dit aussi.
+
+**Les retouches de la relecture de FS1b** (§8, « Pour FS1c ») :
+- **L'attente bornée** : ce qui reste synchrone d'un geste — le dépôt, et l'appel direct jusqu'à
+  FS1e — passe par un exécuteur à la console (`_gesture`, `GESTURES_IN_FLIGHT = 4`, un sémaphore à
+  sa taille). Au-delà, le geste est refusé aussitôt (503, `busy`), jamais mis en file derrière les
+  autres : une rafale de clics n'occupe plus les fils qui servent les autres routes.
+- **Un reçu d'une autre clé** (la clé de la watch épinglée, `EREGION_WATCH_KEY`) se distingue d'une
+  absence de reçu (`receipt_said`) : `untrusted`, avec les deux empreintes et le geste (épingler la
+  nouvelle clé de la watch), jamais « la watch n'a pas pris la demande ». De même pour le statut.
+- **`proposal_consumed`** dit « déjà jugée, faite ou échouée », et quoi faire après un échec : une
+  nouvelle détection (une nouvelle proposition), ou la CLI.
+- **Le `signal_id`** d'une carte `verification_failed` née de la file est celui de sa demande,
+  `queue-<service>-<id>` (`approval.verify_approved(…, signal_id=)`) ; celle de l'appel direct de la
+  console garde `approve-<carte>`.
+- **Les tests sans drapeau** de release, revert, unblock, promote et snapshot : chaque route appelle
+  comme avant, ne dépose rien.
+- **Le bot hors de `runs/console`** : ses gestes vont dans `runs/bot/` (`manual_actions.jsonl` ; la
+  CLI qu'il lance porte `EREGION_RUNS_WRITER=bot`, `runs_layout.hand`), et il ne monte plus
+  `runs/console`. La console monte `runs/bot` en lecture seule ; le fil, les levées de la vue
+  d'ensemble et l'analyse de confinement lisent les deux mains (`runs_layout.HANDS`). Un bot pris ne
+  peut plus remplacer ni noyer les demandes de la console : le modèle de menace passe ce point à fermé.
+
+**La bascule préparée** :
+- `make glorfindel-host-queue-keys` tire la clé de chaque service dans son conteneur s'il n'en a pas
+  (`python -m eregion_core.action_queue pin <service> --draw`, le code du service), sans le
+  drapeau : les clés d'abord, le drapeau ensuite. Le bot arrêté : sa clé manque, et c'est dit.
+- `host_env.py` ne recopie jamais `EREGION_ACTION_QUEUE` ni `EREGION_QUEUE_KEYS` de
+  l'environnement de l'opérateur (ce sont les clés de ce poste, H0 a les siennes), et le dit ;
+  `--check` (lancé par `make glorfindel-host-push`) refuse le drapeau sans la clé de la console, ou
+  sans celle du bot quand il tourne (`DISCORD_BOT_TOKEN`), et un drapeau autre que « 1 ».
+- La watch dit à son démarrage chaque clé qui manque ou qui est fausse (`action_queue.pin_problems`,
+  les mêmes mots que `--check`) ; la console, ce que le statut de la watch dit de la sienne.
+
+**Tests** : `tests/unit/test_action_queue_async.py` (la route qui rend aussitôt, le reçu suivi, le
+geste noté une fois, une page fermée, un refus et un échec, `not_taken`, `unknown`, un reçu d'une
+autre clé, la posture et ses refus, la page, les créneaux, les routes sans drapeau, la carte née de
+la file, le bot qui dit le reçu, le bot hors de `runs/console`, `--draw`, `--check`, le défaut
+faux) ; mutants M4040–M4069 (`scripts/mutants/FS1c.py`).
+
+**Ce qui reste** : la mesure au banc avec Jonathan, puis le défaut (une ligne) ; FS1d (les
+identités lectrices), FS1e, FS1f, FS1g. La machine à invariants ne connaît pas encore l'action
+« demande de la console » (§4.3) : laissée à FS1d, avec la propriété « toute écriture par
+l'identité de la watch » que les identités lectrices rendent mesurable.

@@ -329,6 +329,14 @@ quelque forme que ce soit, refuse — il ne lève jamais. Les clés épinglées 
 dans l'environnement de la watch (`make queue-keys`, `docs/operations.md`). Tests :
 `tests/unit/test_action_queue_watch.py` ; mutants M3975–M4014.
 
+**FS1c (#571)** : la file reste derrière son drapeau, **faux par défaut** — la bascule est préparée,
+pas faite (`docs/operations.md`, « La file d'actions signée »). Les routes de la console et le
+Revert du bot ne l'attendent plus : ils déposent, puis suivent le reçu (`action_queue.follow`). Une
+carte `verification_failed` née de la file porte le `signal_id` de sa demande
+(`queue-<service>-<id>`, celui du reçu), plus `approve-<carte>`. Au démarrage, la watch dit chaque
+clé qui manque ou qui est fausse (`action_queue.pin_problems`, les mots de `host_env.py --check`).
+Tests : `tests/unit/test_action_queue_async.py` ; mutants M4040–M4069.
+
 L'escalade porte `action_params` (dict, vide par défaut) pour les actions paramétrées — ex. `block_suspicious_ip` → `{"ip": ...}` extrait du signal via `_extract_suspicious_ip` (même source que `execute_action`). Permet à la console « Approve & execute » d'exécuter en 1 clic une action qui n'est pas à `resource_id` seul. Commit `9583ec6`.
 
 **Verdict d'observation** (`glorfindel verdict`, boutons ✓ Right / ✗ Wrong / ? Unsure de TO JUDGE dans la console, `POST /api/escalations/<id>/verdict`) : `verdict` (`right` / `wrong` / `unsure`), `verdict_at`, `verdict_note` sur la carte, indépendants de l'acquittement. La carte porte aussi `rule_name` (la règle du RulePoller ; pour les anciennes cartes, lue dans `signal_id`). `glorfindel report` / `GET /api/report` : cartes de décision seulement (ni posture, ni règle proposée, ni préparation, ni TTL, ni alerte de réaffirmation), une carte comptée une fois, taux de recommandations disruptives (isoler, bloquer) fausses parmi les jugées. Guide : `docs/observation.md`.

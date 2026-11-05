@@ -22,12 +22,15 @@ console = Console()
 
 
 def _record_manual_action(action: str, resource_id: str, outcome: dict) -> None:
-    """Append a manual operator action to runs/console/manual_actions.jsonl for the live feed —
-    the directory of the operator's hand (the console, this CLI, the bot), SEC18."""
+    """Append a manual operator action to manual_actions.jsonl for the live feed — in the directory
+    of the operator's hand (SEC18): runs/console (the console, this CLI), or runs/bot when the bot
+    runs it (FS1c, ``EREGION_RUNS_WRITER=bot``: the bot never writes the console's directory)."""
     import json as _json
     from datetime import datetime, timezone as _tz
     from eregion_core import runs_layout
     runs = runs_layout.dir_of(runs_layout.CONSOLE)
+    if runs_layout.hand() != runs_layout.CONSOLE:      # FS1c: the bot's hand, its own directory
+        runs = runs_layout.dir_of(runs_layout.hand())
     record = {
         "timestamp": datetime.now(_tz.utc).isoformat(),
         "action": action,

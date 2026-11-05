@@ -638,12 +638,14 @@ def read_cards(path: Path | None = None) -> list[dict]:
 
 def read_liftings(runs_dir: Path, since: float = 0.0) -> list[tuple]:
     """When containments were lifted, from the files: the operator's manual actions
-    (``runs/console/manual_actions.jsonl``), the watch's own releases (the debug files of
+    (``runs/console/manual_actions.jsonl``, and the bot's, ``runs/bot/``), the watch's own releases (the debug files of
     ``runs/glorfindel/`` written since ``since``, a minute of slack) — ``(resource id, epoch, what
     it lifts)``. Each from its writer's directory beside ``runs_dir`` (SEC18)."""
     out = []
     watch = runs_layout.beside(runs_dir, runs_layout.GLORFINDEL)
     paths = [runs_layout.beside(runs_dir, runs_layout.CONSOLE) / "manual_actions.jsonl", *sorted(watch.glob("*_debug.jsonl"))]
+    # FS1c: the bot's hand too — its gestures in its own directory, never the console's.
+    paths.insert(1, runs_layout.beside(runs_dir, runs_layout.BOT) / "manual_actions.jsonl")
     for path in paths:
         try:   # SEC16: as the watch reads runs/ — a regular file, bounded, never blocking
             if channel_reader.lstat_regular(path).st_mtime < since - 60:

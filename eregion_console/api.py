@@ -550,6 +550,12 @@ async def _have_a_queue_key() -> None:
         return
     print(f"  action queue: the console's key {signer.fingerprint} — pin it at the watch "
           f"({_aq.KEYS_ENV}, make queue-keys).", flush=True)
+    # FS1c: what the watch says of it now — a key it does not pin is said at the start, not at
+    # the first click (the write buttons are greyed, and say why, until it does).
+    from eregion_console import action_requests
+    held = action_requests.posture(root=_RUNS)
+    if not held["ok"]:
+        print(f"  ✗ action queue: {held['why']}", flush=True)
 
 
 def _say_retired() -> None:
@@ -846,6 +852,9 @@ async def state() -> dict:
         "autonomy_holds": autonomy_holds,
         "autonomy_default": autonomy_default,
         "read_only": read_only,
+        # FS1c: behind EREGION_ACTION_QUEUE=1, whether the watch takes the console's gestures now
+        # (its signed status) — the page greys its write buttons by it, and says why.
+        "queue": await asyncio.to_thread(_queue_state),
         "capability": capability,
         "now": now.isoformat(),
     }
@@ -1054,9 +1063,10 @@ async def feed_history() -> dict:
 # How often the live feed reads runs/ again, and holds its session again (SEC10).
 _FEED_POLL_S = 2.0
 # SEC18: each kind of line from the one directory of the writer that writes it — an injector's
-# signal from Annatar's, a cycle from the watch's, an operator's gesture from the console's.
+# signal from Annatar's, a cycle from the watch's, an operator's gesture from the console's, or
+# from the bot's (FS1c: the CLI its buttons run writes runs/bot, never runs/console).
 _FEED_FILES = (("annatar", "*_signals.jsonl", "signal"), ("glorfindel", "*_debug.jsonl", "action"),
-               ("console", "manual_actions.jsonl", "action"))
+               ("console", "manual_actions.jsonl", "action"), ("bot", "manual_actions.jsonl", "action"))
 
 
 def _feed_start() -> dict[Path, tuple[int, int | None, bool]]:
@@ -1174,29 +1184,158 @@ def _queue_on() -> bool:
     return enabled()
 
 
+# FS1c: what remains synchronous of a gesture — the queue's deposit, and the direct call until
+# FS1e (a release of a multi-NIC VM takes minutes) — runs in an executor of its own, bounded: a
+# burst of clicks never takes the threads that serve every other route. Past GESTURES_IN_FLIGHT
+# at once, a gesture is refused at once, and said (503) — never queued behind the others.
+GESTURES_IN_FLIGHT = 4
+import concurrent.futures as _futures  # noqa: E402
+import functools as _functools  # noqa: E402
+import threading as _threading  # noqa: E402
+
+_GESTURE_POOL = _futures.ThreadPoolExecutor(max_workers=GESTURES_IN_FLIGHT, thread_name_prefix="console-gesture")
+_GESTURE_SLOTS = _threading.BoundedSemaphore(GESTURES_IN_FLIGHT)
+
+
+class GesturesBusy(Exception):
+    """Every slot of the console's gestures is taken: refused at once (FS1c)."""
+
+
+@app.exception_handler(GesturesBusy)
+async def _gestures_busy(_request, exc: GesturesBusy):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=503, content={"error": (
+        f"{GESTURES_IN_FLIGHT} gestures already in flight in this console: try again once one ends"),
+        "busy": True})
+
+
+async def _gesture(fn, *args, **kwargs):
+    """``fn(*args, **kwargs)`` in the gestures' own executor — or GesturesBusy when its slots are
+    all taken (FS1c)."""
+    if not _GESTURE_SLOTS.acquire(blocking=False):
+        raise GesturesBusy()
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _GESTURE_POOL, _functools.partial(fn, *args, **kwargs))
+    finally:
+        _GESTURE_SLOTS.release()
+
+
 async def _queued(verb: str, resource_id: str, *, ip: str = "", scope: str = "", card=None,
-                  approved: str = "", extra: dict | None = None) -> dict:
+                  extra: dict | None = None) -> dict:
     """FS1b, behind EREGION_ACTION_QUEUE=1: the gesture deposited as a request signed by the
-    console's key, the watch's receipt awaited and answered as the direct call answered
-    (eregion_console/action_requests.py). The gesture noted in runs/console for the feed, from the
-    receipt, as the direct call notes it."""
+    console's key (eregion_console/action_requests.py). FS1c: never awaited — the route answers at
+    once with the request's id (``pending``); the page follows its receipt by ``GET
+    /api/queue/<id>``, and no thread of the console waits for the watch."""
     from eregion_console import action_requests
     by = {"via": "console-token", "session": _SESSION_TAG.get()}
-    asked = await asyncio.to_thread(action_requests.ask, verb, resource_id, root=_RUNS, by=by, ip=ip,
-                                    scope=scope, card=card)
-    out = action_requests.answer(asked, **(extra or {}))
-    receipt = asked.get("receipt") or {}
-    if receipt.get("state") in ("done", "failed") and verb != "snapshot":
-        try:
-            from glorfindel.cli import _record_manual_action
-            from glorfindel.queue_watch import ACTION_OF_VERB
-            _record_manual_action(ACTION_OF_VERB[verb], resource_id, {
-                **(receipt.get("result") or {}), **(receipt.get("verification") or {}),
-                "ip": ip, "via": "queue", "request": asked.get("request", ""),
-                **({"approved_escalation": approved} if approved else {})})
-        except Exception:
-            pass
+    asked = await _gesture(action_requests.deposit, verb, resource_id, root=_RUNS, by=by, ip=ip,
+                           scope=scope, card=card)
+    if "error" in asked:
+        return {"via": "queue", "request": "", "error": asked["error"]}
+    return {"via": "queue", "request": asked["request"], "state": "deposited", "pending": True,
+            "follow": f"/api/queue/{asked['request']}", **(extra or {})}
+
+
+# FS1c: the answers of the requests settled — read once their receipt is final, by whoever reads
+# it first (the page that follows it, or any page's state): the gesture is noted then, once.
+_SETTLED: "dict[str, dict]" = {}
+_SETTLED_KEEP = 256
+
+
+def _note_queued(receipt: dict) -> None:
+    """A gesture of the queue noted in runs/console for the feed and the indicators, from the
+    receipt — as the direct call notes it."""
+    if receipt.get("state") not in ("done", "failed") or receipt.get("verb") == "snapshot":
+        return
+    try:
+        from glorfindel.cli import _record_manual_action
+        from glorfindel.queue_watch import ACTION_OF_VERB
+        _record_manual_action(ACTION_OF_VERB[receipt["verb"]], receipt.get("resource_id") or "", {
+            **(receipt.get("result") or {}), **(receipt.get("verification") or {}),
+            "ip": receipt.get("ip") or "", "via": "queue", "request": receipt.get("request", ""),
+            **({"approved_escalation": receipt["card"]} if receipt.get("card") else {})})
+    except Exception:
+        pass
+
+
+def _queue_answer(followed: dict) -> dict:
+    """What a route used to answer, from its receipt (``action_requests.answer``), with what the
+    page reads of each gesture: a promotion's « what it leaves out », an unblock that found no
+    rule, a snapshot's job."""
+    from eregion_console import action_requests
+    out = action_requests.answer(followed)
+    r = followed.get("receipt") or {}
+    verb, result = r.get("verb"), (r.get("result") or {}) if isinstance(r.get("result"), dict) else {}
+    out.update(state=followed.get("state", ""), verb=verb or "")
+    if verb in action_requests.ACTION_OF_CARD_VERB and r.get("card"):
+        out["action"] = action_requests.ACTION_OF_CARD_VERB[verb]
+    if verb == "block_ip":
+        out.update(ip=r.get("ip", ""), scope=r.get("scope", ""))
+    elif verb == "promote_block":
+        out.update(ip=r.get("ip", ""), scope="subnet")
+        if out.get("ok"):
+            said = _promotion_said(result)
+            out.update(said=said, whole=not said)
+    elif verb == "unblock_ip":
+        out["ip"] = r.get("ip", "")
+        if out.get("ok") and result.get("status") == "not_found":
+            out["not_found"] = True
+    elif verb == "snapshot" and out.get("ok"):
+        out.update(status="started", job_id=result.get("job_id"), resource_id=r.get("resource_id", ""))
     return out
+
+
+def _settle(request_id: str) -> dict:
+    """Where the console's request stands (``action_requests.follow``) — once final, answered as
+    its route answered, the request withdrawn and the gesture noted, by this read alone."""
+    from eregion_console import action_requests
+    if request_id in _SETTLED:
+        return _SETTLED[request_id]
+    followed = action_requests.follow(request_id, root=_RUNS)
+    if not followed["final"]:
+        return {"via": "queue", "request": followed["request"], "state": followed["state"], "pending": True}
+    out = _queue_answer(followed)
+    if action_requests.withdraw(request_id, root=_RUNS) and "receipt" in followed:
+        _note_queued(followed["receipt"])
+    if followed["request"]:
+        _SETTLED[request_id] = out
+        while len(_SETTLED) > _SETTLED_KEEP:
+            _SETTLED.pop(next(iter(_SETTLED)))
+    return out
+
+
+def _settle_waiting() -> int:
+    """Every request of the console still in its directory, settled when final — the gestures of a
+    page closed before its receipt are noted all the same. How many settled now."""
+    from eregion_console import action_requests
+    n = 0
+    for request_id in action_requests.waiting(root=_RUNS):
+        if request_id not in _SETTLED and not _settle(request_id).get("pending"):
+            n += 1
+    return n
+
+
+def _queue_state() -> dict:
+    """FS1c: the queue as the page shows it — off (the flag unset: the direct call), or on and
+    whether the watch takes the console's gestures now, read from the status it signs (never from
+    the console's environment); the requests whose receipt came since settled."""
+    if not _queue_on():
+        return {"on": False, "ok": True, "why": ""}
+    from eregion_console import action_requests
+    try:
+        _settle_waiting()
+    except Exception:
+        pass
+    return {"on": True, **action_requests.posture(root=_RUNS)}
+
+
+@app.get("/api/queue/{request_id}")
+async def queue_request(request_id: str) -> dict:
+    """FS1c: where a request of the console stands — ``waiting``, ``received``, ``accepted``; then
+    as its route answered (``ok``, ``result``, ``verification``; ``error`` and ``refused``), or
+    ``not_taken``, ``untrusted`` (a receipt not signed by the watch's pinned key), ``unknown``."""
+    return await asyncio.to_thread(_settle, request_id)
 
 
 @app.post("/api/action/release/{vm_name}")
@@ -1207,7 +1346,7 @@ async def action_release(vm_name: str) -> dict:
         return {"error": f"No active isolation found for {vm_name}"}
     if _queue_on():
         return await _queued("release_isolation", resource_id)
-    result = await asyncio.to_thread(
+    result = await _gesture(
         subprocess.run,
         [_bin(), "release", resource_id, "--yes"],
         capture_output=True, text=True, timeout=600,   # a multi-NIC release takes minutes; cut midway = half released
@@ -1223,7 +1362,7 @@ async def action_revert(vm_name: str) -> dict:
         return {"error": f"No active actions found for {vm_name}"}
     if _queue_on():
         return await _queued("reset", resource_id)
-    result = await asyncio.to_thread(
+    result = await _gesture(
         subprocess.run,
         [_bin(), "reset", resource_id, "--yes"],
         capture_output=True, text=True, timeout=600,   # a multi-NIC release takes minutes; cut midway = half released
@@ -1454,9 +1593,9 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
         connector = AzureConnector(dry_run=False)
 
         if action == "isolate_vm":
-            result = await asyncio.to_thread(connector.isolate_vm, resource_id)
+            result = await _gesture(connector.isolate_vm, resource_id)
             _esc.resolve(esc_id)
-            verification = await asyncio.to_thread(
+            verification = await _gesture(
                 _verify_approved, connector, esc, action, resource_id, result)
             return {"ok": True, "action": action, "result": result, "verification": verification}
 
@@ -1472,7 +1611,7 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
                 _esc.resolve(esc_id)
                 # The CLI release checks only BEFORE removing the rules; confirm after,
                 # as for an approved isolation (validation run, 2026-10-05).
-                resp["verification"] = await asyncio.to_thread(
+                resp["verification"] = await _gesture(
                     _verify_approved, connector, esc, action, resource_id, {"status": "released"})
             return resp
 
@@ -1495,11 +1634,11 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
                 )}
             block_scope = scope if scope in ("vm", "subnet") else "vm"
             threat_port = (esc.get("action_params") or {}).get("port")
-            result = await asyncio.to_thread(
+            result = await _gesture(
                 connector.block_suspicious_ip, block_ip, resource_id, block_scope,
                 False, threat_port)
             _esc.resolve(esc_id)
-            verification = await asyncio.to_thread(
+            verification = await _gesture(
                 _verify_approved, connector, esc, action, resource_id, result, block_ip)
             return {"ok": True, "action": action, "ip": block_ip,
                     "scope": block_scope, "result": result, "verification": verification}
@@ -1507,6 +1646,8 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
         else:
             return {"error": f"Action '{action}' non supportée par la console — CLI : glorfindel respond {resource_id}"}
 
+    except GesturesBusy:      # FS1c: refused at once, said (503) — never told as an Azure error
+        raise
     except PermissionError as e:
         return {"error": str(e), "permission_denied": True}
     except Exception as e:
@@ -1527,7 +1668,7 @@ async def _approve_queued(esc: dict, ip: str, scope: str) -> dict:
         return {"error": _aq.REFUSALS["proposal_missing"], "refused": "proposal_missing", "via": "queue"}
     card = (esc["id"], _aq.digest(proposal))
     if verb != "block_ip":
-        return await _queued(verb, resource_id, card=card, approved=esc["id"], extra={"action": action})
+        return await _queued(verb, resource_id, card=card, extra={"action": action})
     block_ip = ip or esc.get("ip") or (esc.get("action_params") or {}).get("ip") or ""
     if not block_ip:
         return {"needs_ip": True, "error": (
@@ -1535,7 +1676,7 @@ async def _approve_queued(esc: dict, ip: str, scope: str) -> dict:
             f"or run: glorfindel block <ip> {resource_id} --yes")}
     block_scope = scope if scope in ("vm", "subnet") else "vm"
     # The proposal's address is the card's: the request names it, or the human's when it has none.
-    return await _queued(verb, resource_id, ip=block_ip, scope=block_scope, card=card, approved=esc["id"],
+    return await _queued(verb, resource_id, ip=block_ip, scope=block_scope, card=card,
                          extra={"action": action, "ip": block_ip, "scope": block_scope})
 
 
@@ -1597,20 +1738,18 @@ async def action_block_promote(vm_name: str, ip: str = "") -> dict:
     if block.get("scoped", True) is False:
         return {"error": f"{block['ip']} is already blocked for the whole subnet ({block.get('nsg', '?')})"}
     if _queue_on():
-        out = await _queued("promote_block", block["resource_id"], ip=block["ip"], scope="vm",
-                            extra={"ip": block["ip"], "scope": "subnet"})
-        if out.get("ok"):
-            said = _promotion_said(out.get("result") or {})
-            out.update(said=said, whole=not said)
-        return out
+        return await _queued("promote_block", block["resource_id"], ip=block["ip"], scope="vm",
+                             extra={"ip": block["ip"], "scope": "subnet"})
 
     try:
         connector = AzureConnector(dry_run=False)
-        result = await asyncio.to_thread(
+        result = await _gesture(
             connector.block_suspicious_ip, block["ip"], block["resource_id"], "subnet", True)
         said = _promotion_said(result)
         return {"ok": True, "ip": block["ip"], "scope": "subnet", "result": result,
                 "said": said, "whole": not said}
+    except GesturesBusy:      # FS1c: refused at once, said (503)
+        raise
     except PermissionError as e:
         return {"error": str(e), "permission_denied": True}
     except Exception as e:
@@ -1626,11 +1765,8 @@ async def action_unblock(vm_name: str, ip: str = "") -> dict:
     if not block:
         return {"error": why}
     if _queue_on():
-        out = await _queued("unblock_ip", block["resource_id"], ip=block["ip"], extra={"ip": block["ip"]})
-        if out.get("ok") and (out.get("result") or {}).get("status") == "not_found":
-            out["not_found"] = True
-        return out
-    result = await asyncio.to_thread(
+        return await _queued("unblock_ip", block["resource_id"], ip=block["ip"], extra={"ip": block["ip"]})
+    result = await _gesture(
         subprocess.run,
         [_bin(), "unblock", "--yes", "--", block["ip"], block["resource_id"]],
         capture_output=True, text=True, timeout=600,   # one rule pair per NIC; cut midway = half unblocked
@@ -1658,10 +1794,7 @@ async def action_snapshot(vm_name: str) -> dict:
     if not vault:
         return {"error": NO_VAULT_MSG}
     if _queue_on():
-        out = await _queued("snapshot", resource_id)
-        if out.get("ok"):
-            out.update(status="started", job_id=(out.get("result") or {}).get("job_id"), resource_id=resource_id)
-        return out
+        return await _queued("snapshot", resource_id, extra={"resource_id": resource_id})
 
     from glorfindel.actions import AzureConnector
     from glorfindel.jobs import start_snapshot as _start_snapshot
@@ -1670,7 +1803,7 @@ async def action_snapshot(vm_name: str) -> dict:
         # vault_rg: a central vault lives in its own RG (not the VM's).
         return _start_snapshot(resource_id, AzureConnector(dry_run=False), vault, vault_rg=vault_rg)
 
-    job = await asyncio.to_thread(_start)
+    job = await _gesture(_start)
     return {"status": "started", "job_id": job["job_id"], "resource_id": resource_id}
 
 
@@ -2807,7 +2940,19 @@ def _manual_liftings(since: float) -> list:
         lift = containment.lifting_of(rec)
         if lift is not None and lift[1] is not None and lift[1] >= since:
             out.append(lift)
+    # FS1c: the bot's lifts too (its Revert, the CLI its buttons run), from its own directory.
+    out += [lift for line in runs_reader.lines(_own("bot") / "manual_actions.jsonl")
+            if (lift := _lift_since(containment, line, since)) is not None]
     return out
+
+
+def _lift_since(containment, line: str, since: float):
+    """A line of a hand's gestures as a lift of a containment since ``since``, else None."""
+    try:
+        lift = containment.lifting_of(json.loads(line))
+    except ValueError:
+        return None
+    return lift if (lift is not None and lift[1] is not None and lift[1] >= since) else None
 
 
 @app.get("/api/indicators")

@@ -58,6 +58,10 @@ x-env: &env
   EREGION_ANALYSIS_MODEL: ${EREGION_ANALYSIS_MODEL:-}
   # Review 6 : borne d'un appel au modèle d'analyse, par tentative (vide → 300 s).
   EREGION_ANALYSIS_TIMEOUT_S: ${EREGION_ANALYSIS_TIMEOUT_S:-}
+  # FS1b (#563) : la file d'actions signée — « 1 » seulement : la console et le bot y déposent
+  # leurs gestes signés, la watch les relève et les juge. Vide (le défaut) : rien ne change, l'appel
+  # direct reste et aucune file n'est lue (docs/design/file-actions-signee.md).
+  EREGION_ACTION_QUEUE: ${EREGION_ACTION_QUEUE:-}
   ORT_LOGGING_LEVEL_DEFAULT: "3"
 
 # V-17 (SEC7) : un principal par service, au moindre droit (docs/operations.md, « Identités Azure ») :
@@ -141,14 +145,24 @@ services:
     security_opt: ["no-new-privileges:true"]
     environment:
       <<: [*env, *azure, *models, *webhook]
+      # FS1b : les clés publiques de la console et du bot, épinglées ici seulement (make queue-keys,
+      # make glorfindel-host-queue-keys) — une demande de la file n'est crue que signée par celle de
+      # son répertoire. Et la copie des autorisés du bot (aucun secret) : la watch relit l'humain
+      # qu'une demande du bot nomme.
+      EREGION_QUEUE_KEYS: ${EREGION_QUEUE_KEYS:-}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
+      DISCORD_ALLOWED_ROLES: ${DISCORD_ALLOWED_ROLES:-}
     volumes:
       # SEC18 : son répertoire en écriture (ses cycles ; sur H0, ce qu'elle tire du canal et les
-      # rapports de campagne) ; ceux des injecteurs en lecture seule (leurs signaux, leurs fenêtres,
-      # leurs rapports), celui de la console aussi (les levées de l'opérateur, pour l'analyse).
+      # rapports de campagne ; FS1b : ses reçus de la file et son statut, queue/) ; ceux des
+      # injecteurs en lecture seule (leurs signaux, leurs fenêtres, leurs rapports), celui de la
+      # console aussi (les levées de l'opérateur, pour l'analyse ; ses demandes de la file), celui du
+      # bot (ses demandes de la file, FS1b).
       - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel
       - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro
       - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro
       - ${EREGION_RUNS:-./runs}/console:/app/runs/console:ro
+      - ${EREGION_RUNS:-./runs}/bot:/app/runs/bot:ro
       # Le canal local des verdicts (sans canal retour du stockage) : le verdict d'un run, jamais le
       # raisonnement — ce que le rouge lit du bleu (SEC18, eregion_core/watch_channel.py).
       - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts
@@ -164,6 +178,9 @@ services:
       # SEC19 (N-03) : la clé de la watch, tirée à son premier démarrage — monté ici seulement : ni
       # la console, ni le bot, ni les injecteurs (eregion_core/watch_key.py).
       - ${HOME}/.eregion/watch-key:/root/.eregion/watch-key
+      # FS1b : le registre de la file (les nonces vus, les propositions exécutées) — monté ici
+      # seulement, à côté de sa clé : jamais sous ~/.glorfindel ni runs/, que d'autres écrivent.
+      - ${HOME}/.eregion/watch-queue:/root/.eregion/watch-queue
       - ${EREGION_CONFIG:-./glorfindel-config.yaml}:/app/glorfindel-config.yaml:ro
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
     develop:
@@ -209,9 +226,15 @@ services:
       # runs/annatar en lecture seule : le moment d'un restore d'exercice (son attack_started).
       - ${EREGION_RUNS:-./runs}/console:/app/runs/console
       - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro
+      # FS1b : son propre répertoire, un écrivain à lui — ses demandes de la file d'actions, signées
+      # par sa clé ; et des reçus de la watch, ce seul sous-répertoire, en lecture seule.
+      - ${EREGION_RUNS:-./runs}/bot:/app/runs/bot
+      - ${EREGION_RUNS:-./runs}/glorfindel/queue:/app/runs/glorfindel/queue:ro
       - ./glorfindel/rules:/app/glorfindel/rules:ro
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
+      # FS1b : sa clé de la file d'actions, tirée à son premier démarrage — monté ici seulement.
+      - ${HOME}/.eregion/bot:/root/.eregion/bot
       - ${EREGION_CONFIG:-./glorfindel-config.yaml}:/app/glorfindel-config.yaml:ro
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
     depends_on:

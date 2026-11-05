@@ -290,14 +290,10 @@ def release(resource_id: str, dry_run: bool, yes: bool):
     console.print(f"  Dry-run  : {dry_run}\n")
 
     if not dry_run:
-        # "Nothing to release" means NO NIC still carries an isolation rule. The former
-        # test (`not verify_isolation()`) also matched a PARTIALLY isolated VM — one NIC
-        # still cut off — and then cleared its state, leaving the rule orphaned.
-        verification = connector.verify_release(resource_id)
-        if verification.get("verified"):
-            # NSG already clean — still clear any stale state file so the console updates
-            from glorfindel.actions import _clear_isolation_state
-            _clear_isolation_state(resource_id)      # by id: two VMs may share a name
+        # "Nothing to release" means NO NIC still carries an isolation rule (glorfindel/gestures.py,
+        # FS1b: the watch's request of the queue runs the same code).
+        from glorfindel.gestures import release_needed
+        if not release_needed(connector, resource_id):
             console.print("[yellow]No active isolation found on NSG — state cleared.[/yellow]")
             return
 
@@ -878,6 +874,18 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # yet to act (FS1b); the console and the bot keep their direct call.
     from glorfindel import escalations as _escalations
     _escalations.sign_proposals(_signer)
+    # FS1b (#563): behind EREGION_ACTION_QUEUE=1 only, the watch picks the signed action queue up
+    # — runs/console/queue, runs/bot/queue — in a thread of its own, never this loop nor the
+    # heartbeat (glorfindel/queue_watch.py). Without the flag, nothing is read.
+    from glorfindel import queue_watch as _queue_watch
+
+    def _say_queue(text: str) -> None:
+        with _output_lock:
+            console.print(f"[cyan]{_esc_markup(text)}[/cyan]")
+    try:
+        _queue_watch.start(AzureConnector(dry_run=dry_run), _signer, say=_say_queue, root=runs_dir)
+    except Exception as exc:   # the watch goes on without its queue, and says it
+        console.print(f"[red]File d'actions non relevée :[/red] {_esc_markup(str(exc))}")
 
     def _write_heartbeat() -> None:
         at = datetime.now(timezone.utc)
@@ -1969,23 +1977,18 @@ def _do_reset_from_azure(resource_id: str, yes: bool, dry_run: bool) -> None:
 
 
 def _do_reset(resource_id: str, yes: bool, dry_run: bool, from_azure: bool = False) -> None:
-    """Shared implementation for reset/revert."""
-    from glorfindel.actions import _isolation_unreadable, active_blocks, active_isolations, AzureConnector
+    """Shared implementation for reset/revert — what it lifts and how, glorfindel/gestures.py
+    (FS1b: the watch's request of the queue runs the same code)."""
+    from glorfindel.actions import AzureConnector
+    from glorfindel.gestures import reset_apply, reset_targets
 
     resource_id = _resolve_resource_id(resource_id)
     if from_azure:
         _do_reset_from_azure(resource_id, yes, dry_run)
         return
-    # Case-insensitive match: Azure ARM IDs are case-insensitive but Python == is not.
-    # A case mismatch left an orphan isolation state file ("Nothing to reset" while
-    # `list` still showed ISOLATED). release_isolation clears the local file even when
-    # Azure has no matching rule, so matching here is enough to recover.
-    rid_lower = resource_id.lower()
-    isolations = [i for i in active_isolations() if i.get("resource_id", "").lower() == rid_lower]
-    blocks = [b for b in active_blocks() if b.get("resource_id", "").lower() == rid_lower]
-    # Its isolation state unreadable is not "nothing to reset": the release says what it can't
-    # verify, the file kept (I3U, #440).
-    isolations = isolations or ([{"resource_id": resource_id}] if _isolation_unreadable(resource_id) else [])
+    # Case-insensitive match; release_isolation clears the local file even when Azure has no
+    # matching rule, so matching here is enough to recover.
+    isolations, blocks = reset_targets(resource_id)
 
     if not isolations and not blocks:
         console.print(f"[green]Nothing to reset on {resource_id.split('/')[-1]}.[/green]")
@@ -2011,15 +2014,7 @@ def _do_reset(resource_id: str, yes: bool, dry_run: bool, from_azure: bool = Fal
         click.confirm("\nProceed?", abort=True)
 
     connector = AzureConnector(dry_run=dry_run)
-    leftovers: list[str] = []
-    if isolations:
-        r = connector.release_isolation(resource_id)
-        console.print(f"  [cyan]release_isolation[/cyan] → {r.get('status', '?')}")
-        leftovers += r.get("failed", [])
-    for b in blocks:
-        r = connector.unblock_ip(b["ip"], resource_id)
-        console.print(f"  [cyan]unblock {b['ip']}[/cyan] → {r.get('status', '?')}")
-        leftovers += r.get("failed", [])
+    leftovers = reset_apply(connector, resource_id, isolations, blocks, say=console.print)
 
     if leftovers:
         # Say what is still in place instead of "is clean": these rules still cut the

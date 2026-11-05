@@ -159,7 +159,7 @@ DOCKER_GLORFINDEL_WATCH = $(WATCH_KEY_DIR) && $(RUNS_DIRS) && $(GLORFINDEL_AZURE
 	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-fault-rate glorfindel-host-known celebrimbor-workload \
 	orodruin-init orodruin-watch-guard orodruin-watch-principals orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
 	orodruin-stop orodruin-start orodruin-update orodruin-kill orodruin-down orodruin-ssh orodruin-exercise \
-	orodruin-known orodruin-fingerprint watch-key glorfindel-host-watch-key harness-key harness-sign harness-verify \
+	orodruin-known orodruin-fingerprint watch-key glorfindel-host-watch-key queue-keys glorfindel-host-queue-keys harness-key harness-sign harness-verify \
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run campaign-containment fault-rate \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
@@ -269,6 +269,7 @@ help:
 	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive ; l'image, et la dernière release"
 	@echo "  make orodruin-fingerprint                    L'empreinte de sa clé d'hôte, lue par Azure (ORO_SSH_FINGERPRINT)"
 	@echo "  make watch-key / glorfindel-host-watch-key   La clé publique de la watch (ici / H0), à épingler : EREGION_WATCH_KEY (SEC19)"
+	@echo "  make queue-keys / glorfindel-host-queue-keys Les clés de la console et du bot (ici / H0), à épingler chez la watch : EREGION_QUEUE_KEYS (FS1b)"
 	@echo "  make harness-key / harness-sign              La clé de l'attestation (une fois) / signer requirements/harness.json (SEC19)"
 	@echo "  make orodruin-stop / orodruin-start          Désalloue / rallume la VM (entre les sessions)"
 	@echo "  make orodruin-start [NO_UPDATE=1]            …et la met à jour : la dernière release, vérifiée, si son image est plus ancienne (OI3)"
@@ -348,10 +349,14 @@ build-glorfindel:
 # reconnaît pas, n'efface rien — sur l'hôte, car aucun service ne monte runs/ entier.
 # A writer's directory that is a link (or a file) is never made nor mounted: docker would resolve it on
 # the host, and its writer would write where it points.
-RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts; do \
+RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts runs/bot; do \
 	{ test ! -L "$$d" && { test ! -e "$$d" || test -d "$$d"; }; } \
 	|| { echo "✗ $$d n'est pas un répertoire (un lien ?) : rien n'est monté — le retirer à la main (SEC18)" >&2; exit 1; }; \
-	mkdir -p "$$d"; done
+	mkdir -p "$$d"; done; \
+	{ test ! -L runs/glorfindel/queue || { echo "✗ runs/glorfindel/queue est un lien : rien n'est monté (FS1b)" >&2; exit 1; }; }; \
+	mkdir -p runs/glorfindel/queue
+# FS1b: runs/glorfindel/queue — the watch's receipts of the action queue — is the one subdirectory
+# the bot mounts (read-only): made here too, as the operator, before docker would make it as root.
 # The services stopped first when the former layout holds something: a file they would write meanwhile
 # (manual_actions.jsonl) would meet its moved twin and stay aside.
 runs-migrate:
@@ -509,7 +514,7 @@ check-azure-env:
 
 glorfindel-start: check-azure-env build-glorfindel runs-migrate
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis $(HOME)/.eregion/console $(HOME)/.eregion/console/requests runs
-	mkdir -p -m 700 $(HOME)/.eregion/watch-key
+	mkdir -p -m 700 $(HOME)/.eregion/watch-key $(HOME)/.eregion/bot $(HOME)/.eregion/watch-queue
 	$(RUNS_DIRS)
 	docker compose up -d
 	@echo ""
@@ -524,14 +529,14 @@ glorfindel-stop:
 
 glorfindel-restart: check-azure-env build-glorfindel runs-migrate
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis $(HOME)/.eregion/console $(HOME)/.eregion/console/requests runs
-	mkdir -p -m 700 $(HOME)/.eregion/watch-key
+	mkdir -p -m 700 $(HOME)/.eregion/watch-key $(HOME)/.eregion/bot $(HOME)/.eregion/watch-queue
 	$(RUNS_DIRS)
 	docker compose up -d --build --force-recreate
 	@$(MAKE) --no-print-directory console-url || true
 
 glorfindel-dev: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis $(HOME)/.eregion/console $(HOME)/.eregion/console/requests runs
-	mkdir -p -m 700 $(HOME)/.eregion/watch-key
+	mkdir -p -m 700 $(HOME)/.eregion/watch-key $(HOME)/.eregion/bot $(HOME)/.eregion/watch-queue
 	docker compose up -d
 	@$(MAKE) --no-print-directory console-url || true
 	@echo "  (watching for changes…)"
@@ -1071,6 +1076,18 @@ glorfindel-host-watch-key: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@$(HOST_SSH) 'docker exec eregion-watch glorfindel watch-key'
 
+# FS1b (#563) : les clés publiques de la console et du bot pour la file d'actions signée, à épingler
+# chez la watch — EREGION_QUEUE_KEYS dans .envrc (ce poste) ou dans host.env (H0). Tirées au premier
+# démarrage de chaque service avec EREGION_ACTION_QUEUE=1, dans ~/.eregion/console et ~/.eregion/bot ;
+# jamais la clé privée. queue-keys : celles de ce poste ; glorfindel-host-queue-keys : celles de H0,
+# lues dans leurs conteneurs par SSH, clé d'hôte épinglée (V-32).
+queue-keys:
+	@$(PYTHON) -m eregion_core.action_queue public
+
+glorfindel-host-queue-keys: glorfindel-host-known
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@$(HOST_SSH) 'c=$$(docker exec eregion-war-room python -m eregion_core.action_queue pin console) && b=$$(docker exec eregion-bot python -m eregion_core.action_queue pin bot) && echo "EREGION_QUEUE_KEYS=$$c,$$b"'
+
 # L'empreinte de la clé d'hôte d'Orodruin, lue sur la VM par le plan de contrôle d'Azure (ton az
 # login, Run Command) — jamais par SSH, qu'elle sert à vérifier. Une fois par VM (reconstruite :
 # une autre clé, relire, poser, retirer ORO_KNOWN_HOSTS) ; à poser dans ton environnement.
@@ -1486,7 +1503,7 @@ team-start: team-check build-glorfindel
 	@grep -qE '^EREGION_CONSOLE_PORT=[0-9]+' "$(TEAM_DIR)/team.env" \
 	  || { echo "✗ EREGION_CONSOLE_PORT absent de team.env : un port par équipe (7007 : make glorfindel-start)"; exit 1; }
 	mkdir -p "$(TEAM_DIR)/runs" "$(TEAM_DIR)/.glorfindel" "$(TEAM_DIR)/.cache/chroma" "$(TEAM_DIR)/.eregion/analysis" "$(TEAM_DIR)/.eregion/console/requests"
-	mkdir -p -m 700 "$(TEAM_DIR)/.eregion/watch-key"
+	mkdir -p -m 700 "$(TEAM_DIR)/.eregion/watch-key" "$(TEAM_DIR)/.eregion/bot" "$(TEAM_DIR)/.eregion/watch-queue"
 	@if python3 -m eregion_core.runs_layout pending "$(TEAM_DIR)/runs"; then $(TEAM_COMPOSE) --profile bot stop watch war-room bot 2>/dev/null || true; fi
 	python3 -m eregion_core.runs_layout migrate "$(TEAM_DIR)/runs"
 	$(TEAM_COMPOSE)$(if $(BOT), --profile bot) up -d watch war-room$(if $(BOT), bot)

@@ -126,6 +126,10 @@ start() {
   # SEC19 (N-03): the watch's key, drawn at its first start in a directory only the watch mounts —
   # made here, 0700, as the operator (left to docker, it would be root's: no key, beats unsigned).
   mkdir -p -m 700 "$HOME/.eregion/watch-key"
+  # FS1b (#563): the bot's key of the action queue, and the watch's register of it — each in a
+  # directory only its service mounts, made here, 0700, as the operator (left to docker, root's:
+  # the bot could not draw its key, the watch could not keep its register).
+  mkdir -p -m 700 "$HOME/.eregion/bot" "$HOME/.eregion/watch-queue"
   # SEC18 (N-05): runs/ has one directory per writer, each service mounts its own (compose). The
   # former layout (files flat in runs/) is moved to its writers' directories here, on the host —
   # no service mounts the whole of runs/ — and those directories made as the operator. Nothing is
@@ -135,7 +139,7 @@ start() {
   # host. The services are stopped first when the former layout holds something to move.
   if [ -f eregion_core/runs_layout.py ]; then
     local d
-    for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts; do
+    for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts runs/bot; do
       { [ ! -L "$d" ] && { [ ! -e "$d" ] || [ -d "$d" ]; }; } \
         || die "$d n'est pas un répertoire (un lien ?) : rien n'est démarré — le retirer à la main (SEC18)"
     done
@@ -143,6 +147,9 @@ start() {
       docker compose --profile bot stop watch war-room bot || true
     fi
     python3 -m eregion_core.runs_layout migrate runs || die "runs/ : la migration de SEC18 a échoué — rien n'est démarré (docs/operations.md, « runs/ : un répertoire par écrivain — le redéploiement coordonné »)"
+    # FS1b: the watch's receipts of the action queue, the one subdirectory the bot mounts.
+    [ ! -L runs/glorfindel/queue ] || die "runs/glorfindel/queue est un lien : rien n'est démarré (FS1b)"
+    mkdir -p runs/glorfindel/queue
   fi
   docker compose --profile bot up -d watch war-room bot
 }

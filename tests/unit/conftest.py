@@ -91,6 +91,8 @@ def isolated_watch_key(tmp_path, monkeypatch):
     monkeypatch.setattr(action_queue, "KEY_ROOT", tmp_path / "service-keys")
     monkeypatch.setattr(action_queue, "QUEUE_DIR", tmp_path / "watch-queue")
     monkeypatch.delenv(action_queue.KEYS_ENV, raising=False)
+    # FS1b: the queue off, as by default — never the developer's shell's EREGION_ACTION_QUEUE.
+    monkeypatch.delenv(action_queue.FLAG_ENV, raising=False)
 
 
 @pytest.fixture

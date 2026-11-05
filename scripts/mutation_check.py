@@ -710,18 +710,19 @@ MUTANTS = [
      C,
      "    return str(raw).strip().lower() not in _SWITCH_OFF\n",
      '    return str(raw).strip().lower() in ("1", "true", "yes")\n'),
+    # The approval's guards moved to glorfindel/approval.py, shared with the watch (FS1b, #563).
     ("M158", "the configuration: an approval age limit of nan or inf executes a card of any age (G2)",
-     "eregion_console/api.py",
+     "glorfindel/approval.py",
      "    if math.isnan(value) or value == math.inf:\n        return 2.0\n", ""),
     # G2, after the Opus 5.5 review (M159–M169 belong to lot 167).
     ("M170", "the configuration: an approval age limit of 0 or less is lifted to 2 h, reopening "
              "the one-click approval closed on purpose (G2 review)",
-     "eregion_console/api.py",
+     "glorfindel/approval.py",
      "    if math.isnan(value) or value == math.inf:\n",
      "    if math.isnan(value) or value == math.inf or value <= 0:\n"),
     ("M171", "the configuration: an approval age limit of 0 or less refuses no card of its own — "
              "a card dated ahead of the clock runs (G2 review)",
-     "eregion_console/api.py",
+     "glorfindel/approval.py",
      "    if max_age_h <= 0:\n", "    if False:\n"),
     ("M172", "the model: a NaN confidence passes the confidence gate (G2 review)",
      "glorfindel/agent.py",
@@ -821,9 +822,9 @@ MUTANTS = [
      "glorfindel/agent.py",
      '    "agreement": "unstable_decision",\n', ""),
     ("M211", "an unstable decision's card cannot be approved in one click (D-1)",
-     "eregion_console/api.py",
-     '                     "telemetry_gap", "unstable_decision"}\n',
-     '                     "telemetry_gap"}\n'),
+     "eregion_core/action_queue.py",     # the console imports the queue's list (FS1b, #563)
+     '                              "telemetry_gap", "unstable_decision"})\n',
+     '                              "telemetry_gap"})\n'),
     ("M212", "GLORFINDEL_DECISION_DRAWS never reaches the watch's container (D-1)",
      "docker-compose.yml",
      "  GLORFINDEL_DECISION_DRAWS: ${GLORFINDEL_DECISION_DRAWS:-}\n", ""),
@@ -8814,7 +8815,7 @@ MUTANTS += [
     ("M3134", "`reset --from-azure` on its own unreadable state says `swept` and deletes the file (I3U)", SWP,
      '        deleted, failed = [], unreadable + self._unread(resource_id, "reset non vérifié", unreadable + failed_early)\n',
      "        deleted, failed = [], list(unreadable)\n"),
-    ("M3135", "the plain reset on an unreadable state says « Nothing to reset » (I3U)", GCLI,
+    ("M3135", "the plain reset on an unreadable state says « Nothing to reset » (I3U)", "glorfindel/gestures.py",     # moved out of the CLI (FS1b, #563)
      '    isolations = isolations or ([{"resource_id": resource_id}] if _isolation_unreadable(resource_id) else [])\n',
      ""),
 ]
@@ -9805,9 +9806,9 @@ MUTANTS += [
     ("M3332", "a move writes over what is there (SEC18, review)", LAYOUT,
      "        os.link(src, dst, follow_symlinks=False)\n", "        os.replace(src, dst)\n        return 1\n"),
     ("M3333", "the workstation makes and mounts a writer's directory that is a link (SEC18, review)", MAKE,
-     "RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts; do \\\n"
+     "RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts runs/bot; do \\\n"
      "\t{ test ! -L \"$$d\" && { test ! -e \"$$d\" || test -d \"$$d\"; }; } \\\n",
-     "RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts; do \\\n"
+     "RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts runs/bot; do \\\n"
      "\t{ true; } \\\n"),
     ("M3334", "Orodruin mounts a writer's directory that is a link (SEC18, review)", MAKE,
      'ORO_DIRS       = for d in $$HOME/runs/annatar $$HOME/runs/gothmog $$HOME/runs/orodruin; do { test ! -L "$$d" && { test ! -e "$$d" || test -d "$$d"; }; }',

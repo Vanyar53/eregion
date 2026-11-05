@@ -306,22 +306,34 @@ def why_not_written(exc: OSError) -> str:
     return str(exc) if isinstance(exc, Refused) else f"{type(exc).__name__}: {exc.strerror or exc}"
 
 
-def write_file(path, text: str, mode: int = 0o644) -> None:
+def write_file(path, text: str, mode: int = 0o644, *, sync: bool = False) -> None:
     """Write a whole file of runs/ (a campaign's report, its notes) at once: in a new file beside
     it (``mkstemp``: created, never opened through a link), then renamed over it — a link in its
-    place is replaced, never followed (SEC16). Raises OSError."""
+    place is replaced, never followed (SEC16). Raises OSError.
+
+    ``sync`` (FS1b, the watch's registers of the action queue): the file fsync'd before it is
+    renamed, then its directory — written once this returns, a crash of the host included."""
     import tempfile
     path = Path(path)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
+            if sync:
+                f.flush()
+                os.fsync(f.fileno())
         os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+    if sync:
+        dfd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
 
 
 class Budget:

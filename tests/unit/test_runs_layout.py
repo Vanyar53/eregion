@@ -37,7 +37,7 @@ def _report(injector=None, kind=None, rid="r1"):
 def test_each_writer_has_its_own_directory(root):
     assert [L.dir_of(w) for w in L.WRITERS] == [L.ROOT / w for w in
                                                 ("glorfindel", "console", "annatar", "gothmog", "orodruin",
-                                                 "verdicts")]
+                                                 "verdicts", "bot")]
     assert L.dir_of(L.ANNATAR, root) == root / "annatar"
     with pytest.raises(ValueError):
         L.dir_of("runs")

@@ -10,14 +10,16 @@
 mock_provider "azurerm" {}
 mock_provider "azapi" {}
 mock_provider "null" {}
+mock_provider "azuread" {}
 
 variables {
   # La clé jetable du test d'ID1 (sa clé privée n'a jamais été gardée).
   admin_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHJsmbq1cw7yKD96VpcLp0pc+ghC6Shc4ZG5t9jktOyi id1-test"
   # Hermétique face au terraform.tfvars de l'opérateur.
-  activity_log_enabled = false
-  entra_logs_enabled   = false
-  auditd_enabled       = false
+  activity_log_enabled        = false
+  entra_logs_enabled          = false
+  auditd_enabled              = false
+  entra_test_identity_enabled = false
 }
 
 run "noise_off_the_bench_plan_is_unchanged" {

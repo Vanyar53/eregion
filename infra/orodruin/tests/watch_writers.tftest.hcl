@@ -29,6 +29,9 @@ mock_provider "azurerm" {
   }
 }
 
+# IDI1 : azuread faux lui aussi (graph_read_enabled, désactivé par défaut) — aucun appel à Graph.
+mock_provider "azuread" {}
+
 # Les deux conteneurs et l'identité d'Orodruin, connus dès le plan : ce que les attributions visent.
 override_resource {
   target          = azurerm_storage_container.exercises

@@ -43,7 +43,8 @@ def _to_write(b: dict, verification: dict, autonomy, vm: str, rid: str, ip: str,
 def put_back_perimeters(connector, autonomy, blocks: list[dict], report: list[dict]) -> dict:
     """The perimeter pairs of the entries that hold one (`scoped: False`, merged or not), put back
     where the second time would put them back: {(resource id, IP): {"error": the write's, or None;
-    "read": the check that decided it — what the card compares a later drift with}}.
+    "partial": what the provider said does not hold of it, or None (RW1, #513); "read": the check
+    that decided it — what the card compares a later drift with}}.
     An entry whose lock is held, or whose check raises, is left to the second time."""
     from glorfindel import reassert as r
     from glorfindel.actions import _load_block_entries, _update_block_entry, _vm_lock
@@ -68,11 +69,13 @@ def put_back_perimeters(connector, autonomy, blocks: list[dict], report: list[di
                 if not _to_write(b, verification, autonomy, vm, rid, ip, ref):
                     continue
                 try:
-                    connector.block_suspicious_ip(ip, rid, scope="subnet", threat_port=b.get("threat_port"))
-                    err = None
+                    put = connector.block_suspicious_ip(ip, rid, scope="subnet", threat_port=b.get("threat_port"))
+                    # Read as it is answered, raised or not (RW1, #513): AWS's `failed` wrote nothing.
+                    status, why = r._write_said(put)
+                    err, short = (why if status == "failed" else None), (why if status == "partial" else None)
                 except Exception as exc:
-                    err = f"{exc}"
-                done[(rid.rstrip("/").lower(), ip)] = {"error": err, "read": verification}
+                    err, short = f"{exc}", None
+                done[(rid.rstrip("/").lower(), ip)] = {"error": err, "partial": short, "read": verification}
                 if err is None:
                     # Written: marked at once, as the second time would — a pass cut off between
                     # the two times never puts it back a second time as a first. Its episode ends in

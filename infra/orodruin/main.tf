@@ -13,6 +13,11 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
+    # IDI1 (#546) : le droit de lecture de Microsoft Graph de l'identité d'Orodruin (graph_read_enabled).
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
   }
   required_version = ">= 1.5"
 }
@@ -32,6 +37,11 @@ provider "azurerm" {
 }
 
 data "azurerm_subscription" "current" {}
+
+# Le tenant de l'abonnement, sous le az login de l'opérateur (comme azurerm) : jamais un principal.
+provider "azuread" {
+  tenant_id = data.azurerm_subscription.current.tenant_id
+}
 
 locals {
   name = "orodruin"
@@ -589,4 +599,39 @@ resource "azurerm_role_assignment" "watch_channel_station_writer" {
       error_message = "watch_principal_ids nomme l'opérateur qui applique (son az login) : il n'écrit jamais ce que dit la watch."
     }
   }
+}
+
+# ── IDI1 (#546) : lire les applications d'Entra ID et les rôles d'annuaire, rien d'autre dans Graph ─
+# La garde d'une identité (eregion_core/inscription.py, GraphEnrollment) lit l'application, son
+# principal de service, ce qu'il possède, ses appartenances et ses permissions d'application
+# (`Application.Read.All`), et ses rôles d'annuaire, actifs et éligibles (`RoleManagement.Read.Directory` :
+# une identité privilégiée n'est jamais inscrite) — deux rôles d'application de Microsoft Graph, en
+# lecture seule. Le contrat (eregion_core/orodruin.py, GRAPH_READ_ONLY, assess_graph) relit le jeton
+# Graph de l'identité : ces deux rôles, ou rien ; aucun autre, aucun rôle d'annuaire ; un droit Graph
+# de plus → `passive`, comme une attribution ARM hors du banc.
+#
+# Désactivé par défaut : `graph_read_enabled = true` dans infra/orodruin/terraform.tfvars (ignoré par
+# git), puis `make orodruin-plan`, puis `make orodruin-lock` (la sortie reste fermée ; jamais
+# orodruin-up, qui la rouvre) — par Jonathan, sous un az login qui tient le rôle d'Entra
+# Administrateur des rôles privilégiés (ou Administrateur général) : attribuer un rôle d'application
+# de Microsoft Graph est un consentement d'administrateur. Graph est trouvé par son identifiant
+# publié (azuread_application_published_app_ids), jamais écrit ici.
+locals {
+  graph_read_roles = var.graph_read_enabled ? toset(["Application.Read.All", "RoleManagement.Read.Directory"]) : toset([])
+}
+
+data "azuread_application_published_app_ids" "well_known" {
+  count = var.graph_read_enabled ? 1 : 0
+}
+
+data "azuread_service_principal" "msgraph" {
+  count     = var.graph_read_enabled ? 1 : 0
+  client_id = data.azuread_application_published_app_ids.well_known[0].result["MicrosoftGraph"]
+}
+
+resource "azuread_app_role_assignment" "graph_read" {
+  for_each            = local.graph_read_roles
+  app_role_id         = data.azuread_service_principal.msgraph[0].app_role_ids[each.value]
+  principal_object_id = azurerm_linux_virtual_machine.host.identity[0].principal_id
+  resource_object_id  = data.azuread_service_principal.msgraph[0].object_id
 }

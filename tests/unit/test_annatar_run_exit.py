@@ -97,7 +97,8 @@ def test_a_dry_run_exits_zero(tmp_path, monkeypatch):
 def test_passive_orodruin_exits_nonzero(tmp_path, monkeypatch):
     """Orodruin's contract passive (an operator's laptop): nothing touched, exit != 0 (M104)."""
     monkeypatch.setattr(orodruin, "READERS", {
-        "identity": lambda: [], "cap": lambda: ([], {"max_injections": 20, "max_run_s": 3600}),
+        "identity": lambda: [], "graph": lambda: [],
+        "cap": lambda: ([], {"max_injections": 20, "max_run_s": 3600}),
         "network": lambda: [orodruin._miss("network_open", "x")]})
     executor = _executor()
     res = _invoke(tmp_path, monkeypatch, executor, ATOMIC_YAML)

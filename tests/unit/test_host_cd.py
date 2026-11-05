@@ -9,7 +9,9 @@ The agent (infra/glorfindel-host/cd/eregion_cd.py) runs as on H0, installed in i
 - the fake server (tests/unit/fake_discord.py): GitHub's latest release and check runs, the
   registry (GHCR, read anonymously), H0's console, and #deploy's webhook;
 - a fake cosign (tests/unit/fake_sigstore.py) as ~/.eregion-cd/cosign, the installed
-  published_image.py pinned to its sha256 (the test's copy only).
+  published_image.py pinned to its sha256 (the test's copy only);
+- one wall clock for the agent and the fake watch, which never steps back (FL1, `CLOCK`) unless a
+  test sets it back (H1d).
 No network, no VM, no Docker.
 """
 import ast
@@ -21,6 +23,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -46,7 +49,7 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None or shutil.which("bas
 
 FAKE_DOCKER = r'''#!PYTHON
 """A fake docker: images and containers in $FAKE_DOCKER_STATE, every call in $FAKE_DOCKER_LOG."""
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
 state_p = Path(os.environ["FAKE_DOCKER_STATE"])
 st = json.loads(state_p.read_text())
@@ -55,6 +58,25 @@ with open(os.environ["FAKE_DOCKER_LOG"], "a") as f:
     f.write(" ".join(args) + "\n")
 def save():
     state_p.write_text(json.dumps(st))
+def now_ns():
+    # FL1: the agent's clock (CLOCK), never the kernel's; H1d: set back by FAKE_CLOCK_STEP's ns.
+    step = Path(os.environ["FAKE_CLOCK_STEP"])
+    return (int(os.environ["FAKE_CLOCK_BASE_NS"]) + time.monotonic_ns()
+            - (int(step.read_text()) if step.exists() else 0))
+def beat():
+    # As the watch writes it (SEC17): a temp file beside it, renamed over it — each beat a new file.
+    hb = Path(os.environ["FAKE_HEARTBEAT"])
+    hb.parent.mkdir(parents=True, exist_ok=True)
+    tmp = hb.with_name(hb.name + ".tmp")
+    tmp.write_text("now")
+    at = now_ns()
+    os.utime(tmp, ns=(at, at))
+    os.replace(tmp, hb)
+def beats(c):
+    # A watch running and never restarted beats — but none with FAKE_NO_HEARTBEAT, and not the
+    # release FAKE_SILENT names (H1d: a watch that never beats).
+    return (c["status"] == "running" and not c["restarts"] and not os.environ.get("FAKE_NO_HEARTBEAT")
+            and c["version"] != os.environ.get("FAKE_SILENT", "-"))
 cmd = args[0]
 if cmd == "pull":
     # CI3: by digest, from what the registry holds ($FAKE_REGISTRY_IMAGES: reference → labels).
@@ -99,6 +121,9 @@ elif cmd == "inspect":
     if not c:
         sys.exit(1)
     if "State.Status" in fmt:
+        # A real watch beats again and again (every minute or so): this one, at each look of the health.
+        if name == "eregion-watch" and beats(c):
+            beat()
         print(c["status"], c["restarts"], c["version"])
     elif "revision" in fmt and "version" in fmt:
         print(c["version"], c["revision"])
@@ -146,14 +171,44 @@ elif cmd == "compose":
     if "up" in args:
         img = st["images"]["eregion-glorfindel"]
         sick = img["version"] == os.environ.get("FAKE_SICK", "-")
+        if os.environ.get("FAKE_LAST_BEAT"):
+            # H1d: the watch that runs beats once more while compose stops it — killed (SIGKILL),
+            # it never removes that beat.
+            beat()
+        if os.environ.get("FAKE_CLOCK_BACK_S"):
+            # H1d: the wall clock set back during the switch (the agent's and the watch's).
+            Path(os.environ["FAKE_CLOCK_STEP"]).write_text(str(int(float(os.environ["FAKE_CLOCK_BACK_S"]) * 1e9)))
         for name in ("eregion-watch", "eregion-war-room", "eregion-bot"):
             st["containers"][name] = {"status": "restarting" if sick else "running", "restarts": 3 if sick else 0,
                                       "version": img["version"], "revision": img["revision"]}
         save()
-        if not sick and not os.environ.get("FAKE_NO_HEARTBEAT"):
-            hb = Path(os.environ["FAKE_HEARTBEAT"])
-            hb.parent.mkdir(parents=True, exist_ok=True)
-            hb.write_text("now")
+        if beats(st["containers"]["eregion-watch"]):
+            beat()      # the new watch's first beat, at its start
+'''
+
+# FL1 (#540): the agent's wall clock, and the fake watch's (its beat), in these tests — the
+# system's monotonic clock from a base taken once per H0. The health compared the beat's mtime
+# with `since`, a time.time() taken before the switch: two readings of CLOCK_REALTIME, here as
+# little as 14 ms apart (measured: the fake switch is quick). That clock can be set back (WSL2
+# does it, about 65 ms every 30 s, measured), and the kernel stamps a file with its coarse clock
+# (up to 25 ms behind time.time(), measured): the beat, written after the switch, read as from
+# before it — « la watch n'a pas battu depuis la bascule », H0 sent back. H1d (#549): the health
+# now asks another beat than the one there once the switch has returned (its inode, its mtime in
+# ns), and no longer reads the wall clock for it; the clock stays, for `since` (the journals
+# read) and for the tests that set it back on purpose (FAKE_CLOCK_BACK_S). The fake watch beats
+# as the real one, by a rename: at its start, then at each look of the health (a real watch beats
+# about every minute). On H0, the agent runs unchanged: only these tests inject the clock.
+# Everything else (the module) is run as on H0: `python eregion_cd.py <mode>`, its __file__, its
+# sys.argv, its exit code.
+CLOCK = r'''"""The CD as on H0, its time.time() and time.time_ns() on FAKE_CLOCK_BASE_NS + CLOCK_MONOTONIC (FL1),
+set back by what FAKE_CLOCK_STEP holds (ns), when it holds anything (H1d)."""
+import os, runpy, sys, time
+from pathlib import Path
+base, step = int(os.environ["FAKE_CLOCK_BASE_NS"]), Path(os.environ["FAKE_CLOCK_STEP"])
+time.time_ns = lambda: base + time.monotonic_ns() - (int(step.read_text()) if step.exists() else 0)
+time.time = lambda: time.time_ns() / 1e9
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
 '''
 
 
@@ -224,6 +279,9 @@ class H0:
         bin_dir.mkdir()
         (bin_dir / "docker").write_text(FAKE_DOCKER.replace("#!PYTHON", f"#!{sys.executable}"))
         (bin_dir / "docker").chmod(0o755)
+        self.clock = tmp_path / "clock" / "clock.py"
+        self.clock.parent.mkdir()
+        self.clock.write_text(CLOCK)
         self.state, self.log = tmp_path / "docker.json", tmp_path / "docker.log"
         self.registry = tmp_path / "registry.json"
         self.registry.write_text("{}")
@@ -242,7 +300,9 @@ class H0:
             "EREGION_CD_GITHUB_API": f"{fake.base}/gh", "EREGION_CD_CONSOLE": f"{fake.base}/console",
             "EREGION_CD_HEARTBEAT": str(self.heartbeat), "EREGION_CD_HEALTH_S": "0.2", "EREGION_CD_STEP_S": "0.05",
             "EREGION_DISCORD_ENV": os.devnull, "EREGION_REGISTRY_API": f"{fake.base}/registry",
-            "FAKE_REGISTRY_IMAGES": str(self.registry), **self.sig.env()})
+            "FAKE_REGISTRY_IMAGES": str(self.registry), **self.sig.env(),
+            "FAKE_CLOCK_BASE_NS": str(time.time_ns() - time.monotonic_ns()),
+            "FAKE_CLOCK_STEP": str(tmp_path / "clock" / "step")})
         fake.console_token = "tok"
         self.digest = self.image("c2", "v0.4.0")
         self.publish("v0.4.0")
@@ -266,7 +326,8 @@ class H0:
         self.fake.gh["release"] = {"tag_name": tag, "html_url": f"https://example.invalid/releases/{tag}"}
 
     def run(self, mode="run", *args, **env):
-        return subprocess.run([sys.executable, str(self.cd / "eregion_cd.py"), mode, *args], cwd=self.home,
+        return subprocess.run([sys.executable, str(self.clock), str(self.cd / "eregion_cd.py"), mode, *args],
+                              cwd=self.home,
                               env={**self.env, **env}, capture_output=True, text=True, timeout=120)
 
     def docker(self):
@@ -1450,10 +1511,10 @@ def test_the_way_back_is_never_judged_on_the_read_only_probe(agent, monkeypatch)
     monkeypatch.setattr(agent, "health_once", lambda ref, since: "")
     monkeypatch.setattr(agent, "HEALTH_S", 0.0)
     monkeypatch.setattr(agent, "run_rules_check", lambda budget, label: {"state": "ok", "rules": []})
-    assert agent.health("v0.3.1", 0.0) == ("", {}) and seen == []
-    why, _ = agent.health("v0.4.0", 5.0, rules=True, base={"state": "ok", "rules": []})
+    assert agent.health("v0.3.1", 0.0, None) == ("", {}) and seen == []
+    why, _ = agent.health("v0.4.0", 5.0, None, rules=True, base={"state": "ok", "rules": []})
     assert "Read-only file system" in why and seen == [5.0]
-    why, _ = agent.health("v0.4.0", 5.0, rules=True, base={"state": "absent", "rules": [],
+    why, _ = agent.health("v0.4.0", 5.0, None, rules=True, base={"state": "absent", "rules": [],
                                                            "read_only": ["eregion-watch"]})
     assert "Read-only" not in why
 
@@ -1473,6 +1534,72 @@ def test_a_heartbeat_from_before_the_switch_is_not_health(h0):
     os.utime(h0.heartbeat, (1, 1))
     assert h0.run(FAKE_NO_HEARTBEAT="1").returncode == 1
     assert "battu" in _alerts(h0)[0]["embeds"][0]["description"]
+
+
+# H1d (#549): the health judges the watch's beat by its identity, never by two readings of the
+# wall clock.
+
+def test_a_wall_clock_set_back_during_the_health_sends_nothing_back(h0):
+    """The clock set back 120 s during the switch (the agent's and the watch's): the new watch's
+    beats are stamped before `since`, yet they are new beats — the release is kept."""
+    res = h0.run(FAKE_CLOCK_BACK_S="120")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed" and _alerts(h0) == []
+
+
+def test_the_old_watchs_last_beat_is_no_health_for_a_watch_that_never_beats(h0):
+    """The watch that ran beats while the switch stops it, killed (SIGKILL: its beat stays); the
+    new one never beats. That beat is from after `since`, and from before the switch had
+    returned: no green health — H0 goes back, said."""
+    assert h0.run(FAKE_LAST_BEAT="1", FAKE_SILENT="v0.4.0").returncode == 1
+    assert h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") == "rolled back"
+    (alert,) = _alerts(h0)
+    assert "la watch n'a pas battu depuis la bascule" in alert["embeds"][0]["description"]
+
+
+def test_the_way_back_is_not_judged_on_the_left_releases_last_beat(h0):
+    """The same on the way back: v0.4.0 red (V-34), its watch beats as it stops and is killed,
+    v0.3.1's never beats — the way back is no healthy one."""
+    assert h0.run(FAKE_RULES_LOGS=READ_ONLY, FAKE_LAST_BEAT="1", FAKE_SILENT="v0.3.1").returncode == 1
+    assert h0.outcome("v0.4.0") == "rollback failed"
+
+
+def test_a_pass_taken_up_asks_a_beat_of_the_watch_that_runs(h0):
+    """A pass cut after its switch: the beat there, written after the time noted with the switch,
+    may be the old watch's last. The release's watch, which never beats, is no health."""
+    c2 = h0.commits["c2"]
+    st = h0.docker()
+    st["images"]["eregion-glorfindel:v0.4.0"] = {"version": "v0.4.0", "revision": c2, "n": 5}
+    st["images"]["eregion-glorfindel"] = dict(st["images"]["eregion-glorfindel:v0.4.0"])
+    for c in st["containers"].values():
+        c.update(version="v0.4.0", revision=c2)
+    h0.state.write_text(json.dumps(st))
+    _git(h0.vm, h0.env, "checkout", "-q", "--detach", c2)
+    (h0.cd / "state.json").write_text(json.dumps({"outcomes": {"v0.4.0": {
+        "result": "switching", "from": "v0.3.1", "url": "", "why": "", "at": time.time() - 2}}, "said": {}}))
+    h0.heartbeat.parent.mkdir(parents=True, exist_ok=True)
+    h0.heartbeat.write_text("the old watch's last beat")
+    res = h0.run(FAKE_SILENT="v0.4.0")
+    assert "reprise" in res.stdout and res.returncode == 1
+    assert h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") == "rolled back"
+
+
+def test_a_beat_is_another_file_whatever_its_time(agent, monkeypatch, tmp_path):
+    """Two beats stamped at the same nanosecond (a clock set back) are two beats: the watch
+    renames a new file over the old one (SEC17), another inode. None when there is none."""
+    hb = tmp_path / "watch_heartbeat"
+    monkeypatch.setattr(agent, "HEARTBEAT", hb)
+    assert agent.beat() is None
+
+    def write():
+        tmp = hb.with_name("beat.tmp")
+        tmp.write_text("now")
+        os.utime(tmp, ns=(10**18, 10**18))
+        os.replace(tmp, hb)
+    write()
+    first = agent.beat()
+    write()
+    assert first is not None and agent.beat() != first and agent.beat()[1] == first[1]
 
 
 def test_a_console_that_does_not_answer_is_not_health(h0):
@@ -2112,10 +2239,10 @@ def test_the_rules_run_once_the_watch_is_healthy_even_at_the_last_look(agent, mo
     monkeypatch.setattr(agent, "health_once", lambda ref, since: "" if time.monotonic() >= end else "pas encore")
     monkeypatch.setattr(agent, "run_rules_check", lambda budget, label: budgets.append(budget) or {
         "state": "ok", "rules": [_rule("a")]})
-    why, proof = agent.health("v0.4.0", 0.0, rules=True, base={"state": "ok", "rules": []})
+    why, proof = agent.health("v0.4.0", 0.0, None, rules=True, base={"state": "ok", "rules": []})
     assert why == "" and proof["note"].startswith("règles : 1 sur 1")
     assert len(budgets) == 1 and budgets[0] <= 0.05
-    assert agent.health("v0.3.1", 0.0) == ("", {}) and len(budgets) == 1    # the way back: no rule check
+    assert agent.health("v0.3.1", 0.0, None) == ("", {}) and len(budgets) == 1    # the way back: no rule check
 
 
 def test_the_last_look_comes_after_the_check(agent, monkeypatch):
@@ -2127,7 +2254,7 @@ def test_the_last_look_comes_after_the_check(agent, monkeypatch):
     monkeypatch.setattr(agent, "health_once", lambda ref, since: next(looks, "eregion-bot : exited"))
     monkeypatch.setattr(agent, "run_rules_check", lambda budget, label: time.sleep(0.1) or {
         "state": "ok", "rules": [_rule("a")]})
-    why, _ = agent.health("v0.4.0", 0.0, rules=True, base=None)
+    why, _ = agent.health("v0.4.0", 0.0, None, rules=True, base=None)
     assert why.startswith("eregion-bot")
 
 
@@ -2138,7 +2265,7 @@ def test_a_regression_ends_the_health_at_once(agent, monkeypatch):
     monkeypatch.setattr(agent, "run_rules_check", lambda budget, label: {"state": "ok", "rules": [
         _rule("a", "error", "syntax", code="SYN0002")]})
     started = time.monotonic()
-    why, _ = agent.health("v0.4.0", 0.0, rules=True, base={"state": "ok", "rules": [{"name": "a", "status": "ok"}]})
+    why, _ = agent.health("v0.4.0", 0.0, None, rules=True, base={"state": "ok", "rules": [{"name": "a", "status": "ok"}]})
     assert "cassée(s)" in why and time.monotonic() - started < 5   # no need to watch 30 s: H0 goes back now
 
 

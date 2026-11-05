@@ -274,6 +274,8 @@ make celebrimbor-output      # → glorfindel-config.yaml fragment (workspace_id
 | NSG | — | Isolation + IP block |
 | Public IP | Standard Static | SSH access |
 
+Optional, off by default (IDI1): a **test identity in Entra ID** — a single-tenant application and its service principal, no secret, no right — the target of identity techniques (R2). An identity carries no ARM tag, so it is enrolled by two keys, one per plane: the application's own Graph tags (`eregion-target=celebrimbor`, `eregion-zone=bench`) **and** the bench's resource group naming it (`eregion-identities`); either key alone enrolls nothing. `entra_test_identity_enabled = true`, then `make celebrimbor-identity-plan` / `celebrimbor-identity-up` (`docs/operations.md`, « L'identité de test du banc (IDI1) »).
+
 **Cost of the test sandbox** (West Europe, pay-as-you-go — only if you deploy the Terraform):
 
 | Item | Monthly cost |

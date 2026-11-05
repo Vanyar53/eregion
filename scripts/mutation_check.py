@@ -10844,7 +10844,8 @@ PIECES = 4
 SHARD = re.compile(r"([1-9]\d*)/([1-9]\d*)")
 # CI6e (#553): a mutant's reason (the tuple's sixth field) opens with its mark, then a colon. The
 # harness reads these marks only: EQUIVALENT and MULTI-HOST are not counted; TIMING is counted,
-# and known. A reason with another mark is not read (scripts/mutant_anchors.py says it): its
+# and known — its reason names the race test that catches it at times (scripts/mutant_anchors.py
+# holds it), and a TIMING caught in no round of a run is said apart (never_caught), never red. A reason with another mark is not read (scripts/mutant_anchors.py says it): its
 # mutant is no known survivor.
 UNCOUNTED_MARKS = ("EQUIVALENT", "MULTI-HOST")
 KNOWN_MARKS = (*UNCOUNTED_MARKS, "TIMING")
@@ -11113,6 +11114,28 @@ def say_judged(unknown: list, no_more: list, mutants: list, say=print) -> None:
             f"({reasons[mid].partition(':')[0]}) off by hand — {title}")
 
 
+ROUNDS_CAUGHT = re.compile(r"(\d+)/(\d+)")      # a row's detail: "1/2 (9s)", rounds caught of rounds
+
+
+def never_caught(rows: list, mutants: list) -> list:
+    """Each counted known survivor (TIMING) caught in no round of this run (CI6e, review). Its reason
+    says a race test catches it at times: said apart, never red — at 0 of 2, a race may just not
+    have come; at 0 run after run, the reason is no longer true."""
+    reasons = known(mutants)
+    out = []
+    for r in rows:
+        m = ROUNDS_CAUGHT.match(str(r[3]))
+        if r[0] in reasons and r[2] not in UNCOUNTED and r[2] != "CAUGHT" and m and int(m.group(1)) == 0:
+            out.append(r)
+    return out
+
+
+def say_never(rows: list, mutants: list, say=print) -> None:
+    for mid, title, verdict, detail in never_caught(rows, mutants):
+        say(f"  ! {mid}  {verdict} {detail}: {title} — a known survivor caught in no round of this run: its "
+            f"reason names a race test that catches it at times — check that it still does")
+
+
 def total(where: Path, shards: int, control_shards: int, examples: int, rounds: int) -> int:
     """The shards' results under `where` (*.json, as --json writes them), put together. 1 when a
     shard is missing, given twice, or measured at another budget; when the shards together did
@@ -11168,6 +11191,7 @@ def total(where: Path, shards: int, control_shards: int, examples: int, rounds: 
           f"{len(unknown)} survived a round outside the known survivors ({len(known(MUTANTS))} known)")
     print(f"control: {said[True][0]}/{said[True][1]} caught in every round (said, not held)")
     say_judged(unknown, no_more, MUTANTS)
+    say_never(mutant_rows, MUTANTS)
     for p in problems:
         print(f"  ✗ {p}")
     return 1 if problems or unknown else 0
@@ -11326,6 +11350,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.control:
         unknown, no_more = judge(rows, MUTANTS)
         say_judged(unknown, no_more, MUTANTS)
+        say_never(rows, MUTANTS)
         if unknown and args.json:
             print(f"{len(unknown)} survived a round outside the known survivors: the total (--total) holds it")
     if args.json:

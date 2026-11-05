@@ -221,7 +221,7 @@ def test_a_reason_the_harness_does_not_read_is_a_fault():
     taken for an unknown survivor, and the gate goes red on a mutant that says why. Every reason of
     the tree is one it reads."""
     marks = ("EQUIVALENT", "MULTI-HOST", "TIMING")
-    ok = [("M1", "a b", "f", "o", "n"), ("M2", "a b", "f", "o", "n", "TIMING: at times"),
+    ok = [("M1", "a b", "f", "o", "n"), ("M2", "a b", "f", "o", "n", "TIMING: test_race sees it at times"),
           ("M3", "a b", "f", "o", "n", "MULTI-HOST: a second host")]
     bad = [("M4", "a b", "f", "o", "n", "FLAKY: at times"), ("M5", "a b", "f", "o", "n", "EQUIVALENT, no colon"),
            ("M6", "a b", "f", "o", "n", None)]
@@ -240,9 +240,43 @@ def test_mutant_anchors_reports_a_reason_it_cannot_read(tmp_path):
     (tmp_path / "scripts" / "mutation_check.py").write_text(
         'KNOWN_MARKS = ("EQUIVALENT", "MULTI-HOST", "TIMING")\n'
         'MUTANTS = [("M1", "a bug", "a.py", "x = 1", "x = 2", "FLAKY: at times"),\n'
-        '           ("M2", "a bug", "a.py", "x = 1", "x = 3", "TIMING: at times")]\n'
+        '           ("M2", "a bug", "a.py", "x = 1", "x = 3", "TIMING: test_race sees it at times")]\n'
         'CONTROL = []\n\n\nif __name__ == "__main__":\n    pass\n')
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
     subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True, capture_output=True)
     faults = anchors.check(tmp_path)
     assert len(faults) == 1 and faults[0].startswith("M1: its reason opens with no mark the harness reads")
+
+
+def test_a_timing_reason_names_the_race_test_that_catches_it_at_times():
+    """CI6e, review: a TIMING survivor is counted and excused — its reason says which race test
+    catches it at times, so that a run where it is never caught can be checked against it."""
+    marks = ("EQUIVALENT", "MULTI-HOST", "TIMING")
+    named = ("M1", "a b", "f", "o", "n", "TIMING: tests/unit/test_locks.py -k concurrent, 1 round in 2")
+    bare = ("M2", "a b", "f", "o", "n", "TIMING: a race, at times")
+    assert anchors.reason_faults([named], marks) == []
+    assert anchors.reason_faults([bare], marks) == [
+        "M2: its TIMING reason names no race test (test_…) that catches it at times"]
+    assert anchors.reason_faults([(*bare[:5], "EQUIVALENT: no test needed")], marks) == []
+
+
+def test_every_mutant_of_the_tree_applies_and_says_a_reason_it_reads():
+    """CI6e, review: a mutant whose text left the code (STALE) is never counted — and until now passed
+    in silence, no CI running scripts/mutant_anchors.py on the tree. Here, in the ordinary suite:
+    every mutant of the tree (the control set too) applies as the harness applies it, its ids are
+    unique, its reason is one the harness reads. The files the harness copies: git's, or — in the
+    harness's own copy, which has no .git — every file there (it copied only git's)."""
+    import time
+    started = time.monotonic()
+    if (ROOT / ".git").exists():
+        tracked = set(subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True,
+                                     check=True).stdout.splitlines())
+    else:
+        tracked = {p.relative_to(ROOT).as_posix() for p in ROOT.rglob("*") if p.is_file()}
+    mc = _load(HARNESS, "mutation_check_tree")
+    mutants = mc.MUTANTS + mc.CONTROL
+    faults = anchors.lot_faults(mutants, mc.LOTS)
+    faults += [f for m in mutants if (f := anchors._fault(m, mc.RENAME, ROOT, tracked))]
+    faults += anchors.reason_faults(mutants, mc.KNOWN_MARKS)
+    assert faults == [], faults[:10]
+    assert time.monotonic() - started < 30

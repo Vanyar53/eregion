@@ -6,9 +6,10 @@ mark the harness does not read is a fault of scripts/mutant_anchors.py (M3924).
 
 The six survivors without a reason on 05/11, each killed by a test (TESTS_ALSO below where it is not
 already in its mutant's target): M1014 by test_host_deploy.py (the CD builds nothing since CI3, the
-image built by hand is the one --build-only makes); M1223 and M1224 by a reader that reads the store
-at half of every write; M1461 by the claim refusing on its own what the command's check let through;
-M2915 and M3077 by another process holding the flock while this one writes; M3007 by the overview
+image built by hand is the one --build-only makes); M1223 and M1224 by a reader that reads the store at
+a quarter, a half, three quarters and all but the last character of every write, two cards of two
+lengths (at the half only, two cards of one length, M1223 read whole: the review); M1461 by the
+claim refusing on its own what the command's check let through; M2915 and M3077 by another process holding the flock while this one writes; M3007 by the overview
 saying a refused report in the console's log.
 """
 HARNESS = "scripts/mutation_check.py"
@@ -60,3 +61,31 @@ TESTS_ALSO = {
     "M2915": "tests/unit/test_locks.py::test_the_incident_registry_waits_for_another_process_s_write",
     "M3007": "tests/unit/test_indicators.py::test_the_overview_says_a_report_it_refuses_in_the_console_s_log_once",
 }
+
+
+# After its review: a TIMING survivor caught in no round said apart, never red (M3965–M3967); a
+# TIMING reason names its race test (M3968); a mutant gone STALE fails the ordinary suite (M3969).
+_NEVER = ('        if r[0] in reasons and r[2] not in UNCOUNTED and r[2] != "CAUGHT" and m and '
+          'int(m.group(1)) == 0:\n')
+MUTANTS += [
+    ("M3965", "a TIMING survivor caught in no round of the run said by nobody (CI6e, review)", HARNESS,
+     "    say_never(mutant_rows, MUTANTS)\n", ""),
+    ("M3966", "a TIMING survivor caught in no round makes the total red: a race that did not come fails the "
+              "gate (CI6e, review)", HARNESS,
+     "    return 1 if problems or unknown else 0\n",
+     "    return 1 if problems or unknown or never_caught(mutant_rows, MUTANTS) else 0\n"),
+    ("M3967", "a TIMING survivor caught at times said never caught (CI6e, review)", HARNESS,
+     _NEVER, _NEVER.replace("int(m.group(1)) == 0", "int(m.group(1)) < int(m.group(2))")),
+    ("M3968", "a TIMING reason that names no race test passes the check before a push (CI6e, review)", ANCHORS,
+     '        elif word == "TIMING" and "test_" not in m[5]:\n', "        elif False:\n"),
+    ("M3969", "the harness's code reworded, its mutants never re-anchored: STALE, and no test says it "
+              "(CI6e, review)", HARNESS,
+     "    return 1 if unknown and not args.json else 0\n", "    return 1 if (unknown and not args.json) else 0\n"),
+]
+TESTS.update({
+    "M3965": f"{_SH}test_a_timing_survivor_caught_in_no_round_is_said_apart_never_red",
+    "M3966": f"{_SH}test_a_timing_survivor_caught_in_no_round_is_said_apart_never_red",
+    "M3967": f"{_SH}test_a_timing_survivor_caught_in_no_round_is_said_apart_never_red",
+    "M3968": f"{_MA}test_a_timing_reason_names_the_race_test_that_catches_it_at_times",
+    "M3969": f"{_MA}test_every_mutant_of_the_tree_applies_and_says_a_reason_it_reads",
+})

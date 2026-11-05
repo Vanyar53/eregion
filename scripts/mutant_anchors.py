@@ -5,7 +5,7 @@ places a mutant is written are read: the harness's own blocks, and each lot's fi
 scripts/mutants/<lot>.py, which the harness loads (CI5, #512). An id two places take is a fault
 naming them; so is a lot's file without a mutant, or whose TESTS names another's mutant; so is
 a reason (a mutant's sixth field) whose mark the harness does not read (CI6e, #553): its mutant
-would be taken for an unknown survivor.
+would be taken for an unknown survivor; so is a TIMING reason that names no race test (test_…).
 
     python scripts/mutant_anchors.py            # the checkout this script is in
     python scripts/mutant_anchors.py /path/to/a/worktree
@@ -134,6 +134,8 @@ def reason_faults(mutants: list, marks: tuple) -> list[str]:
         if not (colon and word in marks):
             faults.append(f"{m[0]}: its reason opens with no mark the harness reads ({', '.join(marks)}, then "
                           f"a colon): {str(m[5])[:60]!r}")
+        elif word == "TIMING" and "test_" not in m[5]:
+            faults.append(f"{m[0]}: its TIMING reason names no race test (test_…) that catches it at times")
     return faults
 
 

@@ -852,3 +852,29 @@ def test_min_caught_is_gone_never_taken_silently(capsys):
     with pytest.raises(SystemExit) as exc:
         mc.main(["--total", "x", "--min-caught", "14"])
     assert exc.value.code == 2 and "--min-caught" in capsys.readouterr().err
+
+
+def test_a_timing_survivor_caught_in_no_round_is_said_apart_never_red(world, monkeypatch, capsys):
+    """CI6e, review: a TIMING reason excuses a mutant at 0 of N as at 1 of N. Caught in no round of
+    this run, it is said apart — its race test should catch it at times — and the total stays green:
+    a race may just not have come. Caught at times, it is nothing."""
+    mutants, _, results = world
+    timing = "TIMING: tests/unit/test_race.py catches it 1 round in 2"
+    monkeypatch.setattr(mc, "MUTANTS", [_known(m, timing) if m[0] in ("M002", "M004") else m for m in mutants])
+    rows = [_row(mutants[0]), ("M002", "bug 2", "TIMING", "0/2 (3s)"), ("M004", "bug 4", "TIMING", "1/2 (3s)"),
+            _row(mutants[6])]
+    _result(results / "mutants-1", "mutants-1", rows, shard=1, shards=2)
+    assert _total(results) == 0
+    out = capsys.readouterr().out
+    assert "! M002  TIMING 0/2 (3s): bug 2 — a known survivor caught in no round of this run" in out
+    assert "! M004" not in out and "✗" not in out
+    assert [r[0] for r in mc.never_caught(rows, mc.MUTANTS)] == ["M002"]
+    assert mc.never_caught([("M002", "bug 2", "CAUGHT", "2/2 (3s)"), ("M000", "bug 0", "SURVIVES", "0/2")],
+                           mc.MUTANTS) == []
+
+
+def test_a_run_of_its_own_says_a_timing_survivor_caught_in_no_round(monkeypatch, capsys):
+    mutants = _harness(monkeypatch, [])
+    mutants[3] = _known(mutants[3], "TIMING: tests/unit/test_race.py catches it at times")
+    assert mc.main(["--rounds", "2", "--jobs", "2"]) == 0
+    assert "! M3  TIMING 0/2" in capsys.readouterr().out

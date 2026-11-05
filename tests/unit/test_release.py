@@ -86,6 +86,14 @@ elif args[:2] == ["release", "edit"]:
     out = r["url"] = f"https://github.com/o/r/releases/tag/untagged-{len(data['calls']):04x}e"
 elif args[:2] == ["pr", "create"]:
     out = "https://github.com/o/r/pull/300"
+elif args[:2] == ["api", "--method"] and args[2] == "GET" and "/commits/" in args[3]:
+    # CI6c: a commit's pull requests, as GitHub lists them — a merged one's too.
+    if os.environ.get("FAKE_GH_FAIL_PULLS"):
+        state.write_text(json.dumps(data))
+        print("HTTP 403: Resource not accessible by integration", file=sys.stderr)
+        sys.exit(1)
+    sha = args[3].split("/commits/", 1)[1].split("/", 1)[0]
+    out = data["raw_pulls"] if "raw_pulls" in data else json.dumps(data.get("pulls", {}).get(sha, []))
 elif args[:2] == ["api", "--method"] and args[2] == "GET":
     # CI6: the release gate's runs, as GitHub lists a workflow's runs (most recent first).
     runs = data.get("runs", [])
@@ -175,12 +183,34 @@ def gate_run(work, ref="origin/main", *, conclusion="success", status="completed
             "repository": {"full_name": "o/r"}, "head_repository": {"full_name": head_repo}}
 
 
-def set_gate(*runs):
-    """What the fake gh answers for the gate's runs."""
+def set_gate(*runs, merged=True, pulls=None):
+    """What the fake gh answers for the gate's runs; and, for each commit a pull request's run is on,
+    its pull requests (CI6c) — `pulls` if given ({sha: [pr, …]}). Merged, as release-draft always
+    reads them: GitHub empties a run's `pull_requests` once its pull request is merged (measured on
+    the 0.5.5, 05/11: run 41997986094), its commit's pulls keep it."""
     state = Path(os.environ["FAKE_GH_STATE"])
     data = json.loads(state.read_text()) if state.exists() else {"releases": [], "calls": []}
-    data["runs"] = list(runs)
+    runs = [dict(r) for r in runs]
+    found: dict = {}
+    for r in runs:
+        for pr in r["pull_requests"]:
+            listed = found.setdefault(r["head_sha"], [])
+            if all(x["number"] != pr["number"] for x in listed):
+                listed.append(pull(pr["head"]["ref"], pr["base"]["ref"], sha=r["head_sha"], number=pr["number"],
+                                   head_repo=r["head_repository"]["full_name"], merged=merged))
+        if merged:
+            r["pull_requests"] = []
+    data["runs"], data["pulls"] = runs, found if pulls is None else pulls
     state.write_text(json.dumps(data))
+
+
+def pull(head, base="main", *, sha="0" * 40, number=300, head_repo="o/r", base_repo="o/r", merged=True):
+    """A pull request as GET repos/{owner}/{repo}/commits/{sha}/pulls gives it (the 0.5.5's, #537:
+    closed, merged_at, base main of grootcyber/eregion, head chore/release-0.5.5 of the same)."""
+    return {"number": number, "state": "closed" if merged else "open",
+            "merged_at": "2026-11-04T12:00:00Z" if merged else None,
+            "head": {"ref": head, "sha": sha, "repo": {"full_name": head_repo} if head_repo else None},
+            "base": {"ref": base, "repo": {"full_name": base_repo}}}
 
 
 def merge_release(work, version="0.4.4", gate=True):
@@ -705,15 +735,162 @@ def test_a_run_re_run_after_a_green_one_decides(repo, tmp_path, capsys, again, s
     assert "actions/runs/3" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("merged", [True, False])
 @pytest.mark.parametrize("base", ["release-0.4", "develop", None])
-def test_a_pull_request_into_another_branch_never_passes(repo, tmp_path, capsys, base):
+def test_a_pull_request_into_another_branch_never_passes(repo, tmp_path, capsys, base, merged):
     """A pull_request run runs its base's workflow: a chore/release-… PR into another branch, whose
-    release-gate.yml could be changed there, is never the gate. Nor a run that names no PR."""
+    release-gate.yml could be changed there, is never the gate — merged (its run names no PR, its
+    commit's pulls say it, CI6c) or open. Nor a run whose commit has no such PR."""
     assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
     merge_release(repo, gate=False)
-    set_gate(gate_run(repo, base=base))
+    set_gate(gate_run(repo, base=base), merged=merged)
     capsys.readouterr()
-    _gate_refuses(capsys, tmp_path, "aucune porte de release sur l'arbre d'origin/main")
+    line = _gate_refuses(capsys, tmp_path, "aucune porte de release sur l'arbre d'origin/main")
+    assert (f"vient d'une PR vers {base}, pas vers main" if base else
+            "n'a pas de PR de chore/release-0.4.4 de ce dépôt") in line
+
+
+# ── CI6c (#541): the version's pull request's gate, read after its merge ─────────────────────
+
+def _pulls_calls(tmp_path):
+    return [c["args"] for c in gh_calls(tmp_path) if c["args"][:2] == ["api", "--method"] and "/commits/" in c["args"][3]]
+
+
+def test_the_version_s_pr_merged_its_run_naming_no_pr_still_counts(repo, tmp_path, capsys):
+    """The 0.5.5 (05/11, run 41997986094): the gate green on the version's pull request, then the
+    merge — GitHub empties the run's `pull_requests`. Its base is read by its commit's pull
+    requests, #537 merged into main there: the gate counts, the draft is made."""
+    prepared(repo, capsys)
+    data = json.loads((tmp_path / "gh.json").read_text())
+    assert data["runs"][0]["pull_requests"] == []                       # what GitHub answers after the merge
+    sha = git(repo, "rev-parse", "origin/main")
+    capsys.readouterr()
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    assert "  ✓ la porte de release est verte sur l'arbre d'origin/main" in capsys.readouterr().out
+    assert _pulls_calls(tmp_path) == [["api", "--method", "GET", f"repos/{{owner}}/{{repo}}/commits/{sha}/pulls"]]
+    assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "create"]]
+
+
+def test_the_version_s_pr_still_open_counts_too(repo, tmp_path, capsys):
+    """Its run still names it (a dry run before the merge): its commit's pulls say main too."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo), merged=False)
+    capsys.readouterr()
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+
+
+def test_a_pulls_read_that_fails_refuses_and_says_it(repo, tmp_path, capsys, monkeypatch):
+    """No Pull requests read, the network: refused, the error and the right said — never taken for
+    a run that is not the gate, an older one deciding in its place (here a green dispatch)."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, conclusion="failure", run_id=3, created="2026-11-04T11:00:00Z"),
+             gate_run(repo, event="workflow_dispatch", branch="main", run_id=2, created="2026-11-04T09:00:00Z"))
+    monkeypatch.setenv("FAKE_GH_FAIL_PULLS", "1")
+    capsys.readouterr()
+    sha = git(repo, "rev-parse", "origin/main")
+    _gate_refuses(capsys, tmp_path, f"la PR de la porte de release ne se lit pas, sur {sha[:9]} "
+                                    "(https://github.com/o/r/actions/runs/3) (gh api, code 1 : HTTP 403: Resource not "
+                                    "accessible by integration) — l'App la lit par son droit Pull requests en lecture")
+
+
+@pytest.mark.parametrize("answer", ["not json", "", "null", "{}", '{"0": {}}', "[1]", '[[]]', '[{"number": 1}, "x"]'])
+def test_a_pulls_answer_that_is_not_a_list_of_prs_refuses(repo, tmp_path, capsys, answer):
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, run_id=3),
+             gate_run(repo, event="workflow_dispatch", branch="main", run_id=2, created="2026-11-03T09:00:00Z"))
+    data = json.loads((tmp_path / "gh.json").read_text())
+    data["raw_pulls"] = answer
+    (tmp_path / "gh.json").write_text(json.dumps(data))
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "la PR de la porte de release, sur ", "(https://github.com/o/r/actions/runs/3) : "
+                                    "la réponse de gh api n'est pas une liste de PR")
+
+
+def test_an_empty_pulls_answer_refuses(repo, tmp_path, capsys):
+    """No pull request on its commit — even when its run, open, still names one into main."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo), merged=False, pulls={})
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "aucune porte de release sur l'arbre d'origin/main",
+                  f"n'a pas de PR de chore/release-0.4.4 de ce dépôt ; {AGAIN}")
+
+
+@pytest.mark.parametrize("pr, said", [
+    ({"head": "lot/x-y"}, "n'a pas de PR de chore/release-0.4.4 de ce dépôt"),            # another branch's PR
+    ({"head_repo": "fork/r"}, "n'a pas de PR de chore/release-0.4.4 de ce dépôt"),        # a fork's, same name
+    ({"head_repo": None}, "n'a pas de PR de chore/release-0.4.4 de ce dépôt"),            # its fork deleted
+    ({"base": "develop"}, "vient d'une PR vers develop, pas vers main"),
+    ({"base_repo": "fork/r"}, "vient d'une PR vers la branche d'un autre dépôt, pas vers main"),
+])
+def test_only_this_repository_s_version_pr_into_its_main_counts(repo, tmp_path, capsys, pr, said):
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    sha = git(repo, "rev-parse", "origin/main")
+    kw = {"head": "chore/release-0.4.4", "sha": sha, **pr}
+    set_gate(gate_run(repo), pulls={sha: [pull(kw.pop("head"), kw.pop("base", "main"), **kw)]})
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "aucune porte de release sur l'arbre d'origin/main", said)
+
+
+def test_a_head_with_a_pr_into_main_and_another_elsewhere_refuses(repo, tmp_path, capsys):
+    """Which one the run ran for is not said: one into another branch is enough to refuse."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    sha = git(repo, "rev-parse", "origin/main")
+    set_gate(gate_run(repo), pulls={sha: [pull("chore/release-0.4.4", sha=sha, number=300),
+                                          pull("chore/release-0.4.4", "develop", sha=sha, number=301)]})
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "vient d'une PR vers develop, pas vers main")
+
+
+@pytest.mark.parametrize("named", ["develop", "main"])
+def test_the_run_and_its_commit_s_pulls_must_both_say_main(repo, tmp_path, capsys, named):
+    """An open PR's run names its base: it and the commit's pulls, into main both, or refused."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    sha = git(repo, "rev-parse", "origin/main")
+    other = "main" if named == "develop" else "develop"
+    set_gate(gate_run(repo, base=named), merged=False, pulls={sha: [pull("chore/release-0.4.4", other, sha=sha)]})
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "vient d'une PR vers develop, pas vers main")
+
+
+def test_a_newer_pr_run_into_another_branch_never_hides_the_gate(repo, tmp_path, capsys):
+    """Not the gate, it is passed over: the dispatch on main, older, on the tree, decides."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, base="develop", run_id=9, created="2026-11-04T12:00:00Z"),
+             gate_run(repo, event="workflow_dispatch", branch="main", run_id=8, created="2026-11-04T10:00:00Z"))
+    capsys.readouterr()
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    assert "(https://github.com/o/r/actions/runs/8)" in capsys.readouterr().out
+
+
+def test_one_commit_s_pulls_are_read_once(repo, tmp_path, capsys):
+    """Two runs of one commit (a re-run, a new attempt): one read of its pull requests."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, base="develop", run_id=9, created="2026-11-04T12:00:00Z"),
+             gate_run(repo, base="develop", run_id=8, created="2026-11-04T10:00:00Z"))
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "vient d'une PR vers develop, pas vers main")
+    assert len(_pulls_calls(tmp_path)) == 1
+
+
+def test_a_commit_github_would_not_give_is_never_read(repo, tmp_path, capsys):
+    """A run's head_sha that is not 40 hex digits never goes into a path: refused, said unreadable."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    r = gate_run(repo)
+    r["head_sha"] = "../../releases/1"
+    set_gate(r)
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "la PR de la porte de release ne se lit pas, sur (commit illisible)")
+    assert _pulls_calls(tmp_path) == []
 
 
 def test_a_gate_said_nothing_still_refuses(repo, tmp_path, capsys, monkeypatch):
@@ -735,10 +912,13 @@ def test_a_gate_said_nothing_still_refuses(repo, tmp_path, capsys, monkeypatch):
 ])
 def test_a_run_that_is_not_the_gate_never_passes(repo, tmp_path, capsys, change):
     """Green and on the same tree, but not a run whose jobs ran: the battery runs on a dispatch, or
-    on this repository's chore/release-… pull request (release-gate.yml's `if:`)."""
+    on this repository's chore/release-… pull request (release-gate.yml's `if:`). Its commit's
+    pulls naming the version's pull request into main never change that (CI6c): the run's own
+    head repository refuses a fork's."""
     assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
     merge_release(repo, gate=False)
-    set_gate(gate_run(repo, **change))
+    sha = git(repo, "rev-parse", "origin/main")
+    set_gate(gate_run(repo, **change), pulls={sha: [pull("chore/release-0.4.4", sha=sha)]})
     capsys.readouterr()
     _gate_refuses(capsys, tmp_path, "aucune porte de release sur l'arbre d'origin/main")
 
@@ -787,10 +967,12 @@ def test_the_dry_run_shows_the_gate_green_and_refuses_it_red(repo, tmp_path, cap
 
 
 def test_the_gate_is_read_by_one_get_of_the_workflow_s_runs(repo, tmp_path, capsys):
+    """Then, its run a pull request's (CI6c), one GET of its commit's pull requests."""
     prepared(repo, capsys)
     assert rel.main(["release-draft", "0.4.4"]) == 0
-    (api,) = [c["args"] for c in gh_calls(tmp_path) if c["args"][0] == "api"]
-    assert api == ["api", "--method", "GET", "repos/{owner}/{repo}/actions/workflows/release-gate.yml/runs?per_page=100"]
+    runs, pulls = [c["args"] for c in gh_calls(tmp_path) if c["args"][0] == "api"]
+    assert runs == ["api", "--method", "GET", "repos/{owner}/{repo}/actions/workflows/release-gate.yml/runs?per_page=100"]
+    assert pulls == ["api", "--method", "GET", f"repos/{{owner}}/{{repo}}/commits/{git(repo, 'rev-parse', 'origin/main')}/pulls"]
 
 
 @pytest.mark.parametrize("extra", [["--force"], ["--no-gate"], ["--skip-gate"], ["--yes"]])
@@ -848,8 +1030,20 @@ def test_no_variable_passes_over_the_gate(repo, tmp_path, capsys, monkeypatch):
 
 GH_COMMANDS = {("pr", "create"), ("release", "list"), ("release", "create"), ("release", "edit"),
                ("api", "--method")}
-# CI6: the one `gh api` of release.py, the gate's runs read — exactly this list, GET, a literal path.
+# CI6: the first `gh api` of release.py, the gate's runs read — exactly this list, GET, a literal path.
 GATE_READ = ["gh", "api", "--method", "GET", "repos/{owner}/{repo}/actions/workflows/release-gate.yml/runs?per_page=100"]
+
+
+def _pulls_read(n) -> bool:
+    """CI6c: the other, a pull request's run's base — its commit's pull requests: GET, five
+    arguments, the path a literal around the commit alone, "repos/{owner}/{repo}/commits/" + sha +
+    "/pulls" (release.py checks `sha` is 40 hex digits before it, SHA.fullmatch)."""
+    e, p = n.elts, n.elts[4] if len(n.elts) == 5 else None
+    return (len(e) == 5 and [_const(x) for x in e[:4]] == GATE_READ[:4]
+            and isinstance(p, ast.BinOp) and isinstance(p.op, ast.Add) and _const(p.right) == "/pulls"
+            and isinstance(p.left, ast.BinOp) and isinstance(p.left.op, ast.Add)
+            and _const(p.left.left) == "repos/{owner}/{repo}/commits/"
+            and isinstance(p.left.right, ast.Name) and p.left.right.id == "sha")
 DRAFT_WORD = re.compile(r"(?i)(?<!release)(?<!release[-_])-*draft")
 WRITES = {"POST", "PATCH", "PUT", "DELETE"}
 SCRIPTS = ("release.py", "agents_discord.py", "notify_discord.py")
@@ -908,8 +1102,8 @@ def publishes_gh(source: str) -> list[str]:
         if head == ("release", "edit"):
             if len(n.elts) != 6 or consts[4] != "--notes-file" or consts[3] is not None or consts[5] is not None:
                 bad.append(f"edit is not [gh, release, edit, <tag>, --notes-file, <path>]: {consts}")
-        if head == ("api", "--method") and consts != GATE_READ:
-            bad.append(f"gh api is not the gate's read, GET: {consts}")
+        if head == ("api", "--method") and consts != GATE_READ and not _pulls_read(n):
+            bad.append(f"gh api is not one of the gate's reads, GET: {consts}")
     ghs = sum(_const(n) == "gh" for n in ast.walk(tree))
     whiches = sum(isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "which" for n in ast.walk(tree))
     guards = sum(isinstance(n, ast.Tuple) and [_const(e) for e in n.elts] == ["git", "gh"] for n in ast.walk(tree))
@@ -1049,7 +1243,10 @@ def test_no_path_publishes_in_the_code():
     assert publishes_code(code["release.py"]) == []
     heads = sorted(tuple(_const(e) for e in n.elts[1:3]) for n in _gh_lists(ast.parse(code["release.py"])))
     assert heads == sorted([("pr", "create")] * 2 + [("release", "list"), ("release", "create"), ("release", "create"),
-                                                      ("release", "edit"), ("api", "--method")])   # each command shown and run
+                                                      ("release", "edit")]
+                           + [("api", "--method")] * 2)   # each command shown and run; the gate's two reads
+    apis = [n for n in _gh_lists(ast.parse(code["release.py"])) if tuple(_const(e) for e in n.elts[1:3]) == ("api", "--method")]
+    assert sorted(_pulls_read(n) for n in apis) == [False, True]   # the runs' read, and the pulls' (CI6c)
     for name, text in code.items():
         assert publishes_words(text) == [], name
     for name in ("release.py", "agents_discord.py", "notify_discord.py"):
@@ -1122,9 +1319,23 @@ def test_the_releases_label_is_a_label_and_nothing_else():
     '["gh", "api", "--method", "GET", path]',
     '["gh", "api", "--method", "GET", "repos/{owner}/{repo}/actions/workflows/release-gate.yml/runs?per_page=100",'
     ' "--method", "PATCH"]',
+    # CI6c: the pulls' read is a GET of a commit's pull requests — nothing after, nothing else around it.
+    '["gh", "api", "--method", "GET", "repos/{owner}/{repo}/commits/" + sha + "/pulls", "--method", "PATCH"]',
+    '["gh", "api", "--method", "PATCH", "repos/{owner}/{repo}/commits/" + sha + "/pulls"]',
+    '["gh", "api", "--method", "GET", "repos/{owner}/{repo}/releases/" + sha + "/pulls"]',
+    '["gh", "api", "--method", "GET", "repos/{owner}/{repo}/commits/" + sha + "/pulls/1/merge"]',
+    '["gh", "api", "--method", "GET", "repos/{owner}/{repo}/commits/" + path]',
+    '["gh", "api", "--method", "GET", "repos/{owner}/{repo}/commits/" + tag + "/pulls"]',
+    '["gh", "api", "--method", "GET", f"repos/{{owner}}/{{repo}}/commits/{sha}/pulls"]',
 ], ids=lambda s: s[:40])
 def test_the_allow_list_sees_a_path_that_would_publish(snippet):
     assert publishes(snippet), snippet
+
+
+def test_the_allow_list_lets_the_gate_s_two_reads_through():
+    for snippet in (str(GATE_READ),
+                    '["gh", "api", "--method", "GET", "repos/{owner}/{repo}/commits/" + sha + "/pulls"]'):
+        assert publishes_gh(snippet) == [], snippet
 
 
 @pytest.mark.parametrize("snippet", [
@@ -1162,9 +1373,11 @@ def test_no_call_publishes(repo, tmp_path, capsys, monkeypatch):
         f.close()
     calls = [c["args"] for c in gh_calls(tmp_path)]
     assert [c[:2] for c in calls] == [["pr", "create"], ["release", "list"], ["api", "--method"],
-                                      ["release", "create"], ["release", "edit"]]
+                                      ["api", "--method"], ["release", "create"], ["release", "edit"]]
     assert calls[2] == GATE_READ[1:]                                    # a GET, the gate's runs
-    create, edit = calls[3], calls[4]
+    assert calls[3][:3] == GATE_READ[1:4] and len(calls[3]) == 4        # a GET, its pull request's (CI6c)
+    assert re.fullmatch(r"repos/\{owner\}/\{repo\}/commits/[0-9a-f]{40}/pulls", calls[3][3])
+    create, edit = calls[4], calls[5]
     assert [a for a in create if "draft" in a.lower()] == ["--draft"]
     assert create[create.index("--draft") + 1].startswith("--")
     assert edit[:4] == ["release", "edit", "v0.4.4", "--notes-file"] and len(edit) == 5
@@ -1379,8 +1592,8 @@ def test_the_link_posted_never_moves_when_github_moves_the_draft_s(repo, tmp_pat
     given = [c for c in gh_calls(tmp_path) if c["args"][:2] in (["release", "create"], ["release", "edit"])]
     assert len(given) == 2
     urls = {r["url"] for r in gh_releases(tmp_path)}
-    first = "https://github.com/o/r/releases/tag/untagged-0004c"       # after the gate's read (CI6)
-    assert urls == {"https://github.com/o/r/releases/tag/untagged-0005e"} and first not in urls   # moved
+    first = "https://github.com/o/r/releases/tag/untagged-0005c"       # after the gate's two reads (CI6, CI6c)
+    assert urls == {"https://github.com/o/r/releases/tag/untagged-0006e"} and first not in urls   # moved
     sent = json.dumps([r["body"] for r in releases.requests if r["method"] in ("POST", "PATCH")])
     assert "untagged-" not in sent                                    # neither the first URL nor the last
     (ping,) = [b for b in releases.webhook_posts(AGENTS_TOKEN) if b.get("content")]

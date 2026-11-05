@@ -2144,8 +2144,9 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
   — son image plus ancienne que la release, il pousse celle-ci, vérifiée (OI3, « Les images publiées »).
 - **Aucun chemin ne publie** : rien ne fait d'un brouillon une release. `tests/unit/test_release.py`
   lit le code sur une liste blanche : cinq commandes `gh` seulement (`pr create`, `release list`,
-  `release create` avec `--draft`, `release edit` des seules notes, et un seul `gh api`, la lecture des
-  runs de la porte : `--method GET`, son chemin écrit en entier, CI6). Une commande ne
+  `release create` avec `--draft`, `release edit` des seules notes, et deux `gh api` en `--method GET`,
+  les lectures de la porte : ses runs, le chemin écrit en entier (CI6), et les PR du commit d'un run,
+  `"repos/{owner}/{repo}/commits/" + sha + "/pulls"` et rien d'autre, `sha` vérifié avant, CI6c). Une commande ne
   part que par `run()`, avec une liste littérale qui commence par `git` ou `gh` ; ni shell, ni
   `os.system`. Aucun texte ne dit
   `draft`, sauf ce `--draft`. Une URL de `releases` n'est jamais appelée qu'en lecture. Publier déploie H0 (son CD, H1) : **Jonathan publie**, sur GitHub.
@@ -2227,6 +2228,24 @@ Sans run sur cet arbre, elle dit que quelque chose a fusionné après la porte, 
 `main`. Aucun moyen de passer outre : ni option, ni variable. `DRY_RUN=1` montre la vérification.
 L'App des sessions lit ces runs par son droit *Actions* en lecture (mesuré le 04/11 : une lecture réelle
 des runs de `mutants.yml` sous `eregion-agents[bot]`, l'arbre rendu identique à celui de `git`).
+
+**La base d'une PR, lue après la fusion** (CI6c, #541). Le 05/11, la porte était verte sur la PR de la
+0.5.5 (run 41997986094), sur l'arbre même d'`origin/main`, et `release-draft` l'a refusée : la base se
+lisait dans la liste `pull_requests` du run, et GitHub vide cette liste une fois la PR fusionnée
+(`pull_requests: []`). Or `release-draft` vient toujours après la fusion. La base se lit désormais par les
+PR du commit du run, une seconde lecture `gh api` (`GET repos/{owner}/{repo}/commits/{head_sha}/pulls`),
+que la fusion ne vide pas : mesuré le 05/11 sous l'App, le commit `28c8b236` de ce run rend la PR #537,
+fusionnée, base `main` de ce dépôt, tête `chore/release-0.5.5` de ce dépôt. La PR retenue est celle dont
+la tête est la branche du run, dans ce dépôt (celle d'un fork au même nom ne compte jamais). Elle, toute
+autre PR de cette tête et celle que le run nomme encore (une PR ouverte) doivent aller vers `main` de ce
+dépôt ; sinon le run n'est pas la porte, et la commande le dit. Une lecture par commit, et seulement
+pour les runs sur l'arbre d'`origin/main`. Une lecture qui échoue, une réponse qui n'est pas une liste de
+PR, ou un commit de run qui n'est pas 40 chiffres hexadécimaux refusent, et la commande le dit : un run
+illisible n'est jamais écarté pour laisser décider un plus ancien. Cette lecture demande le droit *Pull
+requests* en lecture (`X-Accepted-GitHub-Permissions: pull_requests=read`, mesuré le 05/11) ; l'App
+l'a déjà, puisqu'elle ouvre les PR (*Pull requests* en écriture) : la lecture réelle ci-dessus a rendu
+200 sous son jeton d'installation. Tests : `tests/unit/test_release.py`, sur des réponses simulées du
+faux `gh` ; mutants M3770–M3774 (`scripts/mutants/CI6c.py`).
 
 **Sa durée : de 45 à 50 minutes estimées, au plus 60** (04/11 ; à remesurer sur le premier run réel).
 Ses parties tournent ensemble ; la plus longue fait la durée :

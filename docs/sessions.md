@@ -157,7 +157,8 @@ release ») en est la preuve, et `make release-draft` la redemande.
    autre PR est passée avant, l'arbre diffère et le brouillon est refusé. Il faut alors relancer la porte
    sur `main`, une fois : `gh workflow run release-gate.yml --ref main`. C'est Jonathan qui la lance.
 4. **Le brouillon** : `make release-draft VERSION=X.Y.Z`. Il redit la porte (son run, son lien), refuse
-   tant qu'elle n'est pas verte, et rien ne passe outre. Puis Jonathan publie.
+   tant qu'elle n'est pas verte, et rien ne passe outre. Le run de la PR de version compte après sa
+   fusion : sa base se lit par les PR de son commit (CI6c). Puis Jonathan publie.
 
 ## Ce qui reste à Jonathan
 

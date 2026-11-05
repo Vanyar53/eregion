@@ -50,10 +50,17 @@ jobs:
 
       - name: Install
         # The lock (M-3): the versions the image runs, every file checked against its hash;
-        # ruff among them — the lint result must not depend on the day.
+        # ruff among them — the lint result must not depend on the day. CI8 (#566): the download
+        # retried (scripts/retry.sh: three attempts, 10 then 30 s apart, each said); the local
+        # install, nothing to fetch, is not.
         run: |
-          python -m pip install --require-hashes -r requirements/dev.txt
+          bash scripts/retry.sh python -m pip install --require-hashes -r requirements/dev.txt
           python -m pip install --no-deps --no-build-isolation -e .
+
+      # CI8 (#566): ChromaDB's embedding model, fetched before the tests in a step of its own — its
+      # download alone retried, never the tests. The cache restored, nothing leaves.
+      - name: ChromaDB's embedding model (fetched when the cache misses, retried)
+        run: bash scripts/retry.sh python scripts/chroma_model.py
 
       - name: Lint
         run: ruff check .
@@ -107,8 +114,9 @@ jobs:
         continue-on-error: ${{ github.event_name == 'push' }}
         run: |
           python3 -m venv "$RUNNER_TEMP/audit"
-          "$RUNNER_TEMP/audit/bin/pip" install --require-hashes -r requirements/audit.txt
+          bash scripts/retry.sh "$RUNNER_TEMP/audit/bin/pip" install --require-hashes -r requirements/audit.txt
 
+      # The advisory service is asked here, never retried: an audit that failed is said, never red.
       - name: Advisories (red only for one with a fix no one accepted)
         continue-on-error: ${{ github.event_name == 'push' }}
         run: >-
@@ -140,7 +148,7 @@ jobs:
 
       - name: Install
         run: |
-          python -m pip install --require-hashes -r requirements/dev.txt
+          bash scripts/retry.sh python -m pip install --require-hashes -r requirements/dev.txt
           python -m pip install --no-deps --no-build-isolation -e .
 
       - uses: actions/cache/restore@v5
@@ -201,8 +209,8 @@ jobs:
   # provider package comes from the registry and is checked against the hashes of its module's
   # committed lock file (-lockfile=readonly: a package that does not match, or a provider the
   # lock does not list, fails init). Glorfindel's host module has its own test since SEC11 (the
-  # session drain, VM by VM: infra/glorfindel-host/tests/); Orodruin's has none yet: its
-  # configuration is validated against its own lock the same way.
+  # session drain, VM by VM: infra/glorfindel-host/tests/); Orodruin's since CI7 (#554: the watch
+  # channel's writers, WC1, and Microsoft Graph's reads, IDI1 — infra/orodruin/tests/).
   terraform-test:
     name: terraform test (mock providers)
     if: ${{ github.event_name != 'schedule' }}   # the night is macOS's (CI5)
@@ -226,7 +234,9 @@ jobs:
           TERRAFORM_VERSION: 1.14.9-1
         run: |
           key="$RUNNER_TEMP/hashicorp.gpg"
-          curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --batch --yes --dearmor -o "$key"
+          # CI8 (#566): the downloads retried (scripts/retry.sh), the key's check never.
+          bash scripts/retry.sh curl -fsSL -o "$RUNNER_TEMP/hashicorp.asc" https://apt.releases.hashicorp.com/gpg
+          gpg --batch --yes --dearmor -o "$key" "$RUNNER_TEMP/hashicorp.asc"
           # One primary key, and that fingerprint is its own — a subkey's fpr line has the same form.
           if ! gpg --batch --show-keys --with-colons "$key" \
                | awk -F: -v f="$HASHICORP_APT_FPR" '$1=="pub"{n++;p=1;next} $1=="fpr"&&p{k=$10;p=0} END{exit !(n==1&&k==f)}'; then
@@ -239,21 +249,33 @@ jobs:
             | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
             | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
-          sudo apt-get update -qq && sudo apt-get install -y -qq "terraform=${TERRAFORM_VERSION}"
+          # A transient error on an index fails the update (apt-get --error-on=any): retried, never a W: and 0.
+          bash scripts/retry.sh sudo apt-get update -qq -o APT::Update::Error-Mode=any
+          bash scripts/retry.sh sudo apt-get install -y -qq "terraform=${TERRAFORM_VERSION}"
           terraform version
+
+      # CI8 (#566): the providers' download in a step of its own, retried; the test never.
+      - name: Terraform init — Celebrimbor (the locked providers, retried)
+        run: bash scripts/retry.sh terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false -no-color
 
       - name: Terraform test — Celebrimbor (mock providers)
         run: |
-          terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false -no-color
           terraform -chdir=infra/terraform test -no-color
+
+      # CI8 (#566): the providers' download in a step of its own, retried; the test never.
+      - name: Terraform init — Glorfindel's host (the locked providers, retried)
+        run: bash scripts/retry.sh terraform -chdir=infra/glorfindel-host init -backend=false -lockfile=readonly -input=false -no-color
 
       - name: Terraform test — Glorfindel's host (mock providers)
         run: |
-          terraform -chdir=infra/glorfindel-host init -backend=false -lockfile=readonly -input=false -no-color
           terraform -chdir=infra/glorfindel-host validate -no-color
           terraform -chdir=infra/glorfindel-host test -no-color
 
-      - name: Terraform validate — Orodruin
+      # CI8 (#566): the providers' download in a step of its own, retried; the validation never.
+      - name: Terraform init — Orodruin (the locked providers, retried)
+        run: bash scripts/retry.sh terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color
+
+      - name: Terraform test — Orodruin (mock providers)
         run: |
-          terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color
           terraform -chdir=infra/orodruin validate -no-color
+          terraform -chdir=infra/orodruin test -no-color

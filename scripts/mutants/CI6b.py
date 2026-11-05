@@ -34,10 +34,15 @@ MUTANTS = [
 GATE = ".github/workflows/release-gate.yml"
 _CACHE = ("      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25   # v5.1.0\n"
           "        with:\n          path: ~/.cache/chroma\n          key: chroma-onnx-v1\n\n")
+# Since CI8 (#566), the model's own retried step comes between the cache and the shard's measure.
+_FETCH = ("      # CI8 (#566): the model fetched here, retried, when the cache misses — the harness then finds\n"
+          "      # it ready (CI6b). The mutation itself is never retried.\n"
+          "      - name: ChromaDB's embedding model (fetched when the cache misses, retried)\n"
+          "        run: bash scripts/retry.sh python scripts/chroma_model.py\n\n")
 MUTANTS += [
     ("M3734", "the gate's mutants without ChromaDB's model restored: each shard fetches it again (CI6b)", GATE,
-     _CACHE + "      - name: Re-introduce each bug of the shard, run its tests\n",
-     "      - name: Re-introduce each bug of the shard, run its tests\n"),
+     _CACHE + _FETCH + "      - name: Re-introduce each bug of the shard, run its tests\n",
+     _FETCH + "      - name: Re-introduce each bug of the shard, run its tests\n"),
 ]
 TESTS = {
     "M3734": "tests/unit/test_workflows.py::test_the_gate_s_test_runs_restore_chroma_s_model_as_ci_does",

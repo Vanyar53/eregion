@@ -2875,6 +2875,90 @@ async function showIsolationModal(vmName) {
     'No reasoning available yet.\nThe remediation cycle may still be running — retry in a few seconds.';
 }
 
+// ── The plan of an identity card (IR1a) ─────────────────────────────────────────────
+// Written by the watch's code from the row of Entra's log, its ids read on Graph (read only):
+// the verbs in their order, then the steps for a human, each with its complete command, what
+// was not read (never invented), its side effect and its way back. « Verify » asks the watch to
+// read Graph again: held, not held or unreadable, noted on the card's thread. Every field is
+// text from the outside (an application's name chosen by an attacker): _attr, always.
+const _CHECK_WORDS  = { held: 'held', not_held: 'NOT held', unreadable: 'unreadable (never « held »)' };
+const _CHECK_COLORS = { held: 'var(--green)', not_held: 'var(--red)', unreadable: 'var(--yellow)' };
+function _planLine(label, value, code) {
+  if (!value) return '';
+  const v = code ? `<code style="color:var(--blue)">${_attr(value)}</code>` : _attr(value);
+  return `<div style="font-size:10px;padding-left:10px"><span style="color:var(--dim)">${_attr(label)}</span> ${v}</div>`;
+}
+function _planItem(i) {
+  const verb = i.verb ? `<code style="color:var(--cyan)">${_attr(i.verb)}</code> ` : '';
+  const unread = (i.params || []).filter(p => !p.read)
+    .map(p => `<div style="font-size:10px;padding-left:10px;color:var(--yellow)">not read: ${_attr(p.name)} — ${_attr(p.why || '')}</div>`).join('');
+  return `<div style="padding:3px 0 3px 8px;border-left:1px solid var(--border);margin:4px 0">
+      <div style="font-size:11px">${Number(i.n)}. ${verb}${_attr(i.what)}${i.optional ? ' <span style="color:var(--dim)">(if the author is not expected)</span>' : ''}</div>
+      ${i.why_human ? `<div style="color:var(--dim);font-size:10px;padding-left:10px">${_attr(i.why_human)}</div>` : ''}
+      ${_planLine('command', i.command, true)}${unread}
+      ${_planLine('to find it', i.find, true)}${_planLine('before', i.before, true)}
+      ${_planLine('side effect', i.side_effect, false)}${_planLine('way back', i.rollback, false)}
+    </div>`;
+}
+function _planCheck(c) {
+  const items = (c.items || []).map(x => `<div style="font-size:10px;padding-left:10px">
+      <span style="color:${_CHECK_COLORS[x.state] || 'var(--dim)'}">${_attr(_CHECK_WORDS[x.state] || x.state)}</span>
+      ${Number(x.n)}. ${_attr(x.why)}${x.optional ? ' <span style="color:var(--dim)">(not counted)</span>' : ''}</div>`).join('');
+  return `<div style="margin:4px 0"><span style="color:${_CHECK_COLORS[c.verdict] || 'var(--dim)'};font-weight:700">
+      ${_attr(_CHECK_WORDS[c.verdict] || c.verdict)}</span> <span style="color:var(--dim);font-size:10px">${_attr(c.at)}
+      ${c.why ? ' — ' + _attr(c.why) : ''}</span>${items}</div>`;
+}
+function _identityPlan(e) {
+  const plan = e.identity_plan;
+  if (!plan || typeof plan !== 'object') return '';
+  const items = plan.items || [];
+  const verbs = items.filter(i => i.by === 'executor').map(_planItem).join('');
+  const steps = items.filter(i => i.by !== 'executor').map(_planItem).join('');
+  const graph = plan.graph || {};
+  const checks = (e.identity_checks || []).slice(-3).reverse().map(_planCheck).join('');
+  const asked = e.identity_check_requested
+    ? `<div style="color:var(--dim);font-size:10px">Verify asked at ${_attr(e.identity_check_requested)} — the watch answers at its next pass</div>` : '';
+  const canCheck = items.some(i => i.verifiable);
+  return `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-weight:700;font-size:11px">Plan</span>
+        <span style="color:var(--dim);font-size:10px">written by the code, never the model · no executor before IR1c: every item by hand, with your account</span>
+        ${canCheck ? `<button class="action" style="margin-left:auto" ${_on('click', 'verifyIdentity', e.id)}>🔎 Verify</button>` : ''}
+      </div>
+      ${graph.read ? '' : `<div style="color:var(--yellow);font-size:10px">Graph not read: ${_attr(graph.why || '')} — each parameter not read is marked, never invented</div>`}
+      <div style="color:var(--text);font-size:10px;margin:4px 0">${_attr(plan.confirm || '')}</div>
+      ${verbs ? `<div style="color:var(--dim);font-size:10px;margin-top:4px">Verbs (the identity executor's, IR1c)</div>${verbs}` : ''}
+      ${steps ? `<div style="color:var(--dim);font-size:10px;margin-top:4px">Steps for a human</div>${steps}` : ''}
+      ${plan.note ? `<div style="color:var(--dim);font-size:10px">${_attr(plan.note)}</div>` : ''}
+      ${asked}${checks}
+    </div>`;
+}
+// « Verify »: the request written on the card; the watch reads Graph and notes the result. The
+// page waits a minute for it, then says it did not come (a watch stopped answers nothing).
+async function verifyIdentity(escId) {
+  const before = ((_escById[escId] || {}).identity_checks || []).length;
+  let d;
+  try {
+    d = await (await _post(`/api/identity/verify/${_seg(escId)}`)).json();
+  } catch (err) { toast('✗ ' + err.message); return; }
+  if (d.error) { toast('✗ ' + d.error); return; }
+  toast('🔎 Asked to the watch — it reads Graph and notes the result on the card');
+  for (let n = 0; n < 12; n++) {
+    await new Promise(r => setTimeout(r, 5000));
+    await refreshState();
+    const e = _escById[escId];
+    const checks = (e && e.identity_checks) || [];
+    if (checks.length > before) {
+      const last = checks[checks.length - 1];
+      toast('Verify: ' + (_CHECK_WORDS[last.verdict] || last.verdict), 6000);
+      const vm = (e.resource_id || '').split('/').pop();
+      if (document.getElementById('modal').classList.contains('open') && vm) showEscModal(vm);
+      return;
+    }
+  }
+  toast('Verify: no answer from the watch in a minute — is it running? The request stays on the card.', 8000);
+}
+
 function showEscModal(vmName) {
   const escs = Object.values(_escById).filter(e =>
     e.resource_id.split('/').pop() === vmName ||
@@ -2906,7 +2990,8 @@ function showEscModal(vmName) {
       : escTitle(e);
     // type already encoded in title for these — keep ctx lean
     const ctx   = _escCtx(e, '', isModeHold || isWriteBlocked || isActionFailed);
-    const steps = (e.suggested_steps || [])
+    // An identity card with its plan (IR1a) shows the plan — the same steps, structured, with Verify.
+    const steps = e.identity_plan ? _identityPlan(e) : (e.suggested_steps || [])
       .map(s => `<div style="color:var(--dim);font-size:10px;padding:2px 0 2px 8px">• ${_attr(s)}</div>`).join('');
     const query = e.proposed_query
       ? `<pre style="background:var(--bg2);border-left:2px solid var(--cyan);padding:8px;font-size:10px;
@@ -3223,6 +3308,7 @@ const ACTIONS = {
   openCommandModal, refreshAuditVm, refreshBackups, restorePoints, showCoverageModal, showEscModal,
   showIsolationModal, showReasoning, showRuleByIdx, toggleAsset, toggleBackend, closeModal,
   filterBlocks, showBlocks,                       // a VM's blocks, in their window (CON-K)
+  verifyIdentity,                                 // an identity card's plan, read again on Graph by the watch (IR1a)
   _glowNsgVms,
   stop() {},                                      // only keeps the click from the element around
   ackAllAndClose(ids) { doAckAll(ids); closeModal(); },

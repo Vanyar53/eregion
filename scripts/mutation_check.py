@@ -2217,9 +2217,10 @@ MUTANTS += [
     ("M937", "an identity rule without EventId loads in silence (C2)", DRU,
      "        if rule_enabled and is_identity_source(source) and \"eventid\" not in item[\"query\"].lower():",
      "        if False:"),
-    ("M938", "a role card without how to revoke the assignment (C2)", ENT,
-     "            \"Non voulue : retirer l'attribution — portail, ou `az rest --method DELETE --url \"\n"
-     "            \"https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/<id>`.\",\n", ""),
+    # IR1a: the steps are the plan's (glorfindel/providers/azure/entra_grants.py), Graph not read here.
+    ("M938", "a role card without how to revoke the assignment (C2)", "glorfindel/providers/azure/entra_grants.py",
+     "            command=f\"az rest --method DELETE --url {GRAPH_URL}/roleManagement/directory/roleAssignments/{_v(aid_p)}\",\n",
+     "            command=\"\",\n"),
     ("M939", "the tenant's diagnostic setting always on: the whole tenant's logs sent (C2)",
      "infra/terraform/entra_logs.tf", "  count = local.entra_logs_enabled ? 1 : 0", "  count = 1"),
 ]
@@ -2245,10 +2246,11 @@ MUTANTS += [
     ("M945", "respond on an Entra query of another source goes to the model (C2)", AGT,
      "    entra_query = _reads_entra_table(query) and not is_control_plane_source(source)",
      "    entra_query = False"),
-    ("M946", "a consent card proposes to disable the resource's principal: the whole tenant cut (C2)", ENT,
-     "        client = (tid if op.lower() == \"consent to application\" and row.get(\"TargetId\")\n"
-     "                  else str(row.get(\"ClientId\") or \"\").strip())",
-     "        client = tid"),
+    # IR1a: the client is chosen by the plan (entra_grants.py); M3899 takes the target alone.
+    ("M946", "a consent card proposes to disable the resource's principal: the whole tenant cut (C2)",
+     "glorfindel/providers/azure/entra_grants.py",
+     "    client = guid(row.get(\"TargetId\")) if op == \"consent to application\" else guid(row.get(\"ClientId\"))\n",
+     "    client = guid(row.get(\"TargetId\")) or guid(row.get(\"ClientId\"))\n"),
     ("M947", "an identity card labelled exercise by a window on its anchor VM (C2)", AGT,
      "    if _is_identity(signal) or (\n"
      "            # `unattributed` is the RulePoller's own word; a respond signal (an\n"

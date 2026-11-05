@@ -522,9 +522,10 @@ def test_a_run_without_its_id_is_still_played():
 
 def test_the_actions_named_are_glorfindels():
     """The actions a change claim may name are Glorfindel's, written again for the report
-    (the Annatar image has no Glorfindel package)."""
-    from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED
-    assert set(cc.ACTIONS) == AUTONOMOUS_ACTIONS | HUMAN_APPROVAL_REQUIRED
+    (the Annatar image has no Glorfindel package) — those a decision may name: never an identity
+    verb (IR1a), which no decision carries (`MODEL_GATED_ACTIONS`)."""
+    from glorfindel.actions import AUTONOMOUS_ACTIONS, MODEL_GATED_ACTIONS
+    assert set(cc.ACTIONS) == AUTONOMOUS_ACTIONS | MODEL_GATED_ACTIONS
 
 
 # ── The index of past campaigns ──────────────────────────────────────────────────────

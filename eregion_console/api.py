@@ -1706,6 +1706,23 @@ async def action_ack(esc_id: str) -> dict:
     return {"ok": True}
 
 
+@app.post("/api/identity/verify/{esc_id}")
+async def identity_verify(esc_id: str) -> dict:
+    """« Verify » on an identity card (IR1a): the request written on the card, for the watch —
+    which reads Graph, read only, and notes held, not held or unreadable on the card's thread
+    (`identity_checks`). The console never reads Graph itself (it holds no right on Entra ID), and
+    writes nothing on Azure: a button the read-only mode leaves on."""
+    from glorfindel import escalations as esc_module
+    try:
+        at = esc_module.request_identity_check(esc_id)
+    except KeyError:
+        return {"error": f"Escalation {esc_id} not found or already resolved"}
+    except ValueError as exc:
+        return {"error": str(exc)}
+    return {"ok": True, "requested_at": at,
+            "said": "asked to the watch: it reads Graph at its next pass (~10 s) and notes the result on the card"}
+
+
 @app.post("/api/escalations/{esc_id}/verdict")
 async def set_verdict(esc_id: str, body: dict) -> dict:
     """The operator's judgement of a card: right / wrong / unsure (observation)."""

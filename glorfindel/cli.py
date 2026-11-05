@@ -827,6 +827,35 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         _reassert_thread[0] = _thr.Thread(target=_reassert_pass, daemon=True, name="reassert")
         _reassert_thread[0].start()
 
+    # IR1a: the console's « Verify » on an identity card — the watch reads Graph, read only, and
+    # notes « held », « not held » or « unreadable » on the card's thread. In its own thread, one
+    # at a time: a Graph that does not answer never stalls the loop.
+    _identity_thread: list = [None]
+
+    def _identity_checks() -> None:
+        if dry_run:
+            return
+        from glorfindel import escalations as _escs
+        if not _escs.identity_checks_requested():
+            return                       # cheap local check — no Graph call when nothing waits
+        t = _identity_thread[0]
+        if t is not None and t.is_alive():
+            return
+
+        def _run() -> None:
+            from glorfindel.identity_checks import run_requested
+            try:
+                for r in run_requested():
+                    with _output_lock:
+                        console.print(f"[dim]Vérification d'identité {r['id'][:8]} : {r['verdict']}[/dim]")
+            except Exception as exc:
+                with _output_lock:
+                    console.print(f"[red]watch: vérification d'identité en erreur — {exc}[/red]")
+
+        import threading as _thr
+        _identity_thread[0] = _thr.Thread(target=_run, daemon=True, name="identity-checks")
+        _identity_thread[0].start()
+
     _reassert_seen: dict = {}
 
     def _reassert_pass() -> None:
@@ -1118,6 +1147,12 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             try:
                 _poll()
                 _ttl_check_counter += 1
+                if _ttl_check_counter % 5 == 0:   # « Verify » answered within ~10 s (IR1a)
+                    try:
+                        _identity_checks()
+                    except Exception as exc:
+                        with _output_lock:
+                            console.print(f"[red]watch: _identity_checks en erreur — {exc}[/red]")
                 if _ttl_check_counter % 30 == 0:  # housekeeping every 30 polls (~1 min at 2s interval)
                     # Each task on its own: one that keeps failing (an old isolation the
                     # subscription guard refuses…) no longer skips the reassertion and the

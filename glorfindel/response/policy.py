@@ -16,6 +16,21 @@ AUTONOMOUS_ACTIONS = {
     "block_suspicious_ip",
 }
 
+# The verbs of the response to a stolen identity (IR1, docs/design/reponse-identite.md §3.3): a
+# closed list. Never autonomous, whatever the mode; always a human's approval, verb by verb, on
+# the plan of an `identity_change` card (IR1a) — and never a decision's: an identity detection
+# is decided by the code, `action: ""` (agent._identity_decision), and the route after `decide`
+# never sends one to an action. They are the identity executor's (IR1c), which does not exist yet.
+IDENTITY_ACTIONS = frozenset({
+    "entra_remove_credential",
+    "entra_restore_credential",
+    "entra_disable_principal",
+    "entra_enable_principal",
+    "entra_revoke_sessions",
+    "entra_disable_user",       # 05/11 (Q2): a test user of the bench's administrative unit
+    "entra_enable_user",
+})
+
 # Actions nécessitant validation humaine (destructives ou à impact large)
 HUMAN_APPROVAL_REQUIRED = {
     "delete_resource",
@@ -23,7 +38,12 @@ HUMAN_APPROVAL_REQUIRED = {
     "escalate_permissions",
     "wipe_storage",
     "restore_from_backup",  # replaces disk content — irreversible without another backup
-}
+} | IDENTITY_ACTIONS
+
+# What the model reads as « requires approval » (agent._SYSTEM_PROMPT and the decision tool):
+# the gated actions a decision may name — the identity verbs left out, never a decision's. The
+# prompt reads what it read before IR1a (tests/unit/test_identity_plan.py).
+MODEL_GATED_ACTIONS = frozenset(HUMAN_APPROVAL_REQUIRED - IDENTITY_ACTIONS)
 
 
 class PartialActionError(RuntimeError):

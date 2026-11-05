@@ -146,6 +146,7 @@ def record(
     exercise_run: str = "",
     explanation: str = "",
     replaces: dict[str, str] | None = None,
+    identity_plan: dict | None = None,
 ) -> str:
     """Append an escalation and return its id.
 
@@ -273,6 +274,10 @@ def record(
         "status": "pending",
         "resolved_at": None,
     }
+    if identity_plan:
+        # IR1a: the plan of an identity card, and the thread of its checks (« Verify »).
+        esc["identity_plan"] = identity_plan
+        esc["identity_checks"] = []
     # Rewritten whole, as every write of the store: an append seen half-done by a reader
     # made its last line unreadable (SEC3, V-10). The cards it replaces closed in it (L1A).
     _write_lines([ln for ln in lines if ln.strip()] + [json.dumps(esc, default=str)])
@@ -340,6 +345,71 @@ def refresh(escalation_id: str, reason: str, **fields) -> bool:
     if done:
         _write_lines(lines)
     return done
+
+
+# IR1a: the checks a card keeps (its thread), newest last.
+IDENTITY_CHECKS_KEPT = 20
+
+
+def _rewrite_one(escalation_id: str, change) -> dict | None:
+    """`change(e)` on the pending card `escalation_id` (under the lock, by the caller); the card
+    changed, or None."""
+    if not _STORE.exists():
+        return None
+    lines, found = _STORE.read_text().splitlines(), None
+    for i, line in enumerate(lines):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(e, dict) and e.get("id") == escalation_id and e.get("status") == "pending":
+            change(e)
+            lines[i], found = json.dumps(e, default=str), e
+    if found is not None:
+        _write_lines(lines)
+    return found
+
+
+@_locked
+def request_identity_check(escalation_id: str) -> str:
+    """The console's « Verify » on an identity card (IR1a): a request the watch reads, and answers
+    by reading Graph (`identity_checks.run_requested`) — the console never reads Graph itself. The
+    time of the request; KeyError when no pending card has this id, ValueError when it has no plan."""
+    now = datetime.now(timezone.utc).isoformat()
+    seen: dict = {}
+
+    def change(e):
+        seen["card"] = dict(e)
+        if e.get("escalation_type") == "identity_change" and isinstance(e.get("identity_plan"), dict):
+            e["identity_check_requested"] = now
+
+    card = _rewrite_one(escalation_id, change)
+    if card is None:
+        raise KeyError(f"no pending card {escalation_id}")
+    if "identity_check_requested" not in card or card["identity_check_requested"] != now:
+        raise ValueError("this card has no identity plan to verify")
+    return now
+
+
+@_locked
+def note_identity_check(escalation_id: str, result: dict) -> bool:
+    """The watch's check, noted on the card's thread (`identity_checks`, the last
+    IDENTITY_CHECKS_KEPT); the request it answers cleared, unless a newer one came meanwhile."""
+    def change(e):
+        thread = [c for c in (e.get("identity_checks") or []) if isinstance(c, dict)]
+        e["identity_checks"] = (thread + [result])[-IDENTITY_CHECKS_KEPT:]
+        asked = e.get("identity_check_requested") or ""
+        if asked and asked <= (result.get("requested_at") or ""):
+            e.pop("identity_check_requested", None)
+        e["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    return _rewrite_one(escalation_id, change) is not None
+
+
+def identity_checks_requested() -> list[dict]:
+    """The pending identity cards whose « Verify » waits for the watch."""
+    return [e for e in pending() if e.get("escalation_type") == "identity_change"
+            and isinstance(e.get("identity_plan"), dict) and e.get("identity_check_requested")]
 
 
 @_locked

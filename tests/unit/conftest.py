@@ -386,6 +386,18 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_graph(monkeypatch):
+    """Microsoft Graph never read by a test (IR1a): the watch's reader is one that reads nothing
+    and says why — the graph tests (dry_run=False) would otherwise ask the developer's real tenant
+    for an identity card's plan. Tests that read a « Graph » hand in the fake one
+    (tests/unit/fake_graph.py)."""
+    if not GLORFINDEL:
+        return
+    from glorfindel.providers.azure import graph
+    monkeypatch.setattr(graph, "default_reader", lambda: graph.NoGraph("tests : Graph jamais lu"))
+
+
+@pytest.fixture(autouse=True)
 def no_local_glorfindel_config(monkeypatch):
     """Never read the developer's real glorfindel-config.yaml.
 

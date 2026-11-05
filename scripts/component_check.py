@@ -118,7 +118,7 @@ TOGETHER = (
     "test_signal_origin.py", "test_arm_urls.py",
     "test_decision_stability.py", "test_dependency_failures.py", "test_dependency_lock.py",
     "test_docs_budget.py", "test_repo_owner.py", "test_exercise.py", "test_exercise_e2e.py", "test_held.py", "test_dagorlad_blind.py", "test_githooks.py", "test_exercise_guard.py",
-    "test_experiment_schema.py", "test_fault_rate.py", "test_glorfindel_host.py", "test_host_console.py",
+    "test_experiment_schema.py", "test_vm3_pairs.py", "test_fault_rate.py", "test_glorfindel_host.py", "test_host_console.py",
     "test_host_cd.py", "test_host_deploy.py", "test_hosted_report.py", "test_indicators.py",
     "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_exercise.py", "test_makefile_secrets.py", "test_bench_logs.py", "test_bench_auditd.py",
     "test_notify_discord.py", "test_observation.py", "test_orodruin_kill.py", "test_orodruin_word.py", "test_palantir.py",

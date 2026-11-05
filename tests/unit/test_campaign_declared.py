@@ -52,7 +52,7 @@ def test_bl1_is_declared_a_public_technique_and_a_fault_on_the_bench():
     (("autonomy: non_disruptive", "autonomy: human_only"), "non_disruptive"),
     (("ref: T1136.001", "ref: T1110.001"), "home-grown script"),           # local-script
     (("ref: T1136.001", "ref: T1486"), "destructive"),                     # and home-grown
-    (("ref: T1136.001", "ref: T1053.003"), "not implemented"),
+    (("ref: T1136.001", "ref: T1530"), "not implemented"),   # planned (VM3 turned the VM ones implemented)
     (("ref: T1136.001", "ref: T9999"), "not in the catalog"),
     (("ref: vm-shutdown", "ref: vm-wipe"), "no experiment file"),
     (("[vm-celebrimbor-gondolin]", "[vm-celebrimbor-bree]"), "not the campaign's"),

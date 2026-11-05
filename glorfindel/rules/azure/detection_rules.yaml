@@ -253,6 +253,105 @@ rules:
       | project TimeGenerated, Computer, _ResourceId, Facility, SeverityLevel, ProcessName, SyslogMessage
       | order by TimeGenerated desc
 
+  # ── VM3 (#548) : trois paires rouge/bleu de plus sur VM ──────────────────────────
+  # Chaque règle voit l'effet d'un test Atomic Red Team épinglé (annatar/atomics/, cf. PIN),
+  # joué depuis Orodruin. Le seuil est dans le KQL (le texte que l'opérateur lit, intact P1).
+
+  - name: t1053-003-cron-crontab-replace
+    description: >
+      Cron persistence — T1053.003. Fires on a crontab REPLACE/DELETE written by the `crontab`
+      command to Syslog facility cron (« (user) REPLACE (user) »). Seuil : une édition de crontab
+      (REPLACE ou DELETE). Le bruit bénin ne déclenche pas : cron qui EXÉCUTE une tâche écrit
+      « CMD » sous ProcessName CRON (jobs d'apt, logrotate via /etc/cron.daily, anacron), un
+      `crontab -l` écrit « LIST ». La facilité cron n'est PAS collectée par la DCR du banc par
+      défaut — infra/terraform/monitoring.tf la propose derrière cron_logs_enabled (désactivé).
+    enabled: true
+    ttp: T1053.003
+    assets: [auto]
+    interval_s: 30
+    expected_latency_s: 480
+    query: |
+      Syslog
+      | where TimeGenerated > ago(10m)
+      // crontab logs to facility cron (LOG_CRON) on Debian/Ubuntu (hypothesis, to measure).
+      | where Facility == "cron"
+      // The crontab command only (not the cron daemon CRON running a job, not anacron).
+      | where ProcessName == "crontab"
+      // An edit of the crontab — install (REPLACE) or remove (DELETE); a LIST (`crontab -l`) is
+      // a read, a CMD line is a job running, neither is a persistence written.
+      | where SyslogMessage has "REPLACE" or SyslogMessage has "DELETE"
+      | project TimeGenerated, Computer, _ResourceId, Facility, ProcessName, SyslogMessage
+      | order by TimeGenerated desc
+
+  - name: t1070-002-log-tamper
+    description: >
+      Log tampering on Linux — T1070.002. Fires on an auditd SYSCALL with key « log_tamper » (a
+      write/rename/unlink under /var/log, infra/terraform/scripts/auditd.sh) by a process that is
+      NOT a log daemon. Seuil : une telle écriture par un comm hors de la liste des démons de
+      journalisation (rsyslogd, systemd-journald, logrotate…). Lu dans Syslog facilité local6,
+      collectée seulement avec auditd_enabled (auditd.tf). HYPOTHÈSES à mesurer (A0, AUD1) : forme
+      des lignes, comm. Limite : un O_TRUNC d'un shell (`echo 0>`) sur un fichier EXISTANT n'est
+      pas vu par la surveillance de répertoire (docs/azure.md).
+    enabled: true
+    ttp: T1070.002
+    assets: [auto]
+    interval_s: 60
+    expected_latency_s: 480
+    query: |
+      Syslog
+      | where TimeGenerated > ago(10m)
+      | where Facility == "local6"
+      | where ProcessName == "audisp-syslog" or ProcessName == "audispd"
+      | where SyslogMessage has "log_tamper"
+      | extend RecordType = extract(@"(?:^|\s)type=(SYSCALL)\s", 1, SyslogMessage),
+               Comm = extract(@'comm="([^"]*)"', 1, SyslogMessage),
+               AuditEvent = extract(@"msg=audit\((\d+\.\d+:\d+)\)", 1, SyslogMessage)
+      // The SYSCALL record carries comm and the key; its event id ties it to the write.
+      | where RecordType == "SYSCALL" and isnotempty(AuditEvent)
+      // Known log writers: rsyslog appends, logrotate rotates, journald its own files. An edit
+      // of a log by another process (a shell, an editor) is the finding.
+      | where not(Comm in ("rsyslogd", "rsyslog", "systemd-journal", "systemd-journald",
+                           "logrotate", "(logrotate)", "auditd", "systemd", "cron", "CRON",
+                           "anacron", "dpkg", "apt", "apt-get", "unattended-upgr"))
+      | summarize arg_max(TimeGenerated, *) by Computer, _ResourceId, AuditEvent
+      | project TimeGenerated, Computer, _ResourceId, AuditEvent, Comm, SyslogMessage
+
+  - name: t1059-004-shell-from-world-writable
+    description: >
+      Unix shell running a script from a world-writable path — T1059.004. Fires on an auditd event
+      whose SYSCALL has key « shell_exec » (a shell's execve, infra/terraform/scripts/auditd.sh)
+      AND whose EXECVE record's first argument is a script under /tmp, /dev/shm or /var/tmp. Seuil :
+      les deux dans le même événement. Distincte d'auditd-sensitive-root-command : celle-ci ne lit
+      que les commandes d'une connexion HUMAINE en root (auid ≥ 1000) — un run par Run Command a
+      l'auid non posé, donc filtré là, vu ici. Lu dans Syslog local6 (auditd_enabled). HYPOTHÈSES
+      à mesurer (A0, AUD1) : forme des lignes.
+    enabled: true
+    ttp: T1059.004
+    assets: [auto]
+    interval_s: 60
+    expected_latency_s: 480
+    query: |
+      Syslog
+      | where TimeGenerated > ago(10m)
+      | where Facility == "local6"
+      | where ProcessName == "audisp-syslog" or ProcessName == "audispd"
+      | where SyslogMessage has "msg=audit("
+      | extend AuditEvent = extract(@"msg=audit\((\d+\.\d+:\d+)\)", 1, SyslogMessage),
+               RecordType = extract(@"(?:^|\s)type=(SYSCALL|EXECVE)\s", 1, SyslogMessage),
+               Key = extract(@'(?:^|\s)key="([^"]*)"', 1, SyslogMessage),
+               A1 = extract(@'(?:^|\s)a1="([^"]*)"', 1, SyslogMessage)
+      | where isnotempty(AuditEvent) and isnotempty(RecordType)
+      // A shell's execve (the SYSCALL's key) and, in the same event, an EXECVE whose script
+      // argument is under a world-writable directory.
+      | extend ShellExec = RecordType == "SYSCALL" and Key == "shell_exec"
+      | extend TmpArg = RecordType == "EXECVE" and (A1 startswith "/tmp/" or A1 startswith "/dev/shm/" or A1 startswith "/var/tmp/")
+      | summarize TimeGenerated = min(TimeGenerated), Shells = countif(ShellExec), Tmp = countif(TmpArg),
+                  Syscall = make_set_if(SyslogMessage, RecordType == "SYSCALL", 8),
+                  Execve = make_set_if(SyslogMessage, RecordType == "EXECVE", 8)
+                  by Computer, _ResourceId, AuditEvent
+      | where Shells > 0 and Tmp > 0
+      | project TimeGenerated, Computer, _ResourceId, AuditEvent, Syscall, Execve
+
   # ── Plan de contrôle : le journal d'activité (AzureActivity, AL1) ─────────────
   # Détection seule : une détection sur AzureActivity n'entraîne JAMAIS d'action
   # autonome — `decide` construit la décision par le code, sans appel au modèle :

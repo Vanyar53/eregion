@@ -58,6 +58,29 @@ variable "auditd_enabled" {
   nullable    = false
 }
 
+# ── VM3 (#548) : la facilité cron dans la DCR du banc ──────────────────────────────────
+# Pour la règle t1053-003-cron-crontab-replace : crontab écrit « REPLACE » en facilité cron, que
+# la DCR du banc ne collecte PAS par défaut. Désactivé par défaut ; dans terraform.tfvars, jamais
+# en `-var` d'une seule commande (le prochain apply sans lui retirerait la facilité). monitoring.tf.
+variable "cron_logs_enabled" {
+  description = "Ajoute la facilité cron à la DCR du banc (monitoring.tf), pour la détection de persistance cron (T1053.003, VM3). Défaut false."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+# ── VM3 (#548) : les règles auditd supplémentaires (T1059.004 shell_exec, T1070.002 log_tamper) ──
+# NON câblé dans Terraform : Azure n'autorise qu'une extension CustomScript par VM, et AUD1 la tient
+# (auditd.tf). Les règles sont dans infra/terraform/scripts/vm3_auditd.sh ; les activer = les poser
+# sur les VM du banc (geste de Jonathan, docs/operations.md). Ce drapeau trace l'intention ; il reste
+# désactivé. Le greffon local6 et la collecte dépendent d'auditd_enabled (déjà en place).
+variable "vm3_auditd_enabled" {
+  description = "Intention (non appliquée) : les règles auditd de VM3 (shell_exec T1059.004, log_tamper T1070.002), scripts/vm3_auditd.sh. Défaut false."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 # G1 : les VM qui reçoivent le bruit bénin (chaos.tf). La source de vérité reste chaos.noise_vms
 # du config.yaml ; cette variable ne sert qu'à le remplacer le temps d'un plan — ce que fait
 # tests/chaos_noise.tftest.hcl, un local ne se remplaçant pas dans un test. Un second moyen

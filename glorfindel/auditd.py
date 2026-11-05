@@ -46,6 +46,13 @@ from glorfindel import expected_sudo
 # shipped `auditd-sensitive-root-command`, or a client's rule on the same technique (whose
 # rows, if not of this form, stay cards: unreadable).
 TTP = "T1059.004"
+# The shipped rule this human-root reading belongs to. T1059.004 also carries another shipped
+# rule (VM3, #548: `t1059-004-shell-from-world-writable`, auditd's execve of a shell from a
+# world-writable path, which an Annatar atomic can drive — a Run Command exec has an unset auid,
+# which this human-root reading filters out). The poller runs this reading — settle, fold and
+# the rule window — only for the rule of this name (or a client rule that replaces it, P1 keeps
+# the name); another T1059.004 rule's rows pass through as read.
+RULE = "auditd-sensitive-root-command"
 
 # The keys of the two audit rules (infra/terraform/scripts/auditd.sh).
 KEYS = ("user_emulation", "root_command")

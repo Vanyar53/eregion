@@ -1389,10 +1389,14 @@ class RulePoller:
         # outside the lock — a command of ADM1's sensitive list stays, the rest is no card.
         policy = getattr(self._cfg, "expected_sudo", None)
         audit_n = dict.fromkeys(auditd.COUNTS, 0)
-        try:
-            rows, audit_n = auditd.settle(rule.ttp, rows, getattr(policy, "sensitive_commands", None) or ())
-        except Exception as exc:  # the audit reading: every row stays a card
-            faults.append(f"auditd: {type(exc).__name__}: {exc}")
+        # Only the human-root rule (auditd.RULE, or a client rule that replaces it under its
+        # name — P1): T1059.004 also carries the shell-from-a-world-writable-path rule (VM3,
+        # #548), whose rows are not of the human-root form and pass through as read.
+        if rule.name == auditd.RULE:
+            try:
+                rows, audit_n = auditd.settle(rule.ttp, rows, getattr(policy, "sensitive_commands", None) or ())
+            except Exception as exc:  # the audit reading: every row stays a card
+                faults.append(f"auditd: {type(exc).__name__}: {exc}")
         routed = self._route(rule, rows, targets) if targets else {}
         try:
             judged = self._judge_expected(rule, routed)      # ADM1, outside the lock
@@ -1460,7 +1464,7 @@ class RulePoller:
                 # sent. Aggregated rows (one per attacker, per account…) each count.
                 events = [r for r in kept if r.get("TimeGenerated")]
                 send = [r for r in kept if not r.get("TimeGenerated")]
-                if events and rule.ttp == auditd.TTP:
+                if events and rule.ttp == auditd.TTP and rule.name == auditd.RULE:
                     # AUD1: the newest exec, naming the others of this VM in its card.
                     send.append(auditd.fold(events))
                 elif events:
@@ -1501,7 +1505,7 @@ class RulePoller:
                                        "origin_confirmed": expected_counts(st)["origin_confirmed"] + confirmed_n}
             if any(corr.values()):
                 st["correlation"] = correlation.add_counts(st.get("correlation"), corr, now_iso)
-            if rule.ttp == auditd.TTP:
+            if rule.ttp == auditd.TTP and rule.name == auditd.RULE:
                 # AUD1: what the rule's window holds at this poll — zero events says no line arrives.
                 st["auditd"] = auditd.window(audit_n, now_iso)
             # Recorded AFTER the dispatch: a crash in between re-sends (at least once)

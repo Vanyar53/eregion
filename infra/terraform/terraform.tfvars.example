@@ -16,3 +16,11 @@ vm_shutdown_email    = "you@example.com"
 # Désactivé par défaut ; à poser ici, jamais en -var. Puis : make celebrimbor-auditd-plan, et
 # make celebrimbor-auditd-up YES=1 (docs/operations.md, « auditd au banc (AUD1) »).
 # auditd_enabled = true
+
+# Optionnel (VM3, #548) — la facilité cron dans la DCR, pour la détection de persistance cron
+# (T1053.003). Désactivé par défaut ; à poser ici, jamais en -var (monitoring.tf).
+# cron_logs_enabled = true
+# Intention (non appliquée) — les règles auditd de VM3 (T1059.004, T1070.002). Les poser sur les
+# VM du banc = scripts/vm3_auditd.sh (docs/operations.md) ; non câblé en Terraform (une seule
+# extension CustomScript par VM, tenue par AUD1).
+# vm3_auditd_enabled = true

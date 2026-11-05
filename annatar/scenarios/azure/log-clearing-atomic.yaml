@@ -1,0 +1,65 @@
+# VM3 (#548) — Indicator Removal: Clear Linux System Logs (T1070.002), via a PINNED atomic.
+#
+# DESTRUCTIVE. It clears a log file, so it is confined to the bench and refused in production by
+# the inscription (the catalog marks it destructive with safe_target sandbox_disposable; a run
+# resolves destructive from the catalog, never from this file — SEC5, V-19).
+#
+# The attack is the atomic « Overwrite Linux Log » (guid d304b2dc…): `echo 0> <log_path>`
+# truncates the log to empty. It is the only Linux T1070.002 atomic the adapter can run
+# faithfully (a declared cleanup_command, no dependencies, elevation not false). `engine_args`
+# set log_path to a disposable path the cleanup removes (`rm -f` fires because the path differs
+# from the test's default /var/log/secure), so a real log is never destroyed and the initial
+# state is restored. The vendored YAML is never edited.
+#
+# Blue side: auditd's log_tamper rule (infra/terraform/scripts/auditd.sh) logs the write under
+# /var/log by a process that is not a log daemon; t1070-002-log-tamper reads it in Syslog
+# facility local6 (collected only with auditd_enabled). A shell redirect's O_TRUNC on an
+# EXISTING file is not caught by the directory watch — a documented limit (docs/azure.md).
+schema_version: "1"
+kind: technique
+engine: atomic
+engine_ref: T1070.002/d304b2dc-90b4-4465-a650-16ddd503f7b5
+engine_args:
+  log_path: /var/log/eregion-t1070-disposable.log
+name: log-clearing-atomic
+description: "T1070.002 — Clear Linux system logs, via a pinned Atomic Red Team test (overwrite a log, bench only)"
+mitre: T1070.002
+version: "1.0.0"
+destructive: true
+
+target:
+  type: azure_vm
+  resource_group: rg-celebrimbor
+  vm_name: vm-celebrimbor-gondolin
+
+# Clean start — the disposable log absent — before the attack; it is removed by the cleanup.
+# `#{log_path}` is filled from engine_args.
+steady_state:
+  probes:
+    - name: log-absent
+      verify: "test -e #{log_path} && echo PRESENT || echo ABSENT"
+      expect: ABSENT
+
+detection:
+  timeout: "600s"
+  prerequisites:
+    - name: auditd_local6_dcr
+      table: Syslog
+      why: >
+        auditd must be enabled on the bench (infra/terraform/auditd.tf) with the log_tamper
+        rule (infra/terraform/scripts/auditd.sh), so a write under /var/log is sent to Syslog
+        facility local6 — off by default.
+      verify: "Syslog | where Facility == 'local6' | where TimeGenerated > ago(1h) | limit 1"
+  hints:
+    log_source: Syslog
+    attack_commands_summary: >
+      Atomic Red Team T1070.002 (Linux, guid d304b2dc…): `echo 0> /var/log/eregion-t1070-disposable.log`
+      creates/truncates a log file; cleanup removes it. auditd's log_tamper rule logs the write
+      under /var/log by a non-log-daemon process (comm sh/bash/dash).
+    expected_indicators:
+      - "Syslog Facility: 'local6'"
+      - "auditd record with key=\"log_tamper\" on a path under /var/log"
+      - "comm is not a log daemon (rsyslogd, systemd-journal, logrotate…)"
+    failure_candidates:
+      - "Syslog | where Facility == 'local6' | where SyslogMessage has 'log_tamper' | where TimeGenerated > ago(10m)"
+      - "a log daemon's own write (rsyslogd, logrotate) is excluded by comm — not this rule"

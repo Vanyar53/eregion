@@ -260,16 +260,24 @@ resource_types:
             - name: tmp-files-absent
               verify: "if [ -e /tmp/notevil ] || [ -L /tmp/notevil ] || [ -e #{tmp_cron} ] || [ -L #{tmp_cron} ]; then echo TMP_PRESENT; else echo TMP_ABSENT; fi"
               expect: TMP_ABSENT
+            # VM3b (m1) : la crontab de root est celle d'avant — tant que /tmp/notevil existe, elle
+            # lui est identique octet pour octet. Tient avant (pas de fichier), casse après la
+            # commande (la crontab malveillante), tient après un vrai cleanup (réinstallée depuis
+            # /tmp/notevil). Une crontab vidée la ferait casser : cron-entry-absent ne le voit pas.
+            - name: root-crontab-restored
+              verify: "if [ ! -e /tmp/notevil ] || crontab -l 2>/dev/null | cmp -s - /tmp/notevil; then echo CRONTAB_RESTORED; else echo CRONTAB_CHANGED; fi"
+              expect: CRONTAB_RESTORED
         # VM3 (décision du 05/11) : le revert du scénario (E1), joué APRÈS le cleanup amont (qui
         # lit /tmp/notevil) et seulement s'il a tourné — le fichier vendorisé n'est pas touché.
-        # VM3b : il attend une sonde, plus l'appel — cron-entry-absent revenue à ABSENT après le
-        # cleanup (la crontab de root rétablie) ; sinon il est sauté et /tmp/notevil reste.
+        # VM3b : il attend une sonde, plus l'appel — root-crontab-restored après le cleanup (la
+        # crontab de root identique à /tmp/notevil, sa seule copie) ; sinon il est sauté et
+        # /tmp/notevil reste.
         # Le catalogue le fixe : un autre revert rend la technique inconnue (catalog_destructive).
         revert:
           - name: remove-tmp-files
             action: remove_files
             paths: ["/tmp/notevil", "#{tmp_cron}"]
-            requires_probe: cron-entry-absent
+            requires_probe: root-crontab-restored
         # B3 (VM3) : il remplace TOUTE la crontab de root (crontab -l > /tmp/notevil, puis
         # crontab /tmp/persistevil) et la rétablit depuis /tmp → altère l'état système, banc seulement.
         destructive: true

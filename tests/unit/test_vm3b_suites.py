@@ -161,11 +161,64 @@ def test_the_revert_is_skipped_when_the_cleanup_call_passed_but_its_probe_did_no
     assert "notevil" in vm.left() and (vm.tmp / "notevil").read_text() == ROOT_CRONTAB
     assert "evil.sh" in vm.store.read_text()   # the cleanup did not restore it
     assert out.error.startswith("initial state not restored — revert skipped: ")
-    assert "cron-entry-absent" in out.error and "/tmp/notevil" in out.error
+    assert "root-crontab-restored" in out.error and "/tmp/notevil" in out.error
     report = _report(tmp_path)
     assert report["checks"]["cleanup"] == "PASS" and report["checks"]["revert"] == "SKIPPED"
     assert "left in place" in report["metrics"]["revert_skipped"]
     assert report["result"] == "FAIL"
+
+
+class _CleanupEmptiesVM(_ShellVM):
+    """A VM whose cleanup empties root's crontab instead of restoring it (m1): the evil line is
+    gone — cron-entry-absent holds —, yet /tmp/notevil is then the only copy of root's crontab."""
+
+    def __init__(self, root: Path):
+        super().__init__(root)
+        fake = self.bin / "crontab"
+        fake.write_text(
+            "#!/bin/sh\n"
+            f'STORE="{self.store}"\n'
+            'if [ "$1" = "-l" ]; then\n'
+            '  [ -f "$STORE" ] || { echo "no crontab for root" >&2; exit 1; }\n'
+            '  cat "$STORE"; exit 0\n'
+            "fi\n"
+            'case "$1" in */notevil) : > "$STORE"; exit 0;; esac\n'
+            'cp "$1" "$STORE"\n'
+        )
+
+
+def test_a_cleanup_that_empties_root_crontab_keeps_its_only_copy(tmp_path, monkeypatch):
+    """m1: the evil line gone is not root's crontab back. The revert waits on
+    root-crontab-restored — an emptied crontab breaks it: skipped, /tmp/notevil kept."""
+    vm = _CleanupEmptiesVM(tmp_path)
+    ex = _shell_executor(vm)
+    out = _run(tmp_path, monkeypatch, SCENARIOS / "cron-persistence-atomic.yaml", ex)
+    assert vm.store.read_text() == ""   # emptied, the evil line gone too
+    assert not any(" revert " in x for x in _labels(ex))
+    assert "notevil" in vm.left() and (vm.tmp / "notevil").read_text() == ROOT_CRONTAB
+    assert "revert skipped" in out.error and "root-crontab-restored" in out.error
+    assert _report(tmp_path)["checks"]["revert"] == "SKIPPED"
+
+
+@pytest.mark.parametrize("crontab", [ROOT_CRONTAB, None], ids=["root-crontab", "no-crontab"])
+def test_the_restored_probe_holds_before_breaks_after_the_command_holds_after_cleanup(
+        tmp_path, monkeypatch, crontab):
+    """With a crontab for root or none at all: clean start, the effect seen, the return held."""
+    vm = _ShellVM(tmp_path, crontab=crontab)
+    outputs: dict[str, str] = {}
+
+    def run_command(cmd, label=""):
+        outputs[label] = vm.run_command(cmd, label)
+        return outputs[label]
+    ex = _executor()
+    ex.run_command.side_effect = run_command
+    out = _run(tmp_path, monkeypatch, SCENARIOS / "cron-persistence-atomic.yaml", ex)
+    assert not out.error, out.error
+    assert "CRONTAB_RESTORED" in outputs["probe root-crontab-restored (before)"]
+    assert "CRONTAB_CHANGED" in outputs["probe root-crontab-restored (effect)"]
+    assert "CRONTAB_RESTORED" in outputs["probe root-crontab-restored (before revert)"]
+    assert "CRONTAB_RESTORED" in outputs["probe root-crontab-restored (after)"]
+    assert vm.left() == []
 
 
 def test_the_revert_runs_once_its_probe_holds_after_the_cleanup(tmp_path, monkeypatch):
@@ -176,7 +229,7 @@ def test_the_revert_runs_once_its_probe_holds_after_the_cleanup(tmp_path, monkey
     assert vm.store.read_text() == ROOT_CRONTAB and vm.left() == []
     labels = _labels(ex)
     cleanup = next(i for i, x in enumerate(labels) if x.endswith(" cleanup"))
-    gate = next(i for i, x in enumerate(labels) if x == "probe cron-entry-absent (before revert)")
+    gate = next(i for i, x in enumerate(labels) if x == "probe root-crontab-restored (before revert)")
     revert = next(i for i, x in enumerate(labels) if " revert " in x)
     first_after = next(i for i, x in enumerate(labels) if "(after)" in x)
     assert cleanup < gate < revert < first_after
@@ -224,14 +277,14 @@ def test_a_revert_waiting_on_no_probe_of_the_scenario_touches_nothing(tmp_path, 
 def test_the_catalog_revert_waits_on_the_cron_probe():
     entry = load_catalog()[CRON]
     [step] = entry["revert"]
-    assert step["requires_probe"] == "cron-entry-absent"
+    assert step["requires_probe"] == "root-crontab-restored"
     assert step["requires_probe"] in {p["name"] for p in entry["steady_state"]["probes"]}
     schema = json.loads((ROOT / "schemas/technique_catalog.schema.json").read_text())
     revert = schema["definitions"]["entry"]["properties"]["revert"]
     assert "requires_probe" in revert["items"]["required"]
 
 
-@pytest.mark.parametrize("cap,refused", [(9, True), (10, False)])
+@pytest.mark.parametrize("cap,refused", [(12, True), (13, False)])
 def test_the_cap_counts_the_probe_each_revert_step_waits_on(tmp_path, monkeypatch, cap, refused):
     import eregion_core.orodruin as orodruin
 
@@ -240,11 +293,11 @@ def test_the_cap_counts_the_probe_each_revert_step_waits_on(tmp_path, monkeypatc
     ex = _probe_executor()
     out = _run(tmp_path, monkeypatch, SCENARIOS / "cron-persistence-atomic.yaml", ex)
     if refused:
-        assert out.refused and "this atomic needs 10" in out.error
+        assert out.refused and "this atomic needs 13" in out.error
         ex.run_command.assert_not_called()
     else:
         assert not out.error, out.error
-        assert "probe cron-entry-absent (before revert)" in _labels(ex)
+        assert "probe root-crontab-restored (before revert)" in _labels(ex)
 
 
 # ── S3: an engine_args value never starts with '-' ───────────────────────────────────

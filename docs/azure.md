@@ -168,8 +168,9 @@ compris) ont exactement les sondes de leur entrée (`tests/unit/test_vm3b_suites
   fichier posé là par un autre deviendrait la crontab de root : la sonde refuse un départ où
   `/tmp/notevil` ou `/tmp/persistevil` existent. Le cleanup amont ne les retire pas : le **revert du
   scénario** (le champ `revert` du schéma E1, décidé le 05/11) les retire, après le cleanup — qui lit
-  `/tmp/notevil` — et seulement une fois la sonde `cron-entry-absent` revenue à `ABSENT` après lui
-  (VM3b : la crontab de root rétablie). L'appel du cleanup qui ne lève pas ne prouve rien : Run Command
+  `/tmp/notevil` — et seulement une fois la sonde `root-crontab-restored` tenue après lui (VM3b : la
+  crontab de root identique, octet pour octet, à `/tmp/notevil`, sa seule copie ; `cron-entry-absent`
+  ne suffit pas, une crontab vidée la ferait tenir). L'appel du cleanup qui ne lève pas ne prouve rien : Run Command
   ne lève pas sur un script en échec. Si la sonde ne revient pas, le revert est sauté, `/tmp/notevil`
   (la copie de la crontab) reste pour l'opérateur, et le run le dit (`checks.revert: SKIPPED`,
   `metrics.revert_skipped`, l'erreur du run). La sonde d'après vérifie le tout, et le run finit propre.
@@ -203,7 +204,12 @@ waagent et les extensions sous `/var/log/azure/`, dpkg et apt.
   `waagent.log` et `unattended-upgrades`. Le retirer perdrait le bruit réel : waagent, le gestionnaire
   de l'agent de supervision et unattended-upgrades sont des scripts, **leur `exe` est l'interpréteur**,
   et auditd ne nomme pas le script (proctitle et comm sont à l'attaquant). **Limite** : un script
-  python3 quelconque qui écrit ces fichiers-là n'est pas vu ; sur tout autre journal, il l'est. Un `echo 0>` sur un journal **existant**
+  python3 quelconque qui écrit ces fichiers-là n'est pas vu ; sur tout autre journal, il l'est.
+- **À mesurer au banc (VM3b, m2)** : d'autres écrivains python3 de `/var/log` — cloud-init
+  (`/var/log/cloud-init.log`, `cloud-init-output.log`), Ubuntu Pro (`/var/log/ubuntu-advantage.log`),
+  apport (`/var/log/apport.log`) — ne sont pas écartés : sur une VM qui les fait écrire, chaque écriture
+  serait une carte. À mesurer : lesquels écrivent pendant la fenêtre d'un run et à quelle fréquence, leur
+  `exe` exact, et les chemins touchés. La règle n'est pas modifiée avant cette mesure. Un `echo 0>` sur un journal **existant**
   (une ouverture O_TRUNC) devrait être vu par la surveillance `-w /var/log -p wa` : c'est une
   **hypothèse à mesurer** au banc, comme la forme des lignes PATH (chemins absolus).
 - **La règle shell** ne voit pas : un chemin relatif (`sh ./x` depuis `/tmp` — l'enregistrement CWD

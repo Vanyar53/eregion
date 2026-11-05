@@ -1,11 +1,13 @@
 """VM3b (#568): the follow-ups of VM3's second review — the catalog decides an atomic
 scenario's probes (S1), T1053.003's revert waits on a probe, not on the call (S2), an
 engine_args value never starts with '-' (S3), log_tamper's python3 set-aside tightened (S4).
-M4100–M4109, all measured by tests/unit/test_vm3b_suites.py."""
+M4100–M4109 and M4123–M4124 (review m1: the revert waits on root's crontab restored, not only
+on the evil line gone), all measured by tests/unit/test_vm3b_suites.py."""
 CATPY = "annatar/campaign/catalog.py"
 ATOMIC = "annatar/engines/atomic.py"
 ENGINE = "annatar/runner/engine.py"
 RULES = "glorfindel/rules/azure/detection_rules.yaml"
+CRON_SCN = "annatar/scenarios/azure/cron-persistence-atomic.yaml"
 _TESTS = "tests/unit/test_vm3b_suites.py"
 
 MUTANTS = [
@@ -37,6 +39,12 @@ MUTANTS = [
     ("M4107", "the cap no longer counts the probe each revert step waits on (VM3b, S2)", ENGINE,
      "            needed = self._atomic_calls_needed(len(probes)) + 2 * len(revert)",
      "            needed = self._atomic_calls_needed(len(probes)) + len(revert)"),
+    ("M4123", "the cron revert waits on the evil line gone again — an emptied crontab loses its only copy (VM3b, m1)", CRON_SCN,
+     "    requires_probe: root-crontab-restored",
+     "    requires_probe: cron-entry-absent"),
+    ("M4124", "the restored probe only checks a crontab is installed — an emptied one passes (VM3b, m1)", CRON_SCN,
+     "crontab -l 2>/dev/null | cmp -s - /tmp/notevil;",
+     "crontab -l >/dev/null 2>&1;"),
 
     # ── S3: no leading '-' in an engine_args value ──
     ("M4108", "an engine_args value may start with '-' — an option in an argument's place (VM3b, S3)", ATOMIC,

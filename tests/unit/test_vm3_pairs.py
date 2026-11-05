@@ -293,16 +293,16 @@ def test_scenarios_validate_resolve_and_carry_the_catalog_args():
             assert "#{" not in r.substitute(probe["verify"]), ttp
 
 
-def _probe_executor(after: str = "ABSENT TMP_ABSENT"):
+def _probe_executor(after: str = "ABSENT TMP_ABSENT CRONTAB_RESTORED"):
     """A bench executor answering each probe by its phase: clean before, broken right after the
     command (the effect), `after` once cleaned up."""
     ex = _executor()
 
     def run_command(cmd, label=""):
         if "(before)" in label:
-            return "ABSENT TMP_ABSENT"
+            return "ABSENT TMP_ABSENT CRONTAB_RESTORED"
         if "(effect)" in label:
-            return "PRESENT TMP_PRESENT"
+            return "PRESENT TMP_PRESENT CRONTAB_CHANGED"
         if "(after)" in label or "(before revert)" in label:
             return after
         return ""
@@ -338,7 +338,7 @@ def test_the_cron_scenario_checks_the_tmp_files_before_and_after(tmp_path, monke
     doc = yaml.safe_load(_scenario("T1053.003").read_text())
     probe = next(p for p in doc["steady_state"]["probes"] if p["name"] == "tmp-files-absent")
     assert "/tmp/notevil" in probe["verify"] and "#{tmp_cron}" in probe["verify"]
-    ex = _probe_executor(after="ABSENT TMP_PRESENT")   # what the revert did not remove
+    ex = _probe_executor(after="ABSENT TMP_PRESENT CRONTAB_RESTORED")   # what the revert left
     out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
     assert out.error == "initial state not restored"
     probes = [c for c in _sent(ex) if "/tmp/notevil" in c and "TMP_ABSENT" in c]
@@ -463,7 +463,7 @@ def test_the_catalog_revert_resolves_to_one_rm_inside_tmp():
     r = resolve_ref(PAIRS["T1053.003"][1])
     assert revert_commands(_entry("T1053.003")["revert"], r) == [
         ("remove-tmp-files", "#!/bin/sh\nrm -f -- /tmp/notevil /tmp/persistevil",
-         "cron-entry-absent")]
+         "root-crontab-restored")]
     assert revert_commands(None, r) == []
 
 
@@ -498,10 +498,10 @@ def test_a_scenario_with_a_refused_revert_touches_nothing(tmp_path, monkeypatch)
     ex.run_command.assert_not_called()
 
 
-@pytest.mark.parametrize("cap,refused", [(9, True), (10, False)])
+@pytest.mark.parametrize("cap,refused", [(12, True), (13, False)])
 def test_the_cap_counts_the_revert_steps(tmp_path, monkeypatch, cap, refused):
-    """Command, cleanup, one revert step and the probe it waits on (VM3b), two probes three
-    times: 10 calls."""
+    """Command, cleanup, one revert step and the probe it waits on (VM3b), three probes three
+    times: 13 calls."""
     import eregion_core.orodruin as orodruin
 
     # Every reader as the suite has it (identity, graph, network…), but the cap.
@@ -510,11 +510,11 @@ def test_the_cap_counts_the_revert_steps(tmp_path, monkeypatch, cap, refused):
     ex = _probe_executor()
     out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
     if refused:
-        assert out.refused and "this atomic needs 10" in out.error
+        assert out.refused and "this atomic needs 13" in out.error
         ex.run_command.assert_not_called()
     else:
         assert not out.error, out.error
-        assert ex.run_command.call_count == 10
+        assert ex.run_command.call_count == 13
 
 
 # ── The blue side: each rule fires on a realistic line and not on benign noise ────────

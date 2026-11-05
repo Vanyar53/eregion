@@ -151,13 +151,16 @@ release ») en est la preuve, et `make release-draft` la redemande.
    Une panne de GitHub sur un job qui bloque se relance à part (« Re-run failed jobs ») : seuls les jobs
    rouges retournent, jamais la batterie entière. L'App n'a que *Actions* en lecture : c'est Jonathan qui
    relance. Un macOS rouge ou sans runner ne retient pas la release (décision de Jonathan du 04/11, H1c :
-   seuls les checks requis bloquent, H0 tourne sous Linux) : il se lit dans le résumé du run.
+   seuls les checks requis bloquent, H0 tourne sous Linux) : il se lit dans le résumé du run, et
+   `make release-draft` le dit sans refuser (REL3).
 3. **Rien d'autre ne fusionne entre la porte et la PR de version.** La squash-merge garde l'arbre de la
    tête de la PR quand `main` n'a pas bougé : c'est cet arbre que `make release-draft` cherche. Si une
    autre PR est passée avant, l'arbre diffère et le brouillon est refusé. Il faut alors relancer la porte
    sur `main`, une fois : `gh workflow run release-gate.yml --ref main`. C'est Jonathan qui la lance.
 4. **Le brouillon** : `make release-draft VERSION=X.Y.Z`. Il redit la porte (son run, son lien), refuse
-   tant qu'elle n'est pas verte, et rien ne passe outre. Le run de la PR de version compte après sa
+   tant qu'elle n'est pas verte, et rien ne passe outre. La porte se juge par ses jobs, jamais par la
+   conclusion du run (REL3, #569) : le job total « release gate » et chaque job qui bloque verts, la
+   dernière tentative d'un job relancé comptant ; un macOS rouge, annulé ou sans runner est dit. Le run de la PR de version compte après sa
    fusion : sa base se lit par toutes les PR de sa tête, fermées comprises, et aucune ne doit avoir
    changé de base (CI6c). Une PR de version s'ouvre vers `main` et n'en change jamais. Puis Jonathan publie.
 

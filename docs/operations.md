@@ -2264,10 +2264,11 @@ mesurait en entier le commit publié.
 - `macos` : le job macOS de `ci.yml`, mot pour mot, qu'une PR ne lance plus (CI5). **Il informe, il ne
   bloque pas** (décision de Jonathan du 04/11, H1c, #518 : seuls les checks requis bloquent, comme pour
   le CD de H0). H0 tourne sous Linux, et un runner que GitHub ne donne pas ne doit jamais retenir une
-  release : le macOS du commit de la 0.5.4 a été annulé faute de runner. Le job a `continue-on-error`,
-  donc son rouge ne change pas la conclusion du run, celle que lit `release-draft`. Son résultat est
-  dit dans le résumé du run (`$GITHUB_STEP_SUMMARY`) : celui de ses tests, et celui que voit le dernier
-  job.
+  release : le macOS du commit de la 0.5.4 a été annulé faute de runner. Le job a `continue-on-error`.
+  Cela ne suffit pas : annulé faute de runner, il met quand même le run en `failure` (la 0.5.6, 05/11).
+  C'est pourquoi `release-draft` ne lit jamais la conclusion du run, mais ses jobs (REL3, ci-dessous).
+  Son résultat est dit dans le résumé du run (`$GITHUB_STEP_SUMMARY`) : celui de ses tests, et celui que
+  voit le dernier job.
 
 Le dernier job, « release gate », attend tous les autres, macOS compris, pour le dire. Il n'est vert que
 si chaque job qui bloque l'est (les invariants, les tranches de mutants et leur total, Terraform) : un
@@ -2295,8 +2296,9 @@ dispatch, ou la PR `chore/release-…` de ce dépôt **vers `main`** : un run `p
 workflow de la base, qu'une PR vers une autre branche aurait pu changer), et prend le dernier démarré
 (`run_started_at` : un run relancé repart, son `created_at` ne bouge pas) dont l'arbre (`head_commit.tree_id`)
 est celui d'`origin/main` (`git rev-parse origin/main^{tree}`). Une squash-merge change le commit, pas
-l'arbre, si rien d'autre n'a fusionné entre-temps. Ce run doit être fini et vert. Sinon le brouillon est
-refusé, et la commande dit lequel, son état (en cours, rouge, annulé, sauté…), son commit et son lien.
+l'arbre, si rien d'autre n'a fusionné entre-temps. Ce run doit être fini et vert par ses jobs (ci-dessous).
+Sinon le brouillon est refusé, et la commande dit lequel, son état (en cours, rouge, annulé, sauté…),
+son commit et son lien.
 Sans run sur cet arbre, elle dit que quelque chose a fusionné après la porte, et comment la relancer sur
 `main`. Aucun moyen de passer outre : ni option, ni variable. `DRY_RUN=1` montre la vérification.
 L'App des sessions lit ces runs par son droit *Actions* en lecture (mesuré le 04/11 : une lecture réelle
@@ -2347,6 +2349,41 @@ pull_requests=read` pour les PR d'une tête ; `issues=read; pull_requests=read`,
 les lectures réelles ci-dessus ont rendu 200 sous son jeton d'installation. Tests :
 `tests/unit/test_release.py`, sur des réponses simulées du faux `gh` ; mutants M3770–M3785
 (`scripts/mutants/CI6c.py`).
+
+**La porte jugée par ses jobs, jamais par la conclusion du run** (REL3, #569). Le 05/11, le brouillon
+de la 0.5.6 a été refusé : le job macOS, annulé faute de runner, avait mis le run en `failure`, alors
+que le job total « release gate » et chaque job qui bloque étaient verts. Cela contredisait la règle
+de H1c (un macOS rouge ou sans runner ne retient pas la release), et il a fallu relancer macOS à la
+main. Désormais, une fois le run trouvé et fini, `release-draft` lit ses jobs, par une seule lecture :
+`GET repos/{owner}/{repo}/actions/runs/{id}/jobs?filter=latest&per_page=100`, sous le droit *Actions*
+en lecture que la lecture des runs demande déjà.
+- **Le total, « release gate »**, doit être là, fini et vert. Absent, en cours, rouge, annulé, sauté :
+  refus, avec son état, comme avant.
+- **Chaque job qui bloque** doit être vert (les invariants, chaque tranche de mutants et de contrôle,
+  leur total, Terraform) : un rouge, un annulé, un sauté ou un job encore en cours refuse, même à côté
+  d'un total vert. Le premier est nommé, les autres comptés. Le total les tient déjà ; les relire ne
+  coûte rien, et un total qui se tromperait ne suffit pas.
+- **Un job qui informe** (macOS) rouge, annulé, sauté ou absent est **dit** à la suite de la ligne
+  verte (« informe sans bloquer : « tests (macOS, …) » annulé »), et ne bloque jamais.
+- **Un job relancé** (« Re-run failed jobs »). Mesuré sur le run 42061905987 : après une relance
+  partielle, la tentative 2 rend les 21 jobs, sans doublon ; les jobs non relancés y sont recopiés,
+  sous de nouveaux ids. Si une réponse mêlait pourtant deux tentatives, de deux jobs du même nom celui
+  de la tentative la plus récente (`run_attempt`) compte, dans l'ordre où GitHub les rend et quels que
+  soient leurs ids. Deux jobs du même nom dans une même tentative : refus, le motif dit.
+- **Une seule source pour les jobs qui informent.** `scripts/release.py` tient `GATE_JOB` (le nom du
+  total) et `INFORMATIVE` (l'id et le nom de chaque job qui informe). `tests/unit/test_release.py` les
+  lit face au workflow : l'`INFORMATIVE` de l'étape du total (par id), le `name:` de chaque job, le
+  `needs` du total (tous les autres jobs), et `continue-on-error` sur les seuls jobs qui informent.
+  Tout autre job bloque, sans liste à recopier. Le faux GitHub des tests tire ses jobs du workflow
+  lui-même, chaque matrice dépliée.
+- Une lecture qui échoue, une réponse qui n'est pas une liste de jobs, une réponse sans `total_count`,
+  une page de 100 jobs ou plus (ou moins de jobs que `total_count` n'en compte), un job sans nom, un run
+  sans numéro : refus.
+
+Tests : `tests/unit/test_release.py` (macOS annulé, rouge ou absent : le brouillon passe ; une tranche
+rouge, le total absent, rouge ou en cours : refus ; un job relancé : sa dernière tentative compte,
+jamais son id seul ; deux jobs d'un nom dans une tentative : refus) ; mutants M4035–M4039 et
+M4120–M4122 (`scripts/mutants/REL3.py`).
 
 **Les tranches découpées sur les durées mesurées** (CI6d, #545). Les deux premiers runs réels de la
 porte (05/11 : 41997986094 sur la PR de la 0.5.5, 42009742778 en dispatch sur `main`) ont duré 73 et

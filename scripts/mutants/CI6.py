@@ -20,9 +20,10 @@ MUTANTS = [
      '    same = [r for r in runs if _obj(r.get("head_commit")).get("id") == sha]\n'),
     ("M3592", "the version's pull request says nothing of the gate: merged before it is green (CI6)", RELEASE,
      '            f"{GATE_SAID}\\n\\n"\n', '            ""\n'),
+    # Since REL3 (#569), the gate is its total job « release gate », never the run's conclusion.
     ("M3593", "a cancelled or skipped gate taken for green (CI6)", RELEASE,
-     '    if r.get("conclusion") != "success":\n',
-     '    if r.get("conclusion") not in ("success", "cancelled", "skipped"):\n'),
+     '    if total_job.get("conclusion") != "success":\n',
+     '    if total_job.get("conclusion") not in ("success", "cancelled", "skipped"):\n'),
     ("M3594", "the gate's oldest run on the tree decides: a red after a green never seen (CI6)", RELEASE,
      "    runs = sorted((r for r in listed if isinstance(r, dict) and _gate_run(r)), reverse=True,\n",
      "    runs = sorted((r for r in listed if isinstance(r, dict) and _gate_run(r)), reverse=False,\n"),

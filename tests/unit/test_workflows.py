@@ -1394,7 +1394,8 @@ def test_the_gate_runs_every_test_with_2000_invariant_sequences_on_linux():
 
 def test_the_gate_runs_the_whole_mutation_in_shards_control_set_included():
     """`--examples 500 --rounds 2 --jobs 4`, each shard of the matrix once; the control set too; the
-    total checks every shard and holds the count to mutants.yml's `min_caught`."""
+    total checks every shard, then that no mutant survived a round outside the known survivors
+    (CI6e: `min_caught` before) — the harness holds it, nothing of the workflow passes over it."""
     jobs = _gate()["jobs"]
     for name, n, flag in (("mutants", MUTANT_SHARDS, ""), ("control", CONTROL_SHARDS, "--control ")):
         job = jobs[name]
@@ -1409,12 +1410,8 @@ def test_the_gate_runs_the_whole_mutation_in_shards_control_set_included():
     assert total["needs"] == ["mutants", "control"]
     (step,) = [s for s in total["steps"] if "mutation_check.py" in (s.get("run") or "")]
     assert step["run"] == (f"python3 scripts/mutation_check.py --total mutants-results --shards {MUTANT_SHARDS} "
-                           f'--control-shards {CONTROL_SHARDS} --examples 500 --rounds 2 --min-caught "$MIN_CAUGHT"')
-    monday = _load(ROOT / ".github" / "workflows" / "mutants.yml")
-    (mstep,) = [s for s in monday["jobs"]["mutants-total"]["steps"] if "mutation_check.py" in (s.get("run") or "")]
-    default = re.fullmatch(r"\$\{\{ inputs\.min_caught \|\| '(\d+)' \}\}", mstep["env"]["MIN_CAUGHT"]).group(1)
-    assert default == monday["on"]["workflow_dispatch"]["inputs"]["min_caught"]["default"]
-    assert step["env"] == {"MIN_CAUGHT": default}
+                           f'--control-shards {CONTROL_SHARDS} --examples 500 --rounds 2')
+    assert "env" not in step and "continue-on-error" not in step and "continue-on-error" not in total
     (down,) = [s for s in total["steps"] if str(s.get("uses") or "").startswith("actions/download-artifact@")]
     assert down["with"] == {"path": "mutants-results"}
 
@@ -1427,7 +1424,8 @@ MONDAY_INPUTS = {"EXAMPLES": "${{ inputs.examples || '1000' }}", "ROUNDS": "${{ 
 def test_the_monday_measure_runs_in_the_gate_s_shards_and_their_total():
     """Fourteen shards of the mutants and two of the control set, as release-gate.yml cuts them, then
     their total: each mutant of the tree measured once, at the dispatcher's budget, the count held
-    to `min_caught` — never more jobs than GitHub gives a public repository at once (20)."""
+    to no survivor outside the known ones (CI6e) — never more jobs than GitHub gives a public
+    repository at once (20)."""
     doc, gate = _load(MONDAY), _gate()["jobs"]
     jobs = doc["jobs"]
     assert doc["on"]["schedule"] == [{"cron": "41 4 * * 1"}] and doc["permissions"] == {"contents": "read"}
@@ -1450,9 +1448,9 @@ def test_the_monday_measure_runs_in_the_gate_s_shards_and_their_total():
     assert total["needs"] == ["mutants", "control"] and total["if"] == "${{ !cancelled() }}"
     (step,) = [s for s in total["steps"] if "mutation_check.py" in (s.get("run") or "")]
     assert step["run"] == (f"python3 scripts/mutation_check.py --total mutants-results --shards {MUTANT_SHARDS} "
-                           f'--control-shards {CONTROL_SHARDS} --examples "$EXAMPLES" --rounds "$ROUNDS" '
-                           '--min-caught "$MIN_CAUGHT"')
-    assert step["env"] == {**MONDAY_INPUTS, "MIN_CAUGHT": "${{ inputs.min_caught || '14' }}"}
+                           f'--control-shards {CONTROL_SHARDS} --examples "$EXAMPLES" --rounds "$ROUNDS"')
+    assert step["env"] == MONDAY_INPUTS and "continue-on-error" not in step
+    assert set(doc["on"]["workflow_dispatch"]["inputs"]) == {"examples", "rounds"}     # min_caught gone (CI6e)
     (down,) = [s for s in total["steps"] if str(s.get("uses") or "").startswith("actions/download-artifact@")]
     assert down["with"] == {"path": "mutants-results"}
     width = sum(len(j.get("strategy", {}).get("matrix", {}).get("shard", [None])) for j in jobs.values())

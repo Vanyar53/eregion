@@ -3426,7 +3426,8 @@ MUTANTS += [
      "      - uses: actions/checkout@v5\n        if: steps.creds"),
     ("M1281", "a dispatcher's inputs pasted into the mutants' script again (SEC6, V-33)",
      ".github/workflows/mutants.yml",
-     '--min-caught "$MIN_CAUGHT"', "--min-caught ${{ inputs.min_caught || '14' }}"),
+     # re-anchored (CI6e): the total's own line, its `--min-caught` gone
+     '--examples "$EXAMPLES" --rounds "$ROUNDS"\n', "--examples ${{ inputs.examples || '1000' }} --rounds \"$ROUNDS\"\n"),
     ("M1282", "a fork's red run posted in a lot's thread: the run's head never checked (SEC6, N-11)", NDS,
      "            if not own_run(run):\n                lot = issue = \"\"",
      "            if False:\n                lot = issue = \"\""),

@@ -1874,6 +1874,13 @@ verrou, même de ceux qui ne le portent pas.
   0.13.6 : oauthlib 4.0.1 → 4.0.0). `make lock` repasse donc les dates de chaque verrou, tant
   qu'elles sont postérieures à `LOCK_DATE`. Une date que `LOCK_DATE` a rattrapée plafonnerait
   le paquet sous la résolution du jour : elle est retirée.
+- Un en-tête que `lock_flags.py` ne sait pas lire (uv en a changé la forme) arrête `make lock` à
+  ce verrou-là, avant son uv : pris pour un en-tête sans date, il aurait redescendu le paquet.
+  Les verrous d'avant sont déjà écrits : `git diff` dit lesquels.
+- `LOCK_DATE`, `UPGRADE_PACKAGE` et `UPGRADE_DATE` ne passent ni par make ni par le shell
+  (`$(value …)`, `unexport`, comme `REF`). `lock_flags.py` les lit dans son environnement et les
+  vérifie avant tout uv : un nom de paquet, une date `AAAA-MM-JJ`. Une substitution de commande
+  tapée là n'est jamais exécutée.
 
 La PR dit ce qui change (le diff du verrou : LiteLLM, anthropic, langgraph, chromadb surtout).
 Avant de la fusionner, **Jonathan relance le harnais** (appels payants), qui écrit l'attestation

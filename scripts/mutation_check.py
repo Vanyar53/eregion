@@ -10,8 +10,8 @@ mutant, the code moved) — never counted as caught.
     python scripts/mutation_check.py                       # push budget (60), 3 rounds
     python scripts/mutation_check.py --examples 1000 --rounds 2
     python scripts/mutation_check.py --only M04,M13
-    python scripts/mutation_check.py --examples 500 --rounds 2 --shard 3/14 --json m3.json   # the release gate's
-    python scripts/mutation_check.py --total DIR --shards 14 --control-shards 2 --examples 500 --rounds 2
+    python scripts/mutation_check.py --examples 500 --rounds 2 --shard 3/10 --json m3.json   # the release gate's
+    python scripts/mutation_check.py --total DIR --shards 10 --control-shards 2 --examples 500 --rounds 2
 
 Each round draws new seeds. The table says, per mutant, how many rounds caught it.
 A mutant the invariants can't see by construction says why: EQUIVALENT (no behaviour

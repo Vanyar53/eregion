@@ -1374,6 +1374,31 @@ def test_jobs_that_cannot_be_read_refuse(repo, tmp_path, capsys, monkeypatch, se
     _gate_refuses(capsys, tmp_path, "les jobs de la porte de release ne se lisent pas, sur ", said)
 
 
+@pytest.mark.parametrize("raw, said", [
+    (json.dumps({"jobs": [job(rel.GATE_JOB)]}), "la réponse de gh api ne les compte pas (total_count)"),
+    ("not json", "la réponse de gh api n'est pas une liste de jobs"),
+])
+def test_a_run_still_going_whose_jobs_cannot_be_read_says_why(repo, tmp_path, capsys, raw, said):
+    """Review of CI10b: a run still in progress whose jobs cannot be read is refused as before, its
+    error said — never « en cours », which waiting would not mend."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, status="in_progress", run_id=12))
+    _set_answer(tmp_path, "raw_jobs", raw)
+    capsys.readouterr()
+    line = _gate_refuses(capsys, tmp_path, f"{rel.UNREAD}, sur ", said)
+    assert "en cours" not in line
+
+
+def test_every_unreadable_jobs_message_starts_with_unread():
+    """The run still going tells an unreadable answer from a gate still running by this prefix: each
+    message _jobs says of an answer it cannot read starts with it."""
+    import inspect
+    src = inspect.getsource(rel._jobs)
+    unread = re.findall(r'f?"(les jobs de la porte de release[^"]*)', src)
+    assert unread and all(m.startswith(rel.UNREAD) for m in unread), unread
+
+
 @pytest.mark.parametrize("attempt", [1, 2])
 def test_two_jobs_of_one_name_in_one_attempt_refuse(repo, tmp_path, capsys, attempt):
     """filter=latest gives one job per name (measured on run 42061905987): two of one name in one

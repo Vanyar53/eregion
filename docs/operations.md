@@ -1812,7 +1812,10 @@ chaque mutant sur l'arbre publié, une fois, sans travail en double. Le côté h
 - **Components en un seul job sur une PR** (L11). Le job « every component alone, then the compose
   profiles » fait, pour chaque composant de `scripts/component_check.py`, ses deux vérifications (ses
   modules importés seuls, ses tests seuls, les autres composants absents de son processus), chacune
-  lancée quoi qu'ait dit la précédente (`!cancelled()`), puis les profils compose. Cinq runners
+  lancée quoi qu'ait dit la précédente (`!cancelled()`), puis les profils compose. Core, Annatar et
+  Gothmog n'attendent que l'installation ; seul Glorfindel, qui lit le modèle de ChromaDB, attend aussi
+  son téléchargement : un modèle qui ne vient pas ne saute pas les autres et ne cache pas leur rouge.
+  Les actions du job sont épinglées par commit, celles de la porte (aucune action ajoutée). Cinq runners
   deviennent un par push de PR. Sur `main`, un job par composant et celui des profils, comme avant :
   ce sont leurs noms que le CD de H0 lit (« dits », jamais requis). Aucun check requis ne change de
   nom : les cinq de [sessions.md](sessions.md) restent ceux de `ci.yml` et d'Images, et ceux de
@@ -2549,7 +2552,7 @@ ensemble ; la plus longue fait la durée :
 
 | Job | Sur un runner | D'où |
 |---|---|---|
-| `mutants`, une tranche sur 14 | ~41 min estimées, la plus lourde (de 36 à 41 ; installation ~1 min comprise) | avant CI6d, de 22 à 72 min mesurées. Une fois les runs non mutés mesurés par la porte et le fichier mis à jour, les tranches se resserrent (de 39 à 42 min estimées) ; la plus lourde reste vers 41 |
+| `mutants`, une tranche sur 14, avant CI10b | ~41 min estimées, la plus lourde (de 36 à 41 ; installation ~1 min comprise) | avant CI6d, de 22 à 72 min mesurées. Une fois les runs non mutés mesurés par la porte et le fichier mis à jour, les tranches se resserrent (de 39 à 42 min estimées) ; la plus lourde reste vers 41 |
 | `invariants` (2 000), avant CI10b | 22 à 36 min mesurées | les deux runs du 05/11 ; scindé depuis (ci-dessous) |
 | `control`, une tranche sur 2 | ~31 min estimées | avant CI6d, de 24 à 36 min mesurées : 16 mutants d'invariants par tranche, dont une dizaine survivent (deux tours entiers chacun) |
 | `macos` (informe) | 4 à 8 min, s'il a un runner | les deux runs du 05/11 |

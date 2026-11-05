@@ -2665,10 +2665,8 @@ MUTANTS += [
      "    _STORE.write_text(\"\\n\".join(lines) + \"\\n\")\n"),
     ("M1224", "a new card appended in place: a reader may see half a line (SEC3, V-10)", ESC,
      "    _write_lines([ln for ln in lines if ln.strip()] + [json.dumps(esc, default=str)])\n",
-     "    with open(_STORE, \"a\") as _f:\n        _f.write(json.dumps(esc, default=str) + \"\\n\")\n",
-     "TIMING: under the store's lock, one small append is one write(2) — the test's reader sees "
-     "it half done only at times (1 round in 2, measured); what the whole rewrite adds besides (a "
-     "crash inside the write leaves the store as it was) needs a process killed mid-write"),
+     # Its TIMING reason taken off (CI6e): a reader at half of every write sees it, every time.
+     "    with open(_STORE, \"a\") as _f:\n        _f.write(json.dumps(esc, default=str) + \"\\n\")\n"),
     ("M1225", "the store's lock is a thread lock only: another process writes meanwhile (SEC3, V-10)", LCK,
      # The store's own block (its message names the file, not a VM): since I3F (#292) the
      # same flock lines open _vm_lock and _file_lock.

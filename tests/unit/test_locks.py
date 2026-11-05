@@ -172,6 +172,105 @@ def test_concurrent_writers_lose_no_card_and_no_reader_sees_half_a_store(tmp_pat
         "lost": 0, "duplicated": 0, "resolve_lost": 0, "verdict_lost": 0, "bad": 0}, got
 
 
+class _ReadMidWrite:
+    """A file being written: half of each write done, then a reader reads the store (`look`), then
+    the rest — the moment a reader in another process may fall on."""
+
+    def __init__(self, f, look):
+        self._f, self._look = f, look
+
+    def write(self, text):
+        half = len(text) // 2
+        n = self._f.write(text[:half])
+        self._f.flush()
+        self._look()
+        return n + self._f.write(text[half:])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return self._f.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._f, name)
+
+
+def test_a_concurrent_reader_mid_write_reads_the_store_whole_never_half(monkeypatch):
+    """CI6e (#553, M1223, M1224): the race above reads half a store only at times. Here the reader
+    reads at the worst moment, at every write: half of it done. The store is rewritten whole,
+    through a temporary file — the reader reads it as it was, whole: never a store cut short
+    (rewritten in place), nor half a line (a card appended)."""
+    import builtins
+    import io
+    from glorfindel import escalations
+    store = escalations._STORE                       # the conftest's: in this test's tmp_path
+    escalations.record(signal_id="s-1", resource_id="/subscriptions/s/vm/a", action="isolate_vm",
+                       escalation_type="mode_hold", reason="r")
+    before, seen, real_open = store.read_text(), [], io.open
+
+    def opening(file, mode="r", *args, **kwargs):
+        f = real_open(file, mode, *args, **kwargs)
+        here = isinstance(file, int) or str(file).startswith(str(store.parent))
+        return _ReadMidWrite(f, lambda: seen.append(store.read_text())) if here and set(mode) & set("wa") else f
+    with monkeypatch.context() as m:
+        m.setattr(io, "open", opening)               # Path.open, os.fdopen
+        m.setattr(builtins, "open", opening)         # open()
+        escalations.record(signal_id="s-2", resource_id="/subscriptions/s/vm/b", action="isolate_vm",
+                           escalation_type="mode_hold", reason="r")
+    after = store.read_text()
+    assert seen, "no write of the store went through open: nothing was read mid-write"
+    assert after.startswith(before) and len(after.splitlines()) == 2
+    assert all(text in (before, after) for text in seen), seen
+
+
+_HOLDER_UNTIL = textwrap.dedent("""
+    import fcntl, sys, time
+    from pathlib import Path
+    lock_file, ready, stop = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+    with open(lock_file, "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        ready.write_text("in")
+        deadline = time.monotonic() + 60
+        while not stop.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+""")
+
+
+def _waits_for_another_process(tmp_path: Path, lock_file: Path, write) -> None:
+    """Another process holds `lock_file`'s flock (as any version of the code takes it: flock on
+    the file): `write`, in a thread of this one, waits — and goes through once it lets go."""
+    import threading
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    ready, stop = tmp_path / "held", tmp_path / "let-go"
+    holder = subprocess.Popen([sys.executable, "-c", _HOLDER_UNTIL, str(lock_file), str(ready), str(stop)],
+                              env=env)
+    done = threading.Event()
+    try:
+        deadline = time.monotonic() + 30
+        while not ready.exists():
+            assert time.monotonic() < deadline, "the holder never took the lock"
+            time.sleep(0.05)
+        threading.Thread(target=lambda: (write(), done.set()), daemon=True).start()
+        assert not done.wait(0.6), "written while another process held the lock"
+    finally:
+        stop.touch()
+        assert holder.wait(timeout=60) == 0
+    assert done.wait(30), "never written once the other process let go"
+
+
+def test_the_incident_registry_waits_for_another_process_s_write(tmp_path):
+    """CI6e (#553, M2915): the race below loses an incident between two processes only at times.
+    Here, every time: while another process holds the registry's flock, a write of this one waits —
+    its thread lock alone would let it through."""
+    from glorfindel.incidents import IncidentRegistry
+    path = tmp_path / "incidents.jsonl"
+    reg = IncidentRegistry(path=path, ttl_s=3600)
+    _waits_for_another_process(tmp_path, path.with_name(path.name + ".lock"),
+                               lambda: reg.get_or_create("/subscriptions/s/vm/a", ttp="T1486"))
+    assert reg.get_active("/subscriptions/s/vm/a") is not None
+
+
 _FILE_HOLDER = textwrap.dedent("""
     import sys, time
     from pathlib import Path

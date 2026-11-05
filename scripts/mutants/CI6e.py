@@ -3,6 +3,13 @@
 with its id and its title; a known survivor is nothing; a known survivor caught is said, never red;
 the uncounted stay uncounted; a shard leaves the verdict to its total (M3915–M3923). A reason whose
 mark the harness does not read is a fault of scripts/mutant_anchors.py (M3924).
+
+The six survivors without a reason on 05/11, each killed by a test (TESTS_ALSO below where it is not
+already in its mutant's target): M1014 by test_host_deploy.py (the CD builds nothing since CI3, the
+image built by hand is the one --build-only makes); M1223 and M1224 by a reader that reads the store
+at half of every write; M1461 by the claim refusing on its own what the command's check let through;
+M2915 and M3077 by another process holding the flock while this one writes; M3007 by the overview
+saying a refused report in the console's log.
 """
 HARNESS = "scripts/mutation_check.py"
 ANCHORS = "scripts/mutant_anchors.py"
@@ -46,4 +53,10 @@ TESTS = {
     "M3923": f"{_SH}test_a_run_of_its_own_is_red_on_an_unknown_survivor_a_shard_leaves_it_to_the_total",
     "M3924": f"{_MA}test_a_reason_the_harness_does_not_read_is_a_fault "
              f"{_MA}test_mutant_anchors_reports_a_reason_it_cannot_read",
+}
+# The six survivors' killing tests, added to their mutants' targets (the others' own files hold them).
+TESTS_ALSO = {
+    "M1014": "tests/unit/test_host_deploy.py::test_build_only_tags_the_reference_and_never_the_running_image",
+    "M2915": "tests/unit/test_locks.py::test_the_incident_registry_waits_for_another_process_s_write",
+    "M3007": "tests/unit/test_indicators.py::test_the_overview_says_a_report_it_refuses_in_the_console_s_log_once",
 }

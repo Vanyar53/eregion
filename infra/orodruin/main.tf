@@ -608,8 +608,9 @@ resource "azurerm_role_assignment" "watch_channel_station_writer" {
 # jeton Graph de l'identité : ce rôle seul, aucun autre, aucun rôle d'annuaire ; un droit Graph de
 # plus → `passive`, comme une attribution ARM hors du banc.
 #
-# Désactivé par défaut : `graph_read_enabled = true` dans terraform.tfvars d'Orodruin, puis `make
-# orodruin-plan`, puis `make orodruin-up YES=1` — par Jonathan, sous un az login qui tient le rôle
+# Désactivé par défaut : `graph_read_enabled = true` dans infra/orodruin/terraform.tfvars (ignoré par
+# git), puis `make orodruin-plan`, puis `make orodruin-lock` (la sortie reste fermée ; jamais
+# orodruin-up, qui la rouvre) — par Jonathan, sous un az login qui tient le rôle
 # d'Entra Administrateur des rôles privilégiés (ou Administrateur général) : attribuer un rôle
 # d'application de Microsoft Graph est un consentement d'administrateur. Graph est trouvé par son
 # identifiant publié (azuread_application_published_app_ids), jamais écrit ici.

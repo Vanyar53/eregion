@@ -20,6 +20,7 @@ variables {
   entra_logs_enabled          = false
   auditd_enabled              = false
   entra_test_identity_enabled = false
+  entra_bench_unit_enabled    = false
 }
 
 run "noise_off_the_bench_plan_is_unchanged" {

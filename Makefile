@@ -151,7 +151,7 @@ DOCKER_GLORFINDEL_WATCH = $(WATCH_KEY_DIR) && $(RUNS_DIRS) && $(GLORFINDEL_AZURE
 	venv install lock audit test test-unit lint annatar-simulate annatar-simulate-gap clean release release-draft \
 	canary-jit providers-lock celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	celebrimbor-logs-plan celebrimbor-logs-up celebrimbor-auditd-plan celebrimbor-auditd-up \
-	celebrimbor-identity-plan celebrimbor-identity-up \
+	celebrimbor-identity-plan celebrimbor-identity-up celebrimbor-unit-prepare celebrimbor-users-plan celebrimbor-users-up \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
@@ -238,6 +238,9 @@ help:
 	@echo "  make celebrimbor-logs-up [YES=1]            Les applique (activity_log_enabled / entra_logs_enabled du tfvars)"
 	@echo "  make celebrimbor-identity-plan              Plan de l'identité de test du banc seule (Entra ID, IDI1)"
 	@echo "  make celebrimbor-identity-up [YES=1]        L'applique (entra_test_identity_enabled du tfvars ; false : la retire)"
+	@echo "  make celebrimbor-unit-prepare [UNIT=] [YES=1] Par Graph : l'ensemble d'attributs Eregion, l'unité restreinte du banc (IDI1b) ; lecture seule sans YES"
+	@echo "  make celebrimbor-users-plan                 Plan des utilisateurs de test du banc seuls (unité, attribut, rôles de l'exécuteur)"
+	@echo "  make celebrimbor-users-up [YES=1]           L'applique (entra_bench_unit_enabled du tfvars ; false : les retire)"
 	@echo "  make celebrimbor-auditd-plan [INSTANCE=]    Plan d'auditd seul : l'extension des VM et la DCR (AUD1)"
 	@echo "  make celebrimbor-auditd-up [YES=1]          L'applique (auditd_enabled du tfvars ; false : le retire)"
 	@echo ""
@@ -717,6 +720,35 @@ celebrimbor-identity-plan celebrimbor-identity-up:
 	@$(TF) init
 	@$(TF) workspace select default
 	@$(TF) $(if $(filter celebrimbor-identity-up,$@),apply $(if $(YES),-auto-approve),plan) $(IDENTITY_TARGETS)
+
+# IDI1b (#573) : l'unité administrative restreinte du banc et ses utilisateurs de test, inscrits par
+# deux moitiés — l'unité qui les tient, l'attribut Eregion qui nomme le banc (entra_bench_unit.tf).
+# celebrimbor-unit-prepare : ce qu'azuread 3.10.0 ne sait pas (hypothèse 13), par l'API de Graph
+# sous ton az login (infra/terraform/scripts/entra_bench_unit.py) — l'ensemble d'attributs Eregion,
+# ses deux définitions, l'unité restreinte. Sans YES=1 : lecture seule, ce qui existe et les
+# requêtes qui seraient faites. UNIT=<id> : l'unité déjà épinglée, relue (restreinte, ou refusée) —
+# sans UNIT, YES=1 en crée une NOUVELLE et dit son id à épingler. UNIT passe par l'environnement,
+# jamais développé par make.
+# celebrimbor-users-plan / -up : plan et apply ciblés sur les utilisateurs, leur attribut, leur
+# appartenance et les rôles de l'exécuteur, rien d'autre du banc ; ce qu'ils posent vient de
+# terraform.tfvars (entra_bench_unit_enabled, entra_bench_unit_id, entra_test_users,
+# entra_identity_executor_object_id), jamais d'un -var d'ici. Instance canonique seulement.
+#   make celebrimbor-unit-prepare [UNIT=<id>] [YES=1]
+#   make celebrimbor-users-plan                # lecture seule
+#   make celebrimbor-users-up [YES=1]          # YES=1 : sans confirmation, plan relu avant
+USERS_TARGETS = -target=azuread_user.bench_test -target=terraform_data.bench_test_user_attributes -target=azuread_administrative_unit_member.bench_test -target=azuread_directory_role_assignment.identity_executor
+
+unexport UNIT
+celebrimbor-unit-prepare: export EREGION_BENCH_ADMIN_UNIT_ID = $(value UNIT)
+celebrimbor-unit-prepare:
+	@[ "$(INSTANCE)" = "default" ] || { echo "!! $@ : instance '$(INSTANCE)' refusée — l'unité du banc vit dans le tenant, posée par l'instance canonique (default) seule."; exit 1; }
+	@python3 infra/terraform/scripts/entra_bench_unit.py prepare$(if $(YES), --yes)
+
+celebrimbor-users-plan celebrimbor-users-up:
+	@[ "$(INSTANCE)" = "default" ] || { echo "!! $@ : instance '$(INSTANCE)' refusée — les utilisateurs de test vivent dans le tenant, posés par l'instance canonique (default) seule."; exit 1; }
+	@$(TF) init
+	@$(TF) workspace select default
+	@$(TF) $(if $(filter celebrimbor-users-up,$@),apply $(if $(YES),-auto-approve),plan) $(USERS_TARGETS)
 
 # AUD1 : auditd sur les VM du banc et local6 dans la DCR, seuls — plan et apply ciblés sur
 # l'extension d'auditd et la DCR, rien d'autre du banc (une dérive en attente sur une VM ou le

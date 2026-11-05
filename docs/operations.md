@@ -3076,10 +3076,12 @@ az rest --method GET --url "https://graph.microsoft.com/v1.0/me/memberOf/microso
   --query "value[].displayName" -o tsv        # Privileged Role Administrator (ou Global Administrator) attendu
                                               # — un rôle PIM éligible : l'activer d'abord
 
-# 0 bis. Dès la release qui porte IDI1, avant tout autre geste : la mesure de `wids`.
-make orodruin-check                # le droit Graph n'est pas encore déclaré (EREGION_TENANT_ID absent d'orodruin.env) :
-                                   # « ⚠ graph_directory_role <valeur> » est DIT, sans passer passive — noter la valeur ;
-                                   # rien : l'hypothèse APP_DEFAULT_WIDS tient. Puis IDI1s (#559) rendra ce cas strict
+# 0 bis. FAIT le 05/11 (#559) : la mesure de `wids`, au premier orodruin-check après la v0.5.6, droit Graph
+#        non déclaré — armed, aucune note graph : l'hypothèse APP_DEFAULT_WIDS tient. Depuis IDI1s, un `wids`
+#        inconnu est passive, déclaré ou non ; à refaire seulement sur un nouvel Orodruin :
+make orodruin-check                # armed attendu ; passive « graph_directory_role <valeur> » : un rôle d'annuaire
+                                   # sur l'identité d'Orodruin — le retirer, s'arrêter ; « ⚠ graph_unreadable » :
+                                   # le jeton Graph introuvable, seulement DIT tant que le droit n'est pas déclaré
 
 # 1. Orodruin — la lecture de Graph, seule.
 echo 'graph_read_enabled = true' >> infra/orodruin/terraform.tfvars   # ignoré par git
@@ -3102,9 +3104,10 @@ terraform -chdir=infra/orodruin output -raw protected_identities   # → EREGION
 make orodruin-push REF=<le commit de main de ce lot, ou la release qui le porte>   # l'image et orodruin.env
 
 # 3. Le contrat, relu : armed attendu.
-make orodruin-check                # passive « graph_directory_role <valeur> » : la valeur `wids` d'un principal
-                                   # sans rôle n'est pas celle qu'on croyait (hypothèse) — la noter, s'arrêter ;
-                                   # passive « graph_unlisted_right » : un droit de plus dans Graph, le retirer
+make orodruin-check                # passive « graph_directory_role <valeur> » : un rôle d'application changerait le
+                                   # `wids` du jeton (mesuré le 05/11 sans eux) — la noter, s'arrêter ;
+                                   # passive « graph_unlisted_right » : un droit de plus dans Graph, le retirer ;
+                                   # passive « graph_unreadable » : le droit déclaré, le jeton Graph introuvable
 
 # 4. Celebrimbor — l'identité de test et la clé du groupe, seules.
 echo 'entra_test_identity_enabled = true' >> infra/terraform/terraform.tfvars
@@ -3144,11 +3147,14 @@ les attributions ARM d'Orodruin, pas son rôle dans Graph : le retirer ainsi, à
 éligible, une appartenance à un groupe, un objet possédé, une permission d'application (aucune n'est
 admise) — la garde le dit (`make orodruin-identity`). L'identité de test n'en a aucun ; ne lui en donner aucun.
 
-**À mesurer au banc** : la valeur `wids` du jeton Graph d'Orodruin, au premier `make orodruin-check`
-après la release (geste 0 bis : dite, sans passer passive tant que le droit Graph n'est pas déclaré),
-puis IDI1s (#559) rendra strict ce cas non déclaré ; la lecture des rôles éligibles (PIM) sur un tenant sans Entra ID P2 — si elle
-échoue, toute identité est refusée, et c'est dit (une décision de Jonathan, alors) ; la valeur `wids` du jeton Graph d'une identité managée (le contrat la suppose,
-`APP_DEFAULT_WIDS`) ; qu'`AzureActiveDirectory` couvre bien `graph.microsoft.com` depuis Orodruin (la
+**Mesuré le 05/11** (#559, geste 0 bis) : la valeur `wids` du jeton Graph d'Orodruin, droit Graph non
+déclaré — `armed`, aucune note `graph` : absente, ou `APP_DEFAULT_WIDS`. IDI1s a rendu strict le cas non
+déclaré : un `wids` inconnu est `passive` ; seul un jeton Graph introuvable reste dit sans déclaration
+(un Orodruin sans droit Graph ne tombe pas, et l'absence de jeton n'est pas un privilège).
+
+**À mesurer au banc** : le `wids` une fois les deux rôles d'application posés et le droit déclaré
+(geste 3 : `armed` attendu) ; la lecture des rôles éligibles (PIM) sur un tenant sans Entra ID P2 — si elle
+échoue, toute identité est refusée, et c'est dit (une décision de Jonathan, alors) ; qu'`AzureActiveDirectory` couvre bien `graph.microsoft.com` depuis Orodruin (la
 documentation des service tags le dit) ; le délai du jeton en cache après l'attribution (jusqu'à 24 h :
 `make orodruin-check` peut dire l'ancien jeton) ; les tags d'une application lus par Graph tels que
 Terraform les pose.

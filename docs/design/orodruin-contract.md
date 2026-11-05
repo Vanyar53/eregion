@@ -611,26 +611,41 @@ Graph de l'identité, demandé par IMDS, sans aucun appel à Graph ni droit pour
 | Dans le jeton | Tient | Sinon |
 |---|---|---|
 | `roles` (rôles d'application de Graph) | aucun, ou `Application.Read.All` et `RoleManagement.Read.Directory` tels que Graph les écrit (`GRAPH_READ_ONLY`) | `graph_unlisted_right` : une écriture (`Application.ReadWrite.OwnedBy`, `RoleManagement.ReadWrite.Directory` compris), une lecture plus large (`Directory.Read.All`, `RoleManagement.Read.All`), toute autre permission |
-| `wids` (rôles d'annuaire) | aucun, hors la valeur des principaux sans rôle (`APP_DEFAULT_WIDS`, hypothèse) | `graph_directory_role` |
+| `wids` (rôles d'annuaire) | aucun, hors la valeur des principaux sans rôle (`APP_DEFAULT_WIDS`, mesurée le 05/11) | `graph_directory_role`, déclaré ou non |
 | `scp` | absent | `graph_unlisted_right` : le jeton d'un utilisateur (le poste d'un opérateur), pas l'identité d'Orodruin |
 
-Un jeton qu'on ne peut avoir → `graph_unreadable`. Chaque fois : `passive`, comme une attribution
-ARM hors du banc — **une fois le droit Graph déclaré**.
+Chaque fois : `passive`, comme une attribution ARM hors du banc. Un jeton qu'on ne peut avoir →
+`graph_unreadable`, `passive` **une fois le droit Graph déclaré** (ci-dessous).
+
+**La mesure du 05/11** (#559, par Jonathan). Au premier `make orodruin-check` après la v0.5.6, sur
+Orodruin à jour, droit Graph non déclaré : `armed`, et **aucune note `graph`**. Le jeton Graph de
+l'identité managée d'Orodruin s'obtient ; il ne porte aucun rôle d'application, et aucun `wids` hors
+d'`APP_DEFAULT_WIDS` : son `wids` est absent, ou égal à cette valeur (le contrat ne dit pas lequel,
+ni la valeur, qui n'est écrite nulle part). L'hypothèse tient : depuis IDI1s, un `wids` inconnu est
+`passive` même sans déclaration.
 
 **Déclaré, ou non** (relecture d'IDI1 : la garantie ne doit faire tomber aucun Orodruin à la
 release). Le droit Graph est déclaré quand `orodruin.env` nomme le tenant du banc
 (`EREGION_TENANT_ID`, `GRAPH_DECLARED_ENV`) : c'est le geste qui fait lire Entra ID à la garde d'une
-identité, et sans lui elle refuse toute identité — une variable de plus dirait la même chose.
+identité, et sans lui elle refuse toute identité — une variable de plus dirait la même chose. Depuis
+IDI1s, la déclaration ne décide plus que de deux choses :
 
 | | Non déclaré (tout Orodruin d'avant les gestes d'IDI1) | Déclaré |
 |---|---|---|
 | un rôle d'application dans le jeton | `passive`, `graph_undeclared_right` : un droit Graph que personne n'a déclaré | strict : les deux lectures seules |
-| un `wids` hors d'`APP_DEFAULT_WIDS` | **dit** par `orodruin-check` (`⚠ graph_directory_role <valeur>`), sans passer `passive` : l'hypothèse n'est pas mesurée | `passive`, `graph_directory_role` |
-| un jeton Graph qu'on ne peut avoir | dit (`⚠ graph_unreadable`), sans passer `passive` | `passive`, `graph_unreadable` |
+| un jeton Graph qu'on ne peut avoir | **dit** (`⚠ graph_unreadable`), sans passer `passive` | `passive`, `graph_unreadable` |
+| un `wids` hors d'`APP_DEFAULT_WIDS` | `passive`, `graph_directory_role` (IDI1s, #559) | `passive`, `graph_directory_role` |
 
-Ce qui est dit (`Verdict.notes`) n'arme ni ne désarme, et n'est pas publié pour la console. La valeur
-de `wids` se mesure au premier `orodruin-check` après la release ; IDI1s (#559) rendra ensuite strict le cas non
-déclaré. Mutants M3940, M3941. Mutants M3860, M3861, M3906 (le contrat), M3862, M3863 (Terraform). Tests :
+**Pourquoi un jeton introuvable n'est que dit, sans déclaration** : un Orodruin sans droit Graph ne doit
+pas tomber à cause d'un Graph qu'il ne lit jamais (la garde d'une identité refuse alors toute identité,
+d'elle-même), et l'absence de jeton n'est pas un privilège : ce qu'on ne peut obtenir, aucun injecteur
+ne s'en sert. Déclaré, la garde lit Graph avec ce même jeton : une lecture déclarée qui ne peut se faire
+est un contrat illisible, `passive`.
+
+Ce qui est dit (`Verdict.notes`) n'arme ni ne désarme, et n'est pas publié pour la console. Mutants
+M3940, M3860, M3861, M3906 (le contrat), M3862, M3863 (Terraform) ; M4225–M4229 (IDI1s : le `wids` strict
+sans déclaration, le jeton introuvable dit ou `passive` selon elle, la liste réduite à la valeur
+mesurée). M3941 (IDI1 : le `wids` non déclaré seulement dit) est retiré, son code n'existe plus. Tests :
 `tests/unit/test_orodruin.py`, `infra/orodruin/tests/graph_read.tftest.hcl`.
 
 La garde sait aussi, avant de lire, ce que Terraform lui donne (`terraform output`, dans
@@ -638,10 +653,14 @@ La garde sait aussi, avant de lire, ce que Terraform lui donne (`terraform outpu
 (l'opérateur qui applique ; sans lui, toute identité est refusée), `protected_identities` →
 `EREGION_PROTECTED_IDENTITIES` (Orodruin et les watches). Aucune valeur n'est dans le dépôt.
 
+**Mesuré le 05/11** : le `wids` du jeton d'une identité managée sans rôle, droit Graph non déclaré
+(ci-dessus) — absent, ou `APP_DEFAULT_WIDS`.
+
 **À mesurer au banc, avec Jonathan** :
-- `make orodruin-check` après le geste : `armed` ; un jeton d'identité managée porte-t-il `wids`,
-  et quelle valeur ? Une autre que `APP_DEFAULT_WIDS` rend le contrat `passive`
-  (`graph_directory_role`, la valeur dans le détail) : la lire, puis corriger la liste ;
+- `make orodruin-check` après les gestes d'IDI1 (les deux rôles d'application posés, le droit
+  déclaré) : `armed` attendu. Un `passive` `graph_directory_role` voudrait dire qu'un rôle
+  d'application change le `wids` du jeton : lire la valeur dans le détail, s'arrêter, et ne corriger
+  la liste qu'après avoir vérifié qu'elle n'est le modèle d'aucun rôle intégré ;
 - **le jeton en cache** : IMDS garde le jeton d'une identité managée jusqu'à 24 h ; un rôle ajouté
   entre-temps n'y paraît qu'au jeton suivant. Le contrat dit ce que le jeton porte, pas plus ;
 - la sortie vers Graph : `AzureActiveDirectory` couvre Microsoft Graph selon la documentation des

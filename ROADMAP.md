@@ -78,10 +78,10 @@ Tenue par l'Orchestre (RM1, 02/11). Une ligne par release qui se prépare : sa v
 
 | Version | Titre | Contenu | État |
 |---|---|---|---|
-| 0.5.4 | rien de non lu | OI2 (un run de contrôle avant le tag d'Orodruin), SEC20b, L1W ; CAN1, MUT1 (le harnais mesure de nouveau) | publiée (04/11) |
-| 0.5.5 | la preuve de bout en bout | CI5, CI6 (une CI plus rapide, une porte de release), H1c (le CD sur les checks requis) ; SEC21 (les détections signées), WC1 (sans H0), OI3 (Orodruin à jour au démarrage), OL1 ; GS1 (les guides de démarrage), AV1 ; DG-e, L1O, I11g ; CI6b (la porte au premier run) | brouillon |
-| 0.5.6 | — | SEC21b (le battement dit ce qu'il couvre), CON-S (la console marque les détections signées) | brouillon |
-| 0.5.x | — | ID1, G1 au banc | plus tard |
+| 0.5.5 | la preuve de bout en bout | CI5, CI6 (une CI plus rapide, une porte de release), H1c (le CD sur les checks requis) ; SEC21 (les détections signées), WC1 (sans H0), OI3 (Orodruin à jour au démarrage), OL1 ; GS1 (les guides de démarrage), AV1 ; DG-e, L1O, I11g ; CI6b (la porte au premier run) | publiée (05/11) |
+| 0.5.6 | qui est qui | SEC21b (le battement dit ce qu'il couvre), CON-S (la console marque les détections signées) ; CI6c, CI6d (la porte en ~45 min) ; FL1, H1d (le CD juge le battement par son identité) ; RW1 (la repose lit le statut du fournisseur) ; FS1a (le format de la file signée) ; IDI1 (une identité d'Entra ID inscrite au banc, jamais privilégiée) | brouillon |
+| 0.5.x | — | CI6e (les survivants connus), IR1a (le plan d'une identité volée), FS1b (la watch relève la file), VM3, RW2 ; ID1, G1 au banc | plus tard |
+| 0.6.0 | l'identité défendue | ID1 allumé et mesuré, IDI1 appliqué, R2 (une technique Stratus sur l'identité de test) vue par Glorfindel, IR1a (le plan et « Vérifier » sur la carte) — décidé par Jonathan le 05/11 | plus tard |
 
 ### Les lots
 

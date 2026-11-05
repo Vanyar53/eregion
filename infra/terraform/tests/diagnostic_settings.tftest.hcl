@@ -22,6 +22,8 @@ mock_provider "azurerm" {
 mock_provider "null" {}
 # G1 : azapi (la cible Microsoft-Agent de chaos.tf), faux lui aussi — aucun appel à Azure.
 mock_provider "azapi" {}
+# IDI1 : azuread (l'identité de test du banc, désactivée), faux lui aussi — aucun appel à Graph.
+mock_provider "azuread" {}
 
 variables {
   # Une clé jetable, générée pour ce test (sa clé privée n'a jamais été gardée).
@@ -31,6 +33,8 @@ variables {
   activity_log_enabled = false
   entra_logs_enabled   = false
   auditd_enabled       = false
+  # IDI1 : l'identité de test du banc, hermétique de même.
+  entra_test_identity_enabled = false
 }
 
 run "both_off_nothing_of_the_subscription_nor_the_tenant" {

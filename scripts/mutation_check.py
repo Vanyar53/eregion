@@ -22,12 +22,15 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import heapq
 import importlib
 import json
+import math
 import os
 import re
 import runpy
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -3453,7 +3456,8 @@ _CANARY_CHECK = (
     "            exit 1\n          fi\n")
 MUTANTS += [
     ("M1350", "an input reaches run: inside format(): the check stopped at the first } (SEC6)",
-     ".github/workflows/mutants.yml", '--examples "$EXAMPLES"', "--examples ${{ format('{0}', inputs.examples) }}"),
+     ".github/workflows/mutants.yml", 'mutation_check.py --examples "$EXAMPLES"',   # CI6d: in shards
+     "mutation_check.py --examples ${{ format('{0}', inputs.examples) }}"),
     ("M1351", "the canary trusts whatever key HashiCorp's URL serves: no fingerprint check (SEC6)",
      ".github/workflows/canary-azurerm.yml",
      _CANARY_CHECK, ""),
@@ -10815,39 +10819,241 @@ def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS
 # (.github/workflows/release-gate.yml) gives each runner a shard (`--shard K/N`), each shard
 # writes what it measured (`--json`), and `--total` says whether, together, the shards measured
 # each mutant of this tree once, at the budget given — then holds the count to `--min-caught`.
-# A shard takes whole targets, cut into pieces of CHUNK mutants at most: a target's unmutated
-# run happens once per piece, never once per mutant. Pieces go heaviest first, each to the
-# lightest shard so far (a target that runs an invariant machine weighs HEAVY): the same tree,
-# the same shards, whichever runner asks.
+#
+# CI6d (#545): the shards cut on the durations measured. The gate's first two runs (05/11) took
+# 22 to 72 min a shard: the estimate weighed a mutant 1, or HEAVY on an invariant machine, and
+# each unmutated run 1 — when test_host_cd.py's 97 mutants alone cost a quarter of the whole
+# (about 280 s each), and the unmutated runs a third of a shard. Each shard's --json now says,
+# in seconds, each mutant's measure and each target's unmutated run; scripts/mutants/durations.json
+# keeps them (`--update-durations DIR…`, from a run's artifacts), and a shard weighs them: a mutant
+# by its measure (unmeasured: the median of its target's measured ones, else the estimate, UNIT
+# seconds, HEAVY times that on an invariant machine), a piece by its mutants and its target's
+# unmutated run (unmeasured: one round of its slowest mutant, at least the estimate). A target is
+# cut into pieces only when its mutants weigh more than 1/PIECES of a shard's share — each piece
+# runs it unmutated once more. Pieces go heaviest first, each to the lightest shard so far: the
+# same tree and the same file, the same shards, whichever runner asks.
 HEAVY = 8
-CHUNK = 8
+UNIT = 13            # s: the median measure of a mutant outside the invariant machines (05/11)
+PIECES = 4
 SHARD = re.compile(r"([1-9]\d*)/([1-9]\d*)")
 UNCOUNTED = ("EQUIVALENT", "MULTI-HOST", "STALE")
+DURATIONS = LOTS_DIR / "durations.json"
+# The budget the durations are measured at, and the shards cut for: the release gate's.
+DURATIONS_BUDGET = (500, 2)
+# A duration above a day is no measure (a shard's bound is 90 min): left out, the estimate weighs it.
+MAX_SECONDS = 86_400
+SECONDS = re.compile(r"\((\d+(?:\.\d+)?)s\)")     # a row's detail before CI6d: "2/2 (19s)"
 
 
 def _heavy(target: str) -> bool:
     return "test_invariants" in target
 
 
-def shard_of(todo: list, k: int, n: int, tests: dict | None = None) -> list:
-    """The mutants of shard k of n (1-based), in todo's order."""
-    tests = TESTS if tests is None else tests
+def _seconds(value) -> float | None:
+    """A duration read from a file: a number above 0 and at most MAX_SECONDS, else None — never a
+    cost: the estimate weighs what it leaves out. 0 is « not measured » (CI6d, review): a shard of
+    zeros would take every mutant into its first shard."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        value = float(value)
+    except OverflowError:             # an integer past a float's range (10**400)
+        return None
+    return value if math.isfinite(value) and 0 < value <= MAX_SECONDS else None
+
+
+def _durations_of(found, kind: str, where: str, say) -> dict:
+    """{key: seconds} of a file's or a result's `kind`, each entry that is not a duration left
+    out — and said, with where it was."""
+    out, left = {}, 0
+    for key, value in dict(found or {}).items():
+        if (s := _seconds(value)) is None:
+            left += 1
+        else:
+            out[str(key)] = s
+    if left:
+        say(f"{where}: {left} {kind} not a duration (above 0, at most {MAX_SECONDS} s) — left out, "
+            f"the estimate weighs them", flush=True)
+    return out
+
+
+def no_durations() -> dict:
+    return {"mutants": {}, "targets": {}}
+
+
+def load_durations(path: Path | None = None, say=print) -> dict:
+    """The durations measured: {"mutants": {id: s}, "targets": {target: s}}. Absent, nothing
+    measured (the estimate cuts the shards); unreadable, said, and the same. An entry that is not a
+    duration is left out."""
+    path = DURATIONS if path is None else path
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        out = {kind: _durations_of(doc.get(kind), kind, path.name, say) for kind in ("mutants", "targets")}
+    except FileNotFoundError:
+        return no_durations()
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        say(f"{path.name}: unreadable ({type(exc).__name__}) — the shards cut on the estimate", flush=True)
+        return no_durations()
+    return out
+
+
+def costs(todo: list, tests: dict, durations: dict) -> tuple[dict, dict, dict]:
+    """(mutant id -> seconds, target -> seconds of its unmutated run, target -> its mutants' ids
+    in todo's order), from the durations measured, else estimated."""
+    measured, runs = durations.get("mutants") or {}, durations.get("targets") or {}
     groups: dict[str, list] = {}
     for m in todo:
-        groups.setdefault(tests.get(m[0], INVARIANTS), []).append(m)
+        groups.setdefault(tests.get(m[0], INVARIANTS), []).append(m[0])
+    mutant, unmutated = {}, {}
+    for target, ids in groups.items():
+        estimate = UNIT * (HEAVY if _heavy(target) else 1)
+        known = sorted(measured[i] for i in ids if i in measured)
+        guess = statistics.median(known) if known else estimate
+        mutant.update({i: measured.get(i, guess) for i in ids})
+        unmutated[target] = runs.get(target, max(estimate, max(known, default=0) / DURATIONS_BUDGET[1]))
+    return mutant, unmutated, groups
+
+
+def pieces_of(todo: list, n: int, tests: dict, durations: dict) -> list:
+    """The pieces the shards are made of: (seconds, target, index, mutant ids). A target's mutants
+    in one piece, or in as many as its weight asks — each the heaviest first to the lightest."""
+    mutant, unmutated, groups = costs(todo, tests, durations)
+    share = sum(unmutated[t] + sum(mutant[i] for i in ids) for t, ids in groups.items()) / n
+    cap = share / PIECES
     pieces = []
     for target in sorted(groups):
-        ms = groups[target]
-        for i in range(0, len(ms), CHUNK):
-            part = ms[i:i + CHUNK]
-            pieces.append(((1 + len(part)) * (HEAVY if _heavy(target) else 1), target, i, part))
-    load, mine = [0] * n, set()
-    for _cost, _target, _i, part in sorted(pieces, key=lambda p: (-p[0], p[1], p[2])):
+        ids = groups[target]
+        work = sum(mutant[i] for i in ids)
+        p = max(1, min(len(ids), math.ceil(work / cap))) if cap > 0 and math.isfinite(work / cap) else 1
+        parts, load = [[] for _ in range(p)], [0.0] * p
+        for i in sorted(ids, key=lambda i: (-mutant[i], i)):
+            j = min(range(p), key=lambda b: (load[b], b))
+            parts[j].append(i)
+            load[j] += mutant[i]
+        pieces += [(unmutated[target] + load[j], target, j, parts[j]) for j in range(p)]
+    return pieces
+
+
+def shards_of(todo: list, n: int, tests: dict | None = None, durations: dict | None = None) -> list[set]:
+    """Each shard's mutant ids, the n of them."""
+    tests = TESTS if tests is None else tests
+    durations = load_durations() if durations is None else durations
+    load, mine = [0.0] * n, [set() for _ in range(n)]
+    for cost, _target, _i, part in sorted(pieces_of(todo, n, tests, durations), key=lambda p: (-p[0], p[1], p[2])):
         j = min(range(n), key=lambda s: (load[s], s))
-        load[j] += _cost
-        if j == k - 1:
-            mine.update(m[0] for m in part)
+        load[j] += cost
+        mine[j].update(part)
+    return mine
+
+
+def shard_of(todo: list, k: int, n: int, tests: dict | None = None, durations: dict | None = None) -> list:
+    """The mutants of shard k of n (1-based), in todo's order."""
+    mine = shards_of(todo, n, tests, durations)[k - 1]
     return [m for m in todo if m[0] in mine]
+
+
+def heaviest_first(items: list, cost: dict, key=lambda x: x) -> list:
+    """What a pool of workers takes, the heaviest first: a long run started last makes the tail."""
+    return sorted(items, key=lambda x: (-cost.get(key(x), 0), key(x)))
+
+
+def _wall(seconds: list, jobs: int) -> float:
+    """A pool of `jobs` workers taking these runs in this order: when the last ends."""
+    ends = [0.0] * max(1, jobs)
+    for s in seconds:
+        heapq.heapreplace(ends, ends[0] + s)
+    return max(ends)
+
+
+def plan(todo: list, n: int, jobs: int, tests: dict | None = None, durations: dict | None = None) -> list:
+    """Each shard's estimate, as main() runs it: (mutants, targets, seconds) — its unmutated runs,
+    then its mutants, each pool the heaviest first; the installation aside."""
+    tests = TESTS if tests is None else tests
+    durations = load_durations() if durations is None else durations
+    mutant, unmutated, _ = costs(todo, tests, durations)
+    out = []
+    for mine in shards_of(todo, n, tests, durations):
+        targets = {tests.get(i, INVARIANTS) for i in mine}
+        seconds = (_wall([unmutated[t] for t in heaviest_first(sorted(targets), unmutated)], jobs)
+                   + _wall([mutant[i] for i in heaviest_first(sorted(mine), mutant)], jobs))
+        out.append((len(mine), len(targets), seconds))
+    return out
+
+
+def say_plan(todo: list, n: int, jobs: int, durations: dict | None = None) -> int:
+    durations = load_durations() if durations is None else durations
+    ids = {m[0] for m in todo}
+    measured = len(ids & set(durations["mutants"]))
+    targets = {TESTS.get(i, INVARIANTS) for i in ids}
+    print(f"{n} shards of {len(todo)} mutants, --jobs {jobs}: measured {measured} mutants of {len(todo)}, "
+          f"{len(targets & set(durations['targets']))} unmutated runs of {len(targets)} (the rest estimated)")
+    shards = plan(todo, n, jobs, durations=durations)
+    for k, (count, nt, seconds) in enumerate(shards, 1):
+        print(f"  shard {k:2}/{n}: {count:4} mutants, {nt:3} targets, ~{seconds / 60:5.1f} min")
+    if shards:
+        heavy = max(range(n), key=lambda s: shards[s][2])
+        print(f"heaviest: shard {heavy + 1}/{n}, ~{shards[heavy][2] / 60:.1f} min (the installation aside)")
+    return 0
+
+
+def _result_durations(doc: dict, where: str = "", say=lambda *a, **k: None) -> tuple[dict, dict]:
+    """A shard's --json: each mutant's seconds (its own field; before CI6d, its row's detail) and
+    each target's unmutated run — each through _seconds, what is not a duration left out and said.
+    The rows are read only in a result of before CI6d, without its own field."""
+    legacy = {}
+    for row in [] if "seconds" in doc else doc.get("rows") or []:
+        if isinstance(row, list) and len(row) >= 4 and isinstance(row[0], str) and isinstance(row[3], str):
+            if (m := SECONDS.search(row[3])):
+                legacy[row[0]] = float(m.group(1))
+    mutants = _durations_of(legacy, "mutants (rows)", where, say)
+    mutants.update(_durations_of(doc.get("seconds"), "mutants", where, say))
+    return mutants, _durations_of(doc.get("targets"), "targets", where, say)
+
+
+def update_durations(dirs: list[Path], path: Path | None = None, say=print) -> int:
+    """scripts/mutants/durations.json from the shards' results under `dirs` (a run's artifacts):
+    each mutant and each target of this tree measured there takes its smallest measure — a slower
+    runner slows a whole shard alike; the others keep theirs; what this tree no longer has goes.
+    Only results at DURATIONS_BUDGET count. 1 when none could be read."""
+    path = DURATIONS if path is None else path
+    old = load_durations(path, say=say)
+    tree_ids = {m[0] for m in MUTANTS + CONTROL}
+    tree_targets = {TESTS.get(i, INVARIANTS) for i in tree_ids}
+    new: dict[str, dict] = {"mutants": {}, "targets": {}}
+    read = 0
+    for where in dirs:
+        for result in sorted(Path(where).rglob("*.json")):
+            try:
+                doc = json.loads(result.read_text(encoding="utf-8"))
+                budget = (doc["examples"], doc["rounds"])
+                mutants, targets = _result_durations(doc, f"  {result.name}", say)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                say(f"  {result.name}: unreadable ({type(exc).__name__}), left out")
+                continue
+            if budget != DURATIONS_BUDGET:
+                say(f"  {result.name}: measured at {budget[0]} sequences, {budget[1]} rounds — not "
+                    f"{DURATIONS_BUDGET[0]}, {DURATIONS_BUDGET[1]}: left out")
+                continue
+            read += 1
+            for kind, found, known in (("mutants", mutants, tree_ids), ("targets", targets, tree_targets)):
+                for key, s in found.items():
+                    if key in known:
+                        new[kind][key] = min(s, new[kind].get(key, s))
+    if not read:
+        say("no shard's result read: the durations unchanged")
+        return 1
+    out = {}
+    for kind, known in (("mutants", tree_ids), ("targets", tree_targets)):
+        merged = {k: v for k, v in old[kind].items() if k in known} | new[kind]
+        out[kind] = {k: max(1, round(merged[k])) for k in sorted(merged)}
+    doc = {"about": "CI6d (#545): seconds measured by the release gate's shards, at its budget. "
+                    "Written by: python scripts/mutation_check.py --update-durations DIR...",
+           "examples": DURATIONS_BUDGET[0], "rounds": DURATIONS_BUDGET[1], **out}
+    path.write_text(json.dumps(doc, indent=1, sort_keys=False) + "\n", encoding="utf-8")
+    say(f"{path.name}: {read} results read; {len(new['mutants'])} mutants and {len(new['targets'])} unmutated "
+        f"runs measured there, {len(out['mutants'])} mutants and {len(out['targets'])} runs kept; "
+        f"{len(tree_ids - set(out['mutants']))} mutants of the tree without a measure")
+    return 0
 
 
 def parse_shard(text: str) -> tuple[int, int]:
@@ -10962,6 +11168,13 @@ def prepare_embedding_model(say=print) -> bool | None:
     return True
 
 
+def _positive(text: str) -> int:
+    """`--plan N`: N >= 1, as `--shard K/N` (parse_shard)."""
+    if not re.fullmatch(r"[1-9]\d*", text.strip()):
+        raise argparse.ArgumentTypeError(f"{text!r}: a number of shards, 1 or more")
+    return int(text)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--examples", type=int, default=60)
@@ -10978,26 +11191,42 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--total", default="", help="a directory of --json results: put the shards together (CI6)")
     ap.add_argument("--shards", type=int, default=1, help="with --total: the shards of the mutants")
     ap.add_argument("--control-shards", type=int, default=1, help="with --total: the shards of the control set")
+    ap.add_argument("--plan", type=_positive, default=0, metavar="N",
+                    help="say each of N shards' estimated time, from the durations measured; measure nothing (CI6d)")
+    ap.add_argument("--update-durations", nargs="+", default=[], metavar="DIR",
+                    help="scripts/mutants/durations.json from the --json results under these directories (CI6d)")
     args = ap.parse_args(argv)
     if args.total:
         return total(Path(args.total), args.shards, args.control_shards, args.examples, args.rounds,
                      args.min_caught)
+    if args.update_durations:
+        return update_durations([Path(d) for d in args.update_durations])
     only = {m.strip() for m in args.only.split(",") if m.strip()}
+    durations = load_durations()
+    if args.plan:
+        return say_plan([m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only],
+                        args.plan, args.jobs, durations)
     k, n = parse_shard(args.shard) if args.shard else (1, 1)
 
     with tempfile.TemporaryDirectory(prefix="glorfindel-mutants-") as tmp:
         base = Path(tmp) / "base"
         _copy_repo(base)
         todo = [m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only]
-        todo = shard_of(todo, k, n) if n > 1 else todo
+        todo = shard_of(todo, k, n, durations=durations) if n > 1 else todo
+        # Each pool takes the heaviest first (CI6d): a long run started last makes the shard's tail.
+        mutant_cost, target_cost, _ = costs(todo, TESTS, durations)
         # ChromaDB's model once, here, before any run in parallel (CI6b): never by each of them.
         prepare_embedding_model()
         # The unmutated copy must pass, or nothing below means anything. Its targets at once, as
         # the mutants are (CI6: one after the other, they outlasted the Monday run's bound).
-        targets = sorted({TESTS.get(m[0], INVARIANTS) for m in todo})
+        targets = heaviest_first(sorted({TESTS.get(m[0], INVARIANTS) for m in todo}), target_cost)
+
+        def unmutated(target):
+            started = time.monotonic()
+            return _run(base, args.examples, show=True, target=target), time.monotonic() - started
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            failing = [t for t, bad in zip(targets, pool.map(
-                lambda t: _run(base, args.examples, show=True, target=t), targets)) if bad]
+            ran = dict(zip(targets, pool.map(unmutated, targets)))
+        failing = [t for t in sorted(ran) if ran[t][0]]
         for target in failing:
             print(f"{target} fails on the UNMUTATED code — fix that first")
         if failing:
@@ -11036,8 +11265,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{mid} {verdict:8} {row[3]:14} {title}", flush=True)
             return row
 
+        def timed(mutant):
+            started = time.monotonic()
+            return measure(mutant), time.monotonic() - started
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            rows = sorted(pool.map(measure, todo))
+            measured = list(pool.map(timed, heaviest_first(todo, mutant_cost, key=lambda m: m[0])))
+        rows = sorted(row for row, _ in measured)
+        seconds = {row[0]: s for row, s in measured}
     print(f"\nbudget {args.examples} sequences, {args.rounds} rounds" + (f", shard {k}/{n}:" if n > 1 else ":"))
     for mid, title, verdict, detail in rows:
         print(f"  {mid}  {verdict:8}  {detail:16}  {title}")
@@ -11046,7 +11280,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         Path(args.json).write_text(json.dumps({
             "control": args.control, "shard": k, "shards": n, "examples": args.examples,
-            "rounds": args.rounds, "rows": [list(r) for r in rows]}, indent=1) + "\n", encoding="utf-8")
+            "rounds": args.rounds, "rows": [list(r) for r in rows],
+            # CI6d: each mutant's measure (its copy included) and each target's unmutated run, in seconds.
+            "seconds": {mid: round(seconds[mid], 1) for mid in sorted(seconds)},
+            "targets": {t: round(ran[t][1], 1) for t in sorted(ran)}}, indent=1) + "\n", encoding="utf-8")
     return 1 if caught < args.min_caught else 0
 
 

@@ -34,6 +34,7 @@ def hermetic_orodruin(tmp_path, monkeypatch):
     import eregion_core.orodruin as orodruin
     monkeypatch.setattr(orodruin, "READERS", {
         "identity": lambda: [],
+        "graph": lambda: [],
         "network": lambda: [],
         "cap": lambda: ([], {"max_injections": 20, "max_run_s": 3600}),
     })

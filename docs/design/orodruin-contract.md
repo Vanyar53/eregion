@@ -25,13 +25,14 @@ contrat Orodruin   « cet hôte a-t-il le droit, et seulement le droit, d'agir ?
 
 ## Le contrat
 
-Six garanties. Chacune a un mécanisme, et une vérification qui ne demande **aucune écriture**
+Sept garanties. Chacune a un mécanisme, et une vérification qui ne demande **aucune écriture**
 (elle lit l'état effectif, ou tente une action qui doit échouer).
 
 | Garantie | Mécanisme | Vérifiée par |
 |---|---|---|
 | Périmètre réseau | sortie limitée au banc, aux API de contrôle du cloud et à l'API du modèle | une connexion hors périmètre échoue |
 | Identité limitée | identité d'exécution qui lit le groupe du banc et n'écrit que sur chaque VM inscrite et chaque expérience (SEC5) ; ce qu'elle tient est une liste d'autorisations (SEC11) | lecture de ses attributions de rôle, à toutes les portées, et de ses droits effectifs sur le banc ; une écriture sur le groupe entier = manque ; un droit hors de la liste de sa portée = manque ; sans expérience dans le groupe (Chaos Studio non enregistré sur l'abonnement : `MissingSubscriptionRegistration` ou `NoRegisteredProviderFound`, quel que soit le statut — SEC7, à mesurer), les droits du chaos ne sont pas demandés |
+| Microsoft Graph (IDI1) | `Application.Read.All` et `RoleManagement.Read.Directory`, rien d'autre, désactivés par défaut (`graph_read_enabled`) : la garde d'une identité d'Entra ID lit l'application, son principal, ses permissions et ses rôles d'annuaire | le jeton Graph de l'identité, relu sans appel à Graph : ses rôles d'application dans la liste, aucun rôle d'annuaire, pas un jeton d'utilisateur |
 | Cibles inscrites | l'inscription est revérifiée à chaque injection | refus sans inscription (O0, déjà en place) |
 | Plafond | limite de l'orchestrateur, ou quota | configuration effective lue |
 | Arrêt d'urgence | révoquer l'identité, tout arrêter | essai à blanc en CI |
@@ -343,6 +344,9 @@ fenêtres qu'il a fermées : chaque injecteur ouvre la sienne avant de toucher s
   en `Cancelling` après l'annulation est signalée.
 - Une fenêtre fermée étiquette encore ses cibles pendant sa grâce (15 min, le décalage de
   détection), et non plus jusqu'à 2 h 15.
+- IDI1 : les deux rôles d'application de Microsoft Graph d'Orodruin (`graph_read_enabled`) ne sont pas
+  retirés par le kill, qui ne retire que les attributions ARM. Ce sont des lectures ; les retirer :
+  `graph_read_enabled = false`, puis `make orodruin-lock`, sous un Administrateur des rôles privilégiés.
 
 **Qui ferme les fenêtres.** L'identité d'Orodruin vient d'être révoquée. Le compte du canal n'a
 pas de clé partagée, et l'opérateur n'avait aucun droit sur ses données. D'où une attribution de
@@ -588,6 +592,60 @@ d'injecteur et `Log Analytics Reader` sur l'espace de logs. Un test lie la liste
 Reader` autrement que la liste, le contrat dirait `identity_unlisted_right` en nommant l'action en
 trop — l'échec est fermé, et il se corrige dans la liste, après lecture de la définition
 (`az role definition list --name "Log Analytics Reader"`). Mutants M2883–M2887.
+
+## IDI1 — la lecture de Microsoft Graph, et rien d'autre (#546, 05/11)
+
+Une technique d'identité (R2) vise une application d'Entra ID. Sa garde (`eregion_core/inscription.py`,
+`GraphEnrollment`) lit l'application, son principal de service, ce qu'il possède, qui tient un rôle
+sur lui, ses appartenances et ses permissions d'application — `Application.Read.All` — et, depuis la
+décision du 05/11 (une identité privilégiée n'est jamais inscrite), ses rôles d'annuaire actifs et
+éligibles — `RoleManagement.Read.Directory`, le moindre droit de `roleAssignments` (et, plus large que
+`RoleEligibilitySchedule.Read.Directory`, il couvre aussi `roleEligibilityScheduleInstances`). Deux
+rôles d'application de Microsoft Graph, en lecture seule. Terraform les pose, désactivés par défaut
+(`graph_read_enabled`, `azuread_app_role_assignment.graph_read`, un par rôle), sur le principal de
+Graph trouvé par son identifiant publié.
+
+Le contrat le relit à chaque démarrage, une garantie de plus (`graph`, `assess_graph`) : le jeton
+Graph de l'identité, demandé par IMDS, sans aucun appel à Graph ni droit pour le lire :
+
+| Dans le jeton | Tient | Sinon |
+|---|---|---|
+| `roles` (rôles d'application de Graph) | aucun, ou `Application.Read.All` et `RoleManagement.Read.Directory` tels que Graph les écrit (`GRAPH_READ_ONLY`) | `graph_unlisted_right` : une écriture (`Application.ReadWrite.OwnedBy`, `RoleManagement.ReadWrite.Directory` compris), une lecture plus large (`Directory.Read.All`, `RoleManagement.Read.All`), toute autre permission |
+| `wids` (rôles d'annuaire) | aucun, hors la valeur des principaux sans rôle (`APP_DEFAULT_WIDS`, hypothèse) | `graph_directory_role` |
+| `scp` | absent | `graph_unlisted_right` : le jeton d'un utilisateur (le poste d'un opérateur), pas l'identité d'Orodruin |
+
+Un jeton qu'on ne peut avoir → `graph_unreadable`. Chaque fois : `passive`, comme une attribution
+ARM hors du banc — **une fois le droit Graph déclaré**.
+
+**Déclaré, ou non** (relecture d'IDI1 : la garantie ne doit faire tomber aucun Orodruin à la
+release). Le droit Graph est déclaré quand `orodruin.env` nomme le tenant du banc
+(`EREGION_TENANT_ID`, `GRAPH_DECLARED_ENV`) : c'est le geste qui fait lire Entra ID à la garde d'une
+identité, et sans lui elle refuse toute identité — une variable de plus dirait la même chose.
+
+| | Non déclaré (tout Orodruin d'avant les gestes d'IDI1) | Déclaré |
+|---|---|---|
+| un rôle d'application dans le jeton | `passive`, `graph_undeclared_right` : un droit Graph que personne n'a déclaré | strict : les deux lectures seules |
+| un `wids` hors d'`APP_DEFAULT_WIDS` | **dit** par `orodruin-check` (`⚠ graph_directory_role <valeur>`), sans passer `passive` : l'hypothèse n'est pas mesurée | `passive`, `graph_directory_role` |
+| un jeton Graph qu'on ne peut avoir | dit (`⚠ graph_unreadable`), sans passer `passive` | `passive`, `graph_unreadable` |
+
+Ce qui est dit (`Verdict.notes`) n'arme ni ne désarme, et n'est pas publié pour la console. La valeur
+de `wids` se mesure au premier `orodruin-check` après la release ; IDI1s (#559) rendra ensuite strict le cas non
+déclaré. Mutants M3940, M3941. Mutants M3860, M3861, M3906 (le contrat), M3862, M3863 (Terraform). Tests :
+`tests/unit/test_orodruin.py`, `infra/orodruin/tests/graph_read.tftest.hcl`.
+
+La garde sait aussi, avant de lire, ce que Terraform lui donne (`terraform output`, dans
+`orodruin.env`) : `tenant_id` → `EREGION_TENANT_ID`, `operator_object_id` → `EREGION_OPERATOR_OBJECT_ID`
+(l'opérateur qui applique ; sans lui, toute identité est refusée), `protected_identities` →
+`EREGION_PROTECTED_IDENTITIES` (Orodruin et les watches). Aucune valeur n'est dans le dépôt.
+
+**À mesurer au banc, avec Jonathan** :
+- `make orodruin-check` après le geste : `armed` ; un jeton d'identité managée porte-t-il `wids`,
+  et quelle valeur ? Une autre que `APP_DEFAULT_WIDS` rend le contrat `passive`
+  (`graph_directory_role`, la valeur dans le détail) : la lire, puis corriger la liste ;
+- **le jeton en cache** : IMDS garde le jeton d'une identité managée jusqu'à 24 h ; un rôle ajouté
+  entre-temps n'y paraît qu'au jeton suivant. Le contrat dit ce que le jeton porte, pas plus ;
+- la sortie vers Graph : `AzureActiveDirectory` couvre Microsoft Graph selon la documentation des
+  service tags ; une lecture refusée par le réseau refuse l'identité, fermée.
 
 ## L'image des injecteurs (CI3, #267, 29/10)
 

@@ -9,6 +9,8 @@ guardrails hold — otherwise the injector stays passive and touches nothing.
                           group (which VMs: Terraform's choice, by their tags — the
                           contract does not read their inscription; O0 does, at each run);
                           and nothing else: what it holds is an allow-list (SEC11)
+        graph             its Microsoft Graph token: no right there but the identity guard's
+                          reads (GRAPH_READ_ONLY, IDI1), no directory role, no user's
         network           a connection outside the perimeter fails
         cap               the declared cap is read and compared to the ceiling
         kill              revoke the identity, cancel the chaos experiments, stop the
@@ -25,7 +27,6 @@ Design: ``docs/design/orodruin-contract.md``.
 """
 from __future__ import annotations
 
-import base64
 import fnmatch
 import json
 import os
@@ -37,6 +38,7 @@ from pathlib import Path
 from typing import Callable
 
 from eregion_core.exercise import MAX_DURATION_S
+from eregion_core.inscription import token_claims
 
 ARMED, PASSIVE = "armed", "passive"
 
@@ -105,6 +107,31 @@ AUTHZ_READ_ONLY = frozenset({
     "microsoft.authorization/roledefinitions/read",
 })
 
+# IDI1 (#546): what the identity may hold in Microsoft Graph — reading applications and their
+# principals (Application.Read.All), and the directory's role assignments, active and eligible
+# (RoleManagement.Read.Directory: a privileged identity is never enrolled), for the identity guard
+# (eregion_core/inscription.py, GraphEnrollment) — and nothing else: no write there, no other API
+# permission, no directory role. Read from the identity's own Graph token, its app roles
+# (``roles``) and its directory roles (``wids``): no Graph call, no right needed to read it.
+#
+# Strict only once the Graph read is DECLARED: orodruin.env names the bench's tenant
+# (``EREGION_TENANT_ID``, the step that makes the identity guard read Entra ID). Undeclared — every
+# Orodruin before IDI1's gestures — an app role in the token is a right nobody declared, passive
+# (``graph_undeclared_right``); a directory role (``wids``) outside ``APP_DEFAULT_WIDS``, or a
+# token that cannot be had, is SAID by orodruin-check, never passive: the hypothesis on ``wids``
+# is measured at the first orodruin-check after the release, then the undeclared case turns strict
+# (IDI1s, #559).
+GRAPH = "https://graph.microsoft.com"
+GRAPH_READ_ONLY = frozenset({"Application.Read.All", "RoleManagement.Read.Directory"})
+# A ``wids`` value seen in the app-only tokens of service principals that hold no directory role
+# (published decoded tokens of managed identities) — not a built-in role's template id.
+# Hypothesis, to measure on Orodruin (`make orodruin-check`): any other value is a role — passive
+# once the Graph read is declared, said before.
+APP_DEFAULT_WIDS = frozenset({"0997a1d0-0d1d-4acb-b408-d5ca73121e90"})
+# The Graph read is declared when orodruin.env names the bench's tenant; undeclared, a ``wids``
+# outside the hypothesis or a token not had is only said — until IDI1s (#559) makes it strict.
+GRAPH_DECLARED_ENV = "EREGION_TENANT_ID"
+
 # Outside the perimeter (bench control plane, Entra ID, the model's API): reaching any
 # of these means the egress is open. Addresses, not names — DNS stays allowed.
 NETWORK_PROBES = (("1.1.1.1", 443), ("9.9.9.9", 443))
@@ -154,6 +181,9 @@ class Verdict:
     verdict: str
     missing: list[dict] = field(default_factory=list)
     cap: dict = field(default_factory=dict)
+    # What orodruin-check says without being a missing guarantee (IDI1: a Graph hypothesis not
+    # measured yet) — never published, never arms nor disarms.
+    notes: list[dict] = field(default_factory=list)
 
     @property
     def armed(self) -> bool:
@@ -170,6 +200,11 @@ _SUBSCRIPTION_PART = re.compile(r"/subscriptions/[^/\s'\"]+", re.IGNORECASE)
 
 def _miss(code: str, detail: str) -> dict:
     return {"code": code, "detail": _SUBSCRIPTION_PART.sub("/subscriptions/…", detail)}
+
+
+def _note(code: str, detail: str) -> dict:
+    """What a reader says without it being a missing guarantee: kept apart by ``check``."""
+    return {**_miss(code, detail), "said": True}
 
 
 # ── Readers — each returns what is missing (empty: the guarantee holds) ───────────────
@@ -199,9 +234,7 @@ def watch_scope(env=None) -> str:
 def _token_oid(token: str) -> str:
     """The principal the token was issued to — who this host IS, read from the token
     itself rather than from a setting that could drift."""
-    payload = token.split(".")[1]
-    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-    return claims["oid"]
+    return token_claims(token)["oid"]
 
 
 def _allowed(action: str, perms: list[dict]) -> bool:
@@ -416,6 +449,59 @@ def read_identity(*, credential=None, get=None) -> list[dict]:
         experiments=_has_experiments(get, headers, bench))
 
 
+def graph_declared(env=None) -> bool:
+    """Is Orodruin's Graph read declared — orodruin.env naming the bench's tenant (IDI1)?"""
+    env = os.environ if env is None else env
+    return bool((env.get(GRAPH_DECLARED_ENV) or "").strip())
+
+
+def assess_graph(claims: dict, *, declared: bool = True) -> list[dict]:
+    """The Graph guarantee from the claims of the identity's own Graph token (IDI1): an app's
+    token (a user's carries ``scp``), its app roles within ``GRAPH_READ_ONLY``, no directory
+    role (``wids``, but ``APP_DEFAULT_WIDS``). An unknown right refuses (A0). Undeclared, an app
+    role refuses (``graph_undeclared_right``) and a directory role is only said (``_note``)."""
+    missing = []
+    if claims.get("scp") or not isinstance(claims.get("roles", []), list) \
+            or not isinstance(claims.get("wids", []), list):
+        missing.append(_miss("graph_unlisted_right",
+                             "not an application's token (a user's scopes, or claims of no list)"))
+        return missing
+    if not declared and claims.get("roles"):
+        missing.append(_miss("graph_undeclared_right",
+                             f"{', '.join(sorted(str(r) for r in claims['roles']))} in Microsoft Graph, "
+                             f"and nobody declared a Graph read ({GRAPH_DECLARED_ENV} not set)"))
+    unlisted = sorted({str(r) for r in claims.get("roles") or []} - GRAPH_READ_ONLY)
+    if declared and unlisted:
+        missing.append(_miss("graph_unlisted_right",
+                             f"{', '.join(unlisted)} in Microsoft Graph: the injectors read applications, "
+                             "nothing else (graph_read_enabled)"))
+    roles = sorted({str(w).lower() for w in claims.get("wids") or []} - APP_DEFAULT_WIDS)
+    if roles:
+        what = _miss if declared else _note
+        missing.append(what("graph_directory_role",
+                            f"directory role {', '.join(roles)}: an injector holds none in Entra ID"
+                            + ("" if declared else " (said, not yet strict: the wids hypothesis, to measure)")))
+    return missing
+
+
+def read_graph(*, credential=None, env=None) -> list[dict]:
+    """The identity's own Microsoft Graph token, asked for and read — no Graph call (IMDS gives
+    it on Orodruin, Entra ID being in the perimeter). Declared, a token that cannot be had raises
+    (unreadable: passive); undeclared, it is said."""
+    declared = graph_declared(env)
+    try:
+        if credential is None:
+            from azure.identity import DefaultAzureCredential
+            credential = DefaultAzureCredential()
+        claims = token_claims(credential.get_token(f"{GRAPH}/.default").token)
+    except Exception as e:
+        if declared:
+            raise
+        return [_note("graph_unreadable", f"{type(e).__name__}: {e}"[:200]
+                      + " (said, not yet strict: no Graph read declared)")]
+    return assess_graph(claims, declared=declared)
+
+
 def read_network(*, probes=NETWORK_PROBES, connect=None) -> list[dict]:
     """A TCP connection to each probe outside the perimeter must fail."""
     connect = connect or socket.create_connection
@@ -448,7 +534,7 @@ def read_cap(env=None) -> tuple[list[dict], dict]:
     return missing, cap
 
 
-READERS = {"identity": read_identity, "network": read_network, "cap": read_cap}
+READERS = {"identity": read_identity, "graph": read_graph, "network": read_network, "cap": read_cap}
 
 
 def check(readers: dict | None = None) -> Verdict:
@@ -456,8 +542,9 @@ def check(readers: dict | None = None) -> Verdict:
     a reader that fails makes its guarantee missing (fail closed)."""
     readers = readers or READERS
     missing: list[dict] = []
+    notes: list[dict] = []
     cap: dict = {}
-    for name in ("identity", "network", "cap"):
+    for name in ("identity", "graph", "network", "cap"):
         try:
             result = readers[name]()
         except Exception as e:
@@ -465,8 +552,9 @@ def check(readers: dict | None = None) -> Verdict:
             continue
         if name == "cap":
             result, cap = result
-        missing += result
-    return Verdict(PASSIVE if missing else ARMED, missing, cap)
+        notes += [{k: v for k, v in m.items() if k != "said"} for m in result if m.get("said")]
+        missing += [m for m in result if not m.get("said")]
+    return Verdict(PASSIVE if missing else ARMED, missing, cap, notes)
 
 
 # ── The verdict, published for the console (DG-b) ─────────────────────────────────────
@@ -645,6 +733,8 @@ def main() -> int:
     print(f"orodruin: {verdict.verdict}")
     for m in verdict.missing:
         print(f"  ✗ {m['code']}: {m['detail']}")
+    for m in verdict.notes:
+        print(f"  ⚠ {m['code']}: {m['detail']}")
     if verdict.armed:
         print(f"  cap: {verdict.cap}")
     return 0 if verdict.armed else 1

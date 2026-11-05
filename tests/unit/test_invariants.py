@@ -32,7 +32,8 @@ What must hold whatever happens:
       what an unblock, a reset or a release keeps (taken off, another VM's flows would
       change) is said — partial, the rule named — never `unblocked`/`swept`/`released` (I4C);
       nor is a NIC said reached, off a perimeter block, that our perimeter on its own subnet cuts
-      off (L1Qs);
+      off (L1Qs); nor an isolation said « reposée une fois » by the reassertion that does not
+      hold (RW3);
   I4  an operation on one VM changes nothing for another — homonyms included (a
       perimeter block closes the attacker's flows on its subnet, and only those: of
       another VM, it cuts only what its perimeter rules close — I4P —; an
@@ -1487,6 +1488,7 @@ class IsolationMachine(RuleBasedStateMachine):
             _note(f"reassert ({_CURRENT.mode}): {r['outcome']}")
         if fault is None and err is None:
             self._block_cards_true(cards_before, journal_at)
+            self._isolation_cards_true(cards_before)
             self._no_drift_on_untouched(cards_before, quiet, named)
             # Liveness: a block whose rules all vanished from Azure is put back, or told
             # about — not left gone in silence.
@@ -1702,6 +1704,26 @@ class IsolationMachine(RuleBasedStateMachine):
             assert not rules or not rules <= quiet, (
                 f"I3: the reassertion said the block on {vm} vanished; every one of its rules is as "
                 f"Glorfindel wrote it, nothing touched since ({e.get('reason', '')[:100]}…)")
+
+    def _isolation_cards_true(self, cards_before: set):
+        """I3 for what the reassertion's isolation cards say (RW3), on the cards this pass made:
+        « reposée une fois » means no flow reaches the VM but what an isolation by rules can't deny
+        (Azure's DNS and IMDS, on a NIC our quarantine NSG does not hold). Judged from the world,
+        never from the verification the code ran."""
+        for e in escalations.pending():
+            if (e["id"] in cards_before or e.get("action") != "isolate_vm"
+                    or not (e.get("signal_id") or "").startswith("reassert-")
+                    or "reposée une fois" not in (e.get("reason") or "")):
+                continue
+            vm = next((v for v in self.live if key(v) == key(e.get("resource_id") or "")), None)
+            if vm is None:
+                continue
+            by_rules = [n["id"].rsplit("/", 1)[-1] for n in self._nics(vm)
+                        if not (n["nsg"] and actions._is_quarantine_nsg(n["nsg"]))]
+            reached = self._undeclared(vm, {"platform_open": by_rules})
+            assert not reached, (
+                f"I3: the reassertion said the isolation of {vm} put back ({e['reason'][:100]}…), "
+                f"{sorted(reached)[:3]} still open")
 
     def _block_cards_true(self, cards_before: set, journal_at: int):
         """I3 for what the reassertion's block cards say (RB1), NIC by NIC, on the NICs a

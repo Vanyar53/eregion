@@ -64,8 +64,10 @@ RULES = {"credential": ("entra-credential-added", "T1098.001"),
 # What a card's steps must say to revoke, per kind.
 REVOKE = {"credential": "az ad app credential delete",
           "consent": "oauth2PermissionGrants",
-          "role": "roleManagement/directory/roleAssignments",
-          "signin": "az ad sp credential delete"}
+          "role": "--method DELETE --url https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/",
+          # IR1a, the plan (§3.2): the credential the sign-in used when the row names it, else
+          # its connection blocked — this row names none.
+          "signin": "az ad sp update --id 00000000-0000-0000-0000-0000000000c2 --set accountEnabled=false"}
 
 
 def _row(kind="credential", corr="c-1", ts="2026-10-27T10:00:00Z", **extra):

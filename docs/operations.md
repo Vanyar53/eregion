@@ -797,6 +797,44 @@ commandes) : sur un
 poste, un injecteur reste passif ; il agit depuis Orodruin, avec l'identité managée qu'y crée
 `make orodruin-up` (ses droits par VM inscrite, SEC5).
 
+### La lecture de Microsoft Graph par la watch (IR1a, #552)
+
+Une carte `identity_change` porte un **plan** (`docs/glorfindel.md`, « Identités »), écrit par le
+code : ses paramètres (l'`id` de l'objet, le `keyId`, l'`id` de l'octroi ou de l'attribution) sont
+lus dans Microsoft Graph, **en lecture seule**, et le bouton **Verify** de la console demande à la
+watch de relire Graph après le geste de l'humain. Sans droit sur Graph, le plan reste utile (ce que
+le journal donne, chaque paramètre non lu marqué, jamais inventé) et la vérification dit
+« unreadable », jamais « held ». C'est le cas de H0 aujourd'hui.
+
+**Le droit à donner à l'identité de la watch** (l'identité managée de H0 ; sur un poste, le
+principal de la watch) — un **geste de Jonathan**, hors de tout lot, avec un compte qui peut
+consentir des permissions d'application (Privileged Role Administrator) :
+
+| Permission d'application (Microsoft Graph) | Pour |
+|---|---|
+| `Application.Read.All` | une application ou un principal : ses identifiants (`keyId`), son état (`accountEnabled`), ses attributions de rôles d'application, ses identifiants fédérés |
+| `DelegatedPermissionGrant.Read.All` | les octrois délégués d'une application cliente (`oauth2PermissionGrants`) |
+| `RoleManagement.Read.Directory` | les attributions de rôles d'annuaire d'un membre, actives et éligibles |
+| `User.Read.All` | l'heure depuis laquelle les sessions d'un utilisateur valent (`signInSessionsValidFromDateTime`) |
+
+Des **lectures** seulement : aucune n'écrit, et la watch n'écrit jamais sur Entra ID (§3.4 de
+`docs/design/reponse-identite.md`). Les droits exacts sont l'hypothèse 10 de la conception, à
+mesurer au banc. Les commandes, pour une identité managée (`<objectId>` : celui de la watch) :
+
+```bash
+GRAPH_SP=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)   # Microsoft Graph
+for p in Application.Read.All DelegatedPermissionGrant.Read.All RoleManagement.Read.Directory User.Read.All; do
+  ROLE=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query "appRoles[?value=='$p'].id" -o tsv)
+  az rest --method POST --url "https://graph.microsoft.com/v1.0/servicePrincipals/<objectId>/appRoleAssignments" \
+    --body "{\"principalId\":\"<objectId>\",\"resourceId\":\"$GRAPH_SP\",\"appRoleId\":\"$ROLE\"}"
+done
+```
+
+Pour un principal de service : les mêmes permissions dans son inscription d'application, puis
+« Accorder le consentement d'administrateur ». **Jamais** une permission en écriture
+(`*.ReadWrite.*`) : la liste refusée de la conception (§3.4) vaut pour la watch comme pour toute
+identité d'Eregion. La lecture de Graph, ce que voit `Verify`, ce qui manque : `docs/glorfindel.md`.
+
 ## Le canari azurerm, sans secret (P-04, 30/10)
 
 Le canari (`.github/workflows/canary-azurerm.yml`, chaque jour ; `make canary-jit` sur un poste)

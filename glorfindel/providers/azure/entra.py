@@ -157,71 +157,28 @@ def _ref(row: dict) -> str:
     return f" (CorrelationId {corr})" if corr else ""
 
 
-def describe(row: dict) -> tuple[str, list[str]]:
-    """What an identity detection says, from its row alone, and the steps for a human:
-    who, what, how to revoke. Never an action: the steps are commands for a human."""
+def describe(row: dict, plan: dict | None = None) -> tuple[str, list[str]]:
+    """What an identity detection says, from its row alone, and the steps for a human: the plan
+    of the card (IR1a, entra_plan.py — `plan`, else built from the row alone, Graph not read).
+    Never an action: the steps are commands for a human."""
+    from glorfindel.providers.azure import entra_plan
     kind = str(row.get("EntraKind") or "").strip().lower()
     op = str(row.get("EntraOperation") or row.get("OperationName") or "?").strip()
     target, actor = _target(row), _actor(row)
-    tid = str(row.get("TargetId") or "<id>").strip() or "<id>"
-    steps: list[str] = []
     if kind == "credential":
         added = str(row.get("CredentialAdded") or "").strip()
         what = (f"Entra ID : identifiant ajouté ({op}) par {actor} sur {target}."
                 + (f" Identifiant : {added}." if added else ""))
-        steps += [
-            f"Vérifier avec {actor.split(' depuis ')[0]} ou le propriétaire de l'application que "
-            f"cet ajout est voulu{_ref(row)}.",
-            f"Lister les identifiants : `az ad app credential list --id {tid}` (application) ou "
-            f"`az ad sp credential list --id {tid}` (principal de service).",
-            f"Non voulu : retirer l'identifiant — `az ad app credential delete --id {tid} "
-            f"--key-id <keyId>` (ou `az ad sp credential delete`), le keyId dans l'identifiant "
-            "ajouté ci-dessus ; puis revoir les connexions du principal depuis l'ajout "
-            "(AADServicePrincipalSignInLogs).",
-        ]
     elif kind == "consent":
         perms = str(row.get("Permissions") or "").strip()
         admin = str(row.get("AdminConsent") or "").strip().lower() in ("true", "1")
         what = (f"Entra ID : consentement accordé ({op}) par {actor} à {target}"
                 + (" — consentement d'administrateur, pour tout le tenant" if admin else "")
                 + (f". Permissions : {perms}" if perms else "") + ".")
-        steps += [
-            f"Vérifier que l'application et ses permissions sont attendues{_ref(row)} "
-            "(portail Entra : Applications d'entreprise → l'application → Autorisations).",
-            "Non voulu : révoquer l'octroi — délégué : `az rest --method DELETE --url "
-            "https://graph.microsoft.com/v1.0/oauth2PermissionGrants/<id>` ; d'application : "
-            "`az rest --method DELETE --url https://graph.microsoft.com/v1.0/servicePrincipals/"
-            "<id>/appRoleAssignedTo/<id>`.",
-        ]
-        # Which principal to block: under « Consent to application » the target is the
-        # application consented to; under a grant or an app role assignment outside that
-        # flow, the target is likely the RESOURCE's principal (Microsoft Graph — hypothesis):
-        # blocking it would cut the whole tenant. The client then comes from
-        # modifiedProperties (`ClientId`), or no blocking step is proposed.
-        client = (tid if op.lower() == "consent to application" and row.get("TargetId")
-                  else str(row.get("ClientId") or "").strip())
-        if client:
-            steps.append(f"Bloquer la connexion de l'application le temps de l'enquête : "
-                         f"`az ad sp update --id {client} --set accountEnabled=false`.")
-        else:
-            steps.append("Identifier l'application cliente (modifiedProperties de l'événement) "
-                         "avant tout blocage : la cible est sans doute le principal de la "
-                         "ressource (Microsoft Graph) — le désactiver couperait tout le tenant.")
-        steps.append("Révoquer les sessions de qui a consenti (`az rest --method POST --url "
-                     "https://graph.microsoft.com/v1.0/users/<id>/revokeSignInSessions`) — un "
-                     "jeton déjà émis vit jusqu'à son expiration.")
     elif kind == "role":
         role = str(row.get("RoleName") or "").strip() or "rôle non lu"
         what = (f"Entra ID : rôle d'annuaire privilégié « {role} » attribué ({op}) par {actor} "
                 f"à {target}.")
-        steps += [
-            f"Vérifier que cette attribution est voulue{_ref(row)} (portail Entra : Rôles et "
-            "administrateurs → le rôle → Attributions).",
-            "Non voulue : retirer l'attribution — portail, ou `az rest --method DELETE --url "
-            "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/<id>`.",
-            "Revoir ce que le nouveau membre a fait depuis (AuditLogs, InitiatedBy) et, si "
-            "l'auteur n'est pas attendu, révoquer ses sessions (revokeSignInSessions).",
-        ]
     elif kind == "signin":
         loc = str(row.get("Location") or "").strip()
         days, count = row.get("BaselineDays"), row.get("SignIns")
@@ -230,27 +187,15 @@ def describe(row: dict) -> tuple[str, list[str]]:
                 + (f" ({days} jours d'historique)" if days not in (None, "") else "")
                 + (f", {count} connexion(s)" if count not in (None, "") else "")
                 + (f", vers {row['TargetName']}" if row.get("TargetName") else "") + ".")
-        steps += [
-            f"Vérifier avec le propriétaire du principal que cette adresse est attendue{_ref(row)} "
-            "(un nouveau runner, une nouvelle région).",
-            f"Non attendue : retirer ses identifiants (`az ad sp credential list --id "
-            f"{str(row.get('ActorId') or '<id>')}`, puis `az ad sp credential delete`) et, le "
-            "temps de l'enquête, bloquer sa connexion (`az ad sp update --set "
-            "accountEnabled=false`) — l'usage légitime s'arrête aussi : au propriétaire d'en "
-            "décider.",
-        ]
     else:
-        what = f"Entra ID : {op} par {actor} sur {target}."
-        steps.append(f"Vérifier dans les journaux d'Entra ID qui a fait cette opération{_ref(row)}.")
+        what = f"Entra ID : {op} par {actor} sur {target}{_ref(row)}."
     if row.get("GlorfindelIdentity") is True:
         what += (" L'acteur est l'identité de Glorfindel : il n'écrit rien dans Entra ID, et "
                  "une connexion depuis une adresse nouvelle est son identifiant utilisé "
                  "ailleurs — ses identifiants sont peut-être entre d'autres mains.")
-        steps.append("Renouveler les identifiants de Glorfindel, puis revoir ce qu'ils ont fait.")
     if row.get("GlorfindelManaged") is True:
         what += (" La cible est l'identité de Glorfindel : un identifiant ou un rôle ajouté là "
                  "donne ses droits (isoler, bloquer) à quelqu'un d'autre.")
-        steps.append("Vérifier les identifiants et les rôles de l'identité de Glorfindel.")
     omitted = row.get("OmittedOperations") or []
     if omitted:
         listed = "; ".join(
@@ -263,6 +208,7 @@ def describe(row: dict) -> tuple[str, list[str]]:
             what += " Au moins une vise l'identité de Glorfindel."
         if any(o.get("GlorfindelIdentity") for o in omitted):
             what += " Au moins une est faite sous l'identité de Glorfindel."
+    steps = entra_plan.steps_text(plan if plan is not None else entra_plan.build(row, None))
     steps.append("Légitime (un pipeline connu) : l'exclure dans la couche du client. Glorfindel "
                  "n'agit jamais seul sur une identité (détection seule).")
     return what, steps

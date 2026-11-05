@@ -266,6 +266,25 @@ Après I1F, AL1, C2 et A3 (27/10) :
 - **Le détail d'une carte échappe tout ce qui vient d'Azure ou du modèle** (raison, étapes, requête
   proposée) : un nom d'application Entra ID ou de règle NSG choisi par un attaquant ne s'exécute pas dans la page.
 
+**Le plan d'une carte d'identité, et Verify (IR1a, #552, 05/11)** :
+- Dans le détail d'une carte `identity_change` qui porte un plan (`identity_plan`, écrit par la watch,
+  `docs/glorfindel.md`), la console montre le plan à la place des étapes : « Verbs (the identity
+  executor's, IR1c) » puis « Steps for a human », chacun avec sa commande complète, ce qui n'a pas été
+  lu (« not read: … », jamais inventé), la commande qui le trouve, ce qu'il faut garder avant, l'effet
+  de bord et le retour arrière. Un bandeau dit quand Graph n'a pas été lu, et pourquoi. Aucun
+  exécuteur avant IR1c : chaque ligne se fait à la main, avec le compte de l'opérateur.
+- **🔎 Verify** (`verifyIdentity`, `POST /api/identity/verify/<id>`) écrit la demande sur la carte, pour
+  la watch. **La console ne lit jamais Graph** : elle n'a aucun droit sur Entra ID. La watch relit
+  Graph (~10 s) et note le résultat au fil de la carte (`identity_checks`) ; la page relit l'état
+  toutes les 5 s pendant une minute, puis dit que la watch n'a pas répondu (la demande reste sur la
+  carte). Les trois derniers résultats sont montrés : **held** (vert), **NOT held** (rouge),
+  **unreadable (never « held »)** (jaune), chaque étape dite. Le bouton n'écrit rien sur Azure : le mode
+  lecture seule le laisse actif.
+- Tout champ du plan est un texte du dehors (un nom d'application choisi par un attaquant) : écrit par
+  `_attr`, toujours (`tests/unit/test_console_escaping.py`, mutant M3898). Aucun bouton d'action, ni dans
+  la console ni dans le bot : le bot montre le plan (les étapes de la carte), il n'agit pas (§3.2, Q5).
+- Tests : `tests/unit/test_console_identity_plan.py` ; mutants M3880–M3899 (`scripts/mutants/IR1a.py`).
+
 **Mutants M570–M575** (`tests/unit/test_console.py`) :
 - M570 : un type sans libellé.
 - M571 : une carte du plan de contrôle retrouve Restore.

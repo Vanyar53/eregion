@@ -13,7 +13,8 @@ from rich.console import Console
 from rich.markup import escape as _esc_markup
 
 from glorfindel.actions import (
-    AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED, CloudConnector, PartialActionError, _first_line,
+    AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED, MODEL_GATED_ACTIONS, CloudConnector, PartialActionError,
+    _first_line,
 )
 from glorfindel.config import load_glorfindel_config
 from glorfindel.detection_authoring import author_rule
@@ -86,6 +87,7 @@ class GlorfindelState(TypedDict):
     decision_temperature: float | None  # temperature of the first draw; None = model's default (D-1)
     decision_draws: list[dict]  # every draw asked before a disruptive autonomous action (D-1)
     uncontained: str            # a characterized detection a snapshot alone answers (V-11): its card's reason
+    identity_plan: dict | None  # the plan of an identity card (IR1a, entra_plan): on the card, never to the model
 
 
 # ── LLM decision tool schema ──────────────────────────────────────────────────
@@ -114,7 +116,7 @@ _DECISION_TOOL = {
                 "description": (
                     "The action to take. Use a known action if one fits: "
                     f"autonomous={sorted(AUTONOMOUS_ACTIONS)}, "
-                    f"requires_approval={sorted(HUMAN_APPROVAL_REQUIRED)}. "
+                    f"requires_approval={sorted(MODEL_GATED_ACTIONS)}. "
                     "If none fit, propose a new action name (snake_case) and explain it "
                     "in escalation_reason — it will always be escalated to a human."
                 ),
@@ -166,7 +168,7 @@ the threat without unnecessary disruption.
 
 ━━ Autonomy boundary (enforced by the graph — not negotiable) ━━
 - Autonomous actions {sorted(AUTONOMOUS_ACTIONS)}: execute immediately, escalate=false.
-- Destructive actions {sorted(HUMAN_APPROVAL_REQUIRED)}: ALWAYS set escalate=true.
+- Destructive actions {sorted(MODEL_GATED_ACTIONS)}: ALWAYS set escalate=true.
 - Unknown action: propose a new snake_case name, explain it in escalation_reason, escalate=true.
 
 ━━ How to reason ━━
@@ -1067,7 +1069,13 @@ def _identity_decision(state: GlorfindelState) -> GlorfindelState:
     provider), no action recommended: an escalation `identity_change`, never approvable in
     one click, whose reason says what, who, on which identity, the gravest cases
     (Glorfindel's identity as the actor or the target) and the severity, and whose steps
-    say how to check and how to revoke (`entra.describe`)."""
+    say how to check and how to revoke (`entra.describe`).
+
+    IR1a: the steps are the card's plan (`entra_plan.build`) — the verbs in their order, then the
+    steps for a human, each with its exact ids read on Microsoft Graph, read only, and its
+    complete command — written by the code from the row, never by the model; kept on the card
+    (`identity_plan`) for the console's « Verify ». Nothing of it reaches the model."""
+    from glorfindel.providers.azure import entra_plan, graph
     from glorfindel.providers.azure.entra import describe
     signal = state["signal"]
     raw = signal.get("raw_signal") or {}
@@ -1076,7 +1084,9 @@ def _identity_decision(state: GlorfindelState) -> GlorfindelState:
     # A row normalised with its marks (the RulePoller's) keeps them.
     row.setdefault("GlorfindelIdentity", norm.get("glorfindel_identity") is True)
     row.setdefault("GlorfindelManaged", norm.get("glorfindel_managed") is True)
-    what, steps = describe(row)
+    reader = graph.NoGraph("dry run : Graph non lu") if state.get("dry_run") else graph.default_reader()
+    plan = entra_plan.build(row, reader, protected=entra_plan.never_target_protected())
+    what, steps = describe(row, plan)
     severity = "critique" if signal.get("severity") == "critical" else "haute"
     reason = (f"{what} Sévérité : {severity}. Détection seule : aucune action autonome sur une "
               "identité — décision déterministe, sans appel au modèle ; revue humaine.")
@@ -1096,6 +1106,7 @@ def _identity_decision(state: GlorfindelState) -> GlorfindelState:
         "held_by": "identity",
         "autonomy_gate": {},
         "decision_draws": [],
+        "identity_plan": plan,
     }
 
 
@@ -2016,6 +2027,8 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             source=source,
             exercise_run=exercise_run,
             explanation=state.get("explanation", ""),
+            # IR1a: the plan, for the console's « Verify » — an identity card's only.
+            identity_plan=state.get("identity_plan") if escalation_type == "identity_change" else None,
         )
 
     # An action that ran (verification failed, or it failed midway) keeps what its

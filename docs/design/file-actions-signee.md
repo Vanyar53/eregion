@@ -222,6 +222,12 @@ La console ne peut donc approuver que ce que la watch a proposé. Une carte écr
 proposition, est refusée (`proposal_missing`) : il faut la CLI, ou attendre que la détection se
 reproduise.
 
+**Une nuance (relecture de FS1a).** La dédup de `record` fond une détection dans la carte en attente
+de même action, même cible et même type : une carte forgée qui attend reçoit donc la proposition de
+la watch si la watch décide ensuite cette même action sur cette même VM. Ce qu'elle signe alors est
+sa propre décision (l'action, la cible, le type), sauf le port, que la carte forgée a pu écrire dans
+`action_params` et que la proposition reprend. Le texte de la carte forgée, lui, n'est pas signé.
+
 ### 2.5 Où la demande est déposée
 
 **Dans le répertoire de `runs/` de son écrivain** (SEC18, `eregion_core/runs_layout.py:1-30`) :
@@ -681,7 +687,15 @@ console et le bot gardent l'appel direct, aucune file n'est relevée, aucune dem
   exécution ; illisible ou qu'on ne peut écrire, il refuse : `SeenFile`, sous
   `~/.eregion/watch-queue/seen.json`), le verbe et le débit (`Rate`, 30 par minute et par service).
   Une demande signée par la clé épinglée d'un autre service est `wrong_service`, pas
-  `unknown_key`. Le rattachement à la carte (étape 10) : `proposal_refusal`.
+  `unknown_key`. Le rattachement à la carte (étape 10) : `proposal_refusal` (la carte attend, sa
+  proposition est celle de cette watch, inchangée depuis — action, cible, adresse, **port**, type —,
+  celle que la demande nomme, pour ce verbe, cette cible et cette adresse, jamais exécutée).
+- **Une signature, une seule écriture** (relecture de FS1a) : `watch_key.signature_bytes` n'admet
+  que la forme canonique du base64 (86 caractères et `==`, lus en entier, sans saut de ligne, sans
+  bit inutilisé du dernier caractère). Avant, 16 écritures d'une même signature tenaient, donc 16
+  condensés d'une même proposition, et le registre des propositions consommées se contournait. La
+  même règle vaut pour le battement et les détections (SEC19, SEC21) : la watch n'écrit que cette
+  forme (`base64.b64encode`), un test le vérifie.
 - **Les clés des services** : `load_service_key` tire et charge la clé de la console
   (`~/.eregion/console/queue_ed25519`) et celle du bot (`~/.eregion/bot/queue_ed25519`) par le code
   même de la watch (`watch_key.load_or_create`, sous un autre nom de fichier) : un seul code de
@@ -697,15 +711,31 @@ console et le bot gardent l'appel direct, aucune file n'est relevée, aucune dem
   la carte d'être écrite.
 - **Tests** : `tests/unit/test_action_queue.py` (un test par refus, un par domaine, la fraîcheur
   aux bornes, le rejeu, le registre, la clé factorisée), `tests/unit/test_action_proposal.py` (la
-  proposition sur les cartes, son contrôle). Mutants M3865–M3879 (`scripts/mutants/FS1a.py`).
+  proposition sur les cartes, son contrôle). Mutants M3865–M3879 et M3945–M3954
+  (`scripts/mutants/FS1a.py`).
 
-**Ce que FS1b doit savoir.**
-- **La proposition re-signée à chaque rafraîchissement** change de condensé : une demande déposée
-  juste avant qu'une détection qui dure ne rafraîchisse sa carte nommera l'ancienne et sera refusée
-  (`proposal_mismatch`). La re-signature date la carte de façon que la console ne peut pas forger
-  (l'âge de l'approbation se lira dans `issued_at`, signé, plutôt que dans `last_seen`). Le choix
-  reste à FS1b : accepter la proposition précédente d'une même carte, ou ne re-signer qu'au-delà
-  d'un âge.
+**Pour FS1b.**
+- **L'âge d'une carte** : la `issued_at` signée de la proposition remplace `last_seen` (que la
+  console peut écrire) pour l'âge de l'approbation (`GLORFINDEL_APPROVAL_MAX_AGE_H`).
+- **Ne re-signer qu'au-delà d'un âge.** Re-signée à chaque rafraîchissement, la proposition change
+  de condensé : une demande déposée juste avant qu'une détection qui dure ne rafraîchisse sa carte
+  nomme l'ancienne et est refusée (`proposal_mismatch`). FS1b ne re-signe qu'une proposition plus
+  vieille qu'un seuil, assez court pour que l'âge reste juste.
+- **La console importe `action_queue.APPROVABLE_TYPES`** au lieu de sa copie `_APPROVABLE_TYPES`
+  (aujourd'hui, un test les garde égales).
+- **`deploy.sh` et le Makefile créent `~/.eregion/bot`** au nom de l'opérateur, avant les services,
+  comme `~/.eregion/watch-key` : laissé à docker, il serait à root, et le bot ne tirerait pas sa clé.
+- **Un registre durable** : `SeenFile.claim` écrit sans `fsync` ; après un crash de l'hôte, un nonce
+  réclamé peut être perdu et sa demande rejouée dans sa fenêtre. FS1b synchronise le fichier et son
+  répertoire avant de rendre la main.
+- **Borner les réclamations par service** : le débit n'est compté qu'après la réclamation du nonce.
+  Une clé de service compromise remplit `seen.json` de nonces valides (un déni de service du
+  registre, qui refuse alors tout). FS1b borne les réclamations par service et par minute avant le
+  registre, ou borne le registre par service.
+- **L'adresse et la portée** : une proposition sans adresse laisse la demande en nommer une
+  (`block_ip`, l'IP saisie par l'humain) ; `ip` et `scope` ne sont pas validés ici. Les gardes de
+  FS1b les jugent avant tout appel : une seule adresse, hors de `never_block` (`blockable_ip`), et
+  `scope` qui vaut `vm` ou `subnet`.
 - **Les verbes sans carte** (`snapshot` d'une VM du périmètre, `release_isolation`, `reset`,
   `unblock_ip`, `promote_block` sur ce que la watch tient) se rattachent à l'état de la watch :
   `nothing_to_undo`, `guard` et `read_only` ont leur code ici, leur contrôle sera dans FS1b.

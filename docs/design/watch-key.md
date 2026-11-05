@@ -288,6 +288,14 @@ autre, épingler la nouvelle chez les injecteurs.
   sont ceux du détenteur (`_HOLDERS`) : ceux de la watch n'ont pas changé, ceux d'un service
   donnent son geste (`EREGION_QUEUE_KEYS`). Le balayage des copies qu'un crash a laissées couvre les
   deux noms. Ces clés sont d'autres signataires : la watch ne tire toujours qu'une clé, la sienne.
+- **Une signature, une seule écriture** (relecture de FS1a) : la signature n'est lue que dans la
+  forme canonique du base64 (`signature_bytes` : 86 caractères et `==`, lus en entier, sans saut de
+  ligne, sans bit inutilisé du dernier caractère), pour la file comme pour le battement et les
+  détections. Avant, 16 écritures d'une même signature tenaient (et un saut de ligne final). La
+  watch n'écrit que la forme canonique (`base64.b64encode`) : un battement ou une détection d'une
+  watch d'aujourd'hui, ou d'avant, est toujours cru (`tests/unit/test_action_queue.py`,
+  `test_what_the_watch_and_a_service_sign_is_in_canonical_form`). Une autre écriture est refusée,
+  « its signature is not one ».
 - **Rien d'autre ne change pour la watch** : sa clé, sa place, ce qu'elle signe et ce que vérifient
   les injecteurs. Une signature connue, calculée avec le code d'avant FS1a, le prouve octet pour
   octet (`test_the_watch_signs_its_heartbeat_as_before_the_draw_was_shared`), avec les tests et les

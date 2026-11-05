@@ -5,11 +5,12 @@ and what couldn't be read.
 from __future__ import annotations
 
 
-def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = False) -> str:
+def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = False, partial: bool = False) -> str:
     """What a block's verification says is gone, and what still holds (RB1). Never « n'est
     plus bloquée » of an IP our perimeter (or the quarantine) still cuts off, nor of a NIC
     whose perimeter couldn't be read: that is said as unknown. `said`: the tail of a card
-    whose head is already written (after a re-application).
+    whose head is already written (after a re-application); `partial`: no write of it failed, the
+    provider said one partial (RW2, #555) — never « une écriture a échoué ».
 
     No NIC open nor unknown (I3P, #366): the IP is not said « plus bloquée » of the whole VM —
     where the perimeter holds, it « reste bloquée » (its own rules gone or passed by an
@@ -26,6 +27,7 @@ def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = Fa
         where = f" sur {', '.join(held)}{by}" if held else ""
         if said:
             return (f"l'IP reste bloquée{where}, mais il manque toujours{names}." if gone else
+                    "Azure le relit entier, mais le fournisseur l'a dit partiel : à vérifier." if partial else
                     "Azure le relit entier, mais une écriture a échoué : à vérifier.")
         return f"Le blocage de {ip} sur {vm} a disparu d'Azure en partie{twice}{names} — l'IP reste bloquée{where}."
     if v.get("verified") is None or (v.get("shadowed_by") and not gone):

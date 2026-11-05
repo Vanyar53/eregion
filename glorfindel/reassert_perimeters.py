@@ -76,6 +76,12 @@ def put_back_perimeters(connector, autonomy, blocks: list[dict], report: list[di
                 except Exception as exc:
                     err, short = f"{exc}", None
                 done[(rid.rstrip("/").lower(), ip)] = {"error": err, "partial": short, "read": verification}
+                if err is None and short:
+                    # Written partial, its card is the second time's: a mark of the first time's own,
+                    # `partial_unsaid` (RW2, #555), before `reasserted_at` — the second time skipped (its
+                    # lock held, the pass cut off), the provider's `partial` kept the entry out of every
+                    # later pass, its card never said. The second time takes it off with the card.
+                    _update_block_entry(ref, ip, partial_unsaid=short)
                 if err is None:
                     # Written: marked at once, as the second time would — a pass cut off between
                     # the two times never puts it back a second time as a first. Its episode ends in

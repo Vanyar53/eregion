@@ -82,7 +82,7 @@ COMPONENTS: dict[str, Component] = {
             "test_invariant_regressions.py", "test_invariant_regressions_aws.py", "test_invariants.py",
             "test_invariants_aws.py",
             "test_jobs.py", "test_llm_smoke.py", "test_locks.py", "test_memory_age.py", "test_orphan_sweep.py", "test_posture.py", "test_proposed_rules.py", "test_readiness.py",
-            "test_promotion_guard.py", "test_reassert.py", "test_reassert_status.py", "test_release_away.py", "test_rule_layers.py", "test_rules_check.py", "test_runs_channel.py", "test_tui_actions.py", "test_turned_names.py", "test_unexpected_decision.py", "test_unreadable_state.py",
+            "test_promotion_guard.py", "test_reassert.py", "test_reassert_status.py", "test_reassert_verified.py", "test_release_away.py", "test_rule_layers.py", "test_rules_check.py", "test_runs_channel.py", "test_tui_actions.py", "test_turned_names.py", "test_unexpected_decision.py", "test_unreadable_state.py",
         ),
     ),
     # Annatar — its executors, engines (Atomic Red Team), campaigns, signals.

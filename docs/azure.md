@@ -170,8 +170,8 @@ compris) ont exactement les sondes de leur entrée (`tests/unit/test_vm3b_suites
   scénario** (le champ `revert` du schéma E1, décidé le 05/11) les retire, après le cleanup — qui lit
   `/tmp/notevil` — et seulement une fois la sonde `root-crontab-restored` tenue après lui (VM3b : la
   crontab de root identique, octet pour octet, à `/tmp/notevil`, sa seule copie ; `cron-entry-absent`
-  ne suffit pas, une crontab vidée la ferait tenir). L'appel du cleanup qui ne lève pas ne prouve rien : Run Command
-  ne lève pas sur un script en échec. Si la sonde ne revient pas, le revert est sauté, `/tmp/notevil`
+  ne suffit pas, une crontab vidée la ferait tenir). L'appel du cleanup qui ne lève pas ne prouve
+  rien : Run Command ne lève pas sur un script en échec. Si la sonde ne revient pas, le revert est sauté, `/tmp/notevil`
   (la copie de la crontab) reste pour l'opérateur, et le run le dit (`checks.revert: SKIPPED`,
   `metrics.revert_skipped`, l'erreur du run). La sonde d'après vérifie le tout, et le run finit propre.
   Le fichier vendorisé n'est pas touché.
@@ -197,7 +197,9 @@ waagent et les extensions sous `/var/log/azure/`, dpkg et apt.
   si **toutes** les entrées touchées sont ses fichiers, et un événement sans entrée lue reste une carte.
   Un démon (rsyslogd, journald, logrotate, auditd) est écarté entièrement : un `logrotate` lancé avec une
   configuration choisie pour tronquer un journal n'est pas vu. Le resserrer couperait le bruit réel :
-  tourner tous les journaux est son travail, et son `exe` ne dit pas qui l'a lancé.
+  tourner tous les journaux est son travail, et son `exe` ne dit pas qui l'a lancé. Un `echo 0>` sur un
+  journal **existant** (une ouverture O_TRUNC) devrait être vu par la surveillance `-w /var/log -p wa` :
+  c'est une **hypothèse à mesurer** au banc, comme la forme des lignes PATH (chemins absolus).
 - **L'agent Azure dans `log_tamper` (VM3b).** Ses binaires (`/var/lib/waagent/`, `/opt/microsoft/`) ne
   sont écartés que sur `/var/log/azure/`. L'interpréteur `python3` du système (`/usr/bin/python3` ou
   `python3.N` exactement, rien qui commence seulement ainsi) est écarté sur `/var/log/azure/`,
@@ -209,9 +211,7 @@ waagent et les extensions sous `/var/log/azure/`, dpkg et apt.
   (`/var/log/cloud-init.log`, `cloud-init-output.log`), Ubuntu Pro (`/var/log/ubuntu-advantage.log`),
   apport (`/var/log/apport.log`) — ne sont pas écartés : sur une VM qui les fait écrire, chaque écriture
   serait une carte. À mesurer : lesquels écrivent pendant la fenêtre d'un run et à quelle fréquence, leur
-  `exe` exact, et les chemins touchés. La règle n'est pas modifiée avant cette mesure. Un `echo 0>` sur un journal **existant**
-  (une ouverture O_TRUNC) devrait être vu par la surveillance `-w /var/log -p wa` : c'est une
-  **hypothèse à mesurer** au banc, comme la forme des lignes PATH (chemins absolus).
+  `exe` exact, et les chemins touchés. La règle n'est pas modifiée avant cette mesure.
 - **La règle shell** ne voit pas : un chemin relatif (`sh ./x` depuis `/tmp` — l'enregistrement CWD
   n'est pas lu), une commande `sh -c '…'` de plusieurs mots (auditd l'écrit en hexadécimal), un chemin
   qu'auditd écrit en hexadécimal (une espace, un guillemet), un script au-delà du deuxième argument,

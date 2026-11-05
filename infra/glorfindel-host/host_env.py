@@ -68,6 +68,29 @@ ANALYSIS = "EREGION_ANALYSIS_MODEL"
 # The console's token, and its former name (eregion_console/api.py, console_token).
 TOKEN = "EREGION_CONSOLE_TOKEN"
 LEGACY_TOKEN = "GLORFINDEL_WARROOM_TOKEN"
+# FS1c: the signed action queue — never copied from the operator's environment: its keys are this
+# workstation's, H0's are its own (`make glorfindel-host-queue-keys`). Written in host.env by hand,
+# keys and flag in one push; --check holds them together.
+QUEUE_FLAG = "EREGION_ACTION_QUEUE"
+QUEUE_KEYS = "EREGION_QUEUE_KEYS"
+QUEUE_GESTURE = ("make glorfindel-host-queue-keys, then its line and EREGION_ACTION_QUEUE=1 in host.env, "
+                 "then make glorfindel-host-push (docs/operations.md, « La file d'actions signée »)")
+
+
+def queue_problems(env: dict) -> list[str]:
+    """FS1c: what keeps H0's queue from taking a gesture, said before the push — a flag the queue
+    does not read (« 1 » only), or the flag set without the console's key pinned at the watch, or
+    without the bot's while the bot runs (DISCORD_BOT_TOKEN): pushed, the console of H0 would grey
+    every write and the watch refuse them all (no_key_pinned). Empty: nothing to say."""
+    from eregion_core.action_queue import parse_pins, pin_problems
+    flag = env.get(QUEUE_FLAG, "")
+    if flag not in ("", "1"):
+        return [f"{QUEUE_FLAG}={flag[:20]!r}: the queue reads « 1 » only — anything else leaves it off"]
+    if flag != "1":
+        return []
+    pins, wrong = parse_pins(env.get(QUEUE_KEYS, ""))
+    services = ("console", "bot") if env.get("DISCORD_BOT_TOKEN") else ("console",)
+    return pin_problems(pins, wrong, services)
 
 
 def model_missing(environ: dict) -> tuple[str, list[str]]:
@@ -189,6 +212,11 @@ def check(dst: str) -> int:
     if lacking:
         raise SystemExit(f"{dst}: {', '.join(lacking)} empty — the model's provider, {provider} "
                          f"({MODEL}), needs it: pushed, the watch could not decide.")
+    # FS1c: the queue's flag and its keys together, as the watch reads them.
+    lacking = queue_problems({k: model_value(env.get(k, "")) for k in (QUEUE_FLAG, QUEUE_KEYS, "DISCORD_BOT_TOKEN")})
+    if lacking:
+        raise SystemExit(f"{dst}: the signed action queue would refuse every gesture — " + "; ".join(lacking)
+                         + f". The gesture: {QUEUE_GESTURE}.")
     if name == LEGACY_TOKEN:
         print(f"{dst}: console token under its former name, {LEGACY_TOKEN} — valid, nothing to rename")
     else:
@@ -207,6 +235,9 @@ def main(dst: str) -> int:
               "tout clic (fermé par défaut). Ajoute ton id Discord à host.env.", file=sys.stderr)
     if warning := analysis_warning(env):
         print(warning, file=sys.stderr)
+    if os.environ.get(QUEUE_FLAG) or os.environ.get(QUEUE_KEYS):
+        print(f"ℹ {QUEUE_FLAG} / {QUEUE_KEYS} de ton environnement ne vont pas dans host.env : ce sont "
+              f"les clés de ce poste, H0 a les siennes — {QUEUE_GESTURE}.", file=sys.stderr)
     path.touch(mode=0o600)
     path.write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")
     print(f"{dst}: " + ", ".join(env))

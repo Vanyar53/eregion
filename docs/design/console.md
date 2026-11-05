@@ -384,14 +384,15 @@ le prouve). Avec le drapeau, les routes d'écriture — Approve & execute (`/api
 isoler, bloquer, instantané, lever), Release, Reset (`revert`), Extend to subnet (`block-promote`),
 Unblock, Snapshot — n'appellent plus Azure : elles déposent une **demande signée par la clé de la
 console** (`~/.eregion/console/queue_ed25519`, tirée au démarrage de la console avec le drapeau, son
-empreinte dite) dans `runs/console/queue/<id>.json`, puis attendent le reçu de la watch
+empreinte dite) dans `runs/console/queue/<id>.json` ; la watch répond par un reçu
 (`runs/glorfindel/queue/console-<id>.json`) : `accepted` ou `refused` dans la vie de la demande
-(120 s, plus l'écart d'horloge), puis `done` ou `failed` (600 s au plus, comme la CLI). La route
-répond comme avant à partir du reçu (`ok`, `result`, `verification` ; un refus : `error` et
-`refused`, son code) et porte `via: "queue"` et l'id de la demande ; la demande est retirée une fois
-répondue, et celles qu'aucune réponse n'a retirées le sont au bout d'une heure. Le geste est noté
-dans `runs/console/manual_actions.jsonl` (le fil, les indicateurs) à partir du reçu, comme l'appel
-direct le notait. Le restore n'y passe pas (FS1g).
+(120 s, plus l'écart d'horloge), puis `done` ou `failed` (600 s au plus, comme la CLI). La réponse,
+tirée du reçu, est celle d'avant (`ok`, `result`, `verification` ; un refus : `error` et `refused`,
+son code) et porte `via: "queue"` et l'id de la demande ; la demande est retirée une fois répondue,
+et celles qu'aucune réponse n'a retirées le sont au bout d'une heure. Le geste est noté dans
+`runs/console/manual_actions.jsonl` (le fil, les indicateurs) à partir du reçu, comme l'appel direct
+le notait. Le restore n'y passe pas (FS1g). FS1b attendait le reçu dans la route ; FS1c ne l'attend
+plus (ci-dessous).
 - **Les gardes de la console restent, et la watch les rejoue** : `_approval_refusal` et
   `_verify_approved` appellent le code partagé `glorfindel/approval.py` ; `_APPROVABLE_TYPES` est
   `action_queue.APPROVABLE_TYPES`, importé, plus recopié. La console juge d'abord pour dire tout de
@@ -406,10 +407,31 @@ direct le notait. Le restore n'y passe pas (FS1g).
   jeton — deux navigateurs séparés au journal de la watch, rien de plus (§2.7).
 - **Sans watch** (arrêtée, sans le drapeau, sans la clé de la console épinglée) : la route dit
   « the watch did not take the request in 120 s » et le geste à faire.
-- **À FS1c** : la file par défaut, les routes asynchrones (`GET /api/queue/<id>`), les boutons grisés
-  selon le statut que la watch publie (`runs/glorfindel/queue/status.json`, signé).
-- Code : `eregion_console/action_requests.py`, `eregion_core/action_queue.py` (`ask`, `deposit`,
-  `await_receipt`) ; conception : [`file-actions-signee.md`](file-actions-signee.md).
+- **FS1c (#571, 05/11) : asynchrones.** La route ne l'attend plus : elle dépose la demande et rend
+  aussitôt `{"via": "queue", "request": <id>, "pending": true}` (plus aucun fil de la console
+  n'attend la watch). La page suit le reçu par `GET /api/queue/<id>` (`_settled`, `glorfindel.js`) —
+  `waiting`, `received`, `accepted`, chacun dit —, puis reçoit la réponse que la route donnait
+  (`ok`, `result`, `verification`, `said`/`whole` d'une promotion, `not_found` d'un déblocage, le job
+  d'un instantané ; `error` et `refused`), ou `not_taken` (« the watch did not take the request in
+  120 s »), `untrusted` (un reçu d'une autre clé que celle de la watch épinglée, `EREGION_WATCH_KEY` :
+  les deux empreintes et le geste, jamais « pas de reçu »), `unknown`. Le geste est noté une fois, par
+  la lecture qui retire la demande : celle de la page, ou l'état de n'importe quelle page
+  (`/api/state` règle les demandes dont le reçu est venu — une page fermée avant son reçu compte).
+- **Les boutons grisés selon la watch** : avec le drapeau, `/api/state` porte `queue` (`on`, `ok`,
+  `why`), lu dans `runs/glorfindel/queue/status.json` que la watch signe (`action_queue.posture`) —
+  jamais dans l'environnement de la console. Les boutons de `_WRITE_HANDLERS` sont grisés, la raison
+  en titre (`_writesBlocked`), quand ce statut manque, n'est pas à croire, a plus de 60 s, dit la
+  watch en lecture seule, ou n'épingle pas la clé de la console (ou une autre). Le démarrage de la
+  console le dit aussi.
+- **L'attente bornée** : ce qui reste synchrone d'un geste — le dépôt, et l'appel direct jusqu'à
+  FS1e — passe par un exécuteur à la console (`_gesture`, `GESTURES_IN_FLIGHT = 4`). Au-delà, refusé
+  aussitôt (503, `busy`), jamais en file : une rafale de clics n'occupe plus les fils des autres routes.
+  Un geste prend **une** place, à l'entrée de sa route (`_one_slot`), et la garde jusqu'au bout :
+  refusé, rien n'est fait ; accepté, son action, sa vérification et sa note ont toujours lieu.
+- **Le drapeau reste faux par défaut** (la bascule, après la mesure au banc : `docs/operations.md`).
+- Code : `eregion_console/action_requests.py` (`deposit`, `follow`, `posture`, `answer`),
+  `eregion_core/action_queue.py` (`deposit_request`, `follow`, `receipt_said`, `posture`) ; tests :
+  `tests/unit/test_action_queue_async.py` ; conception : [`file-actions-signee.md`](file-actions-signee.md), §9.
 
 ### Ce qui vient du dehors (#254)
 

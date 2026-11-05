@@ -122,7 +122,9 @@ REFUSALS = {
     "proposal_missing": "no proposal of the watch on this card: a card written before FS1, or by "
                         "another hand — use the CLI, or wait for the detection to fire again",
     "proposal_mismatch": "the request does not match the proposal the watch signed on this card",
-    "proposal_consumed": "this proposal was already executed: one proposal, one execution",
+    "proposal_consumed": "this proposal was already judged, done or failed: one proposal, one execution — "
+                         "after a failure, wait for the detection to fire again (a new proposal), or use "
+                         "the CLI",
     "card_not_pending": "the card no longer waits",
     "nothing_to_undo": "nothing the watch holds on this VM or this address to undo",
     "guard": "a guard of the gesture refuses it",
@@ -778,10 +780,16 @@ def deposit(request: dict, root=None) -> Path:
     return path
 
 
-def withdraw(service: str, request_id: str, root=None) -> None:
-    """The service removes its own request once its receipt is read — never another's."""
-    if _ID.fullmatch(str(request_id)):
-        (request_dir(service, root) / f"{request_id}.json").unlink(missing_ok=True)
+def withdraw(service: str, request_id: str, root=None) -> bool:
+    """The service removes its own request once its receipt is read — never another's. True for
+    the call that removed it (FS1c: the gesture is noted by that one read only)."""
+    if not _ID.fullmatch(str(request_id)):
+        return False
+    try:
+        (request_dir(service, root) / f"{request_id}.json").unlink()
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def sweep_requests(service: str, root=None, keep_s: float = REQUEST_KEEP_S, now: float | None = None) -> int:
@@ -808,21 +816,44 @@ def sweep_requests(service: str, root=None, keep_s: float = REQUEST_KEEP_S, now:
     return n
 
 
-def read_receipt(service: str, request_id: str, *, root=None, watch_public: bytes | None = None) -> dict | None:
-    """The watch's receipt of a request — None while there is none, or when what is there is not
-    one: unreadable, another request's, or (``watch_public``: the watch's key pinned, on another
-    host) not signed by it. The receipt never carries the request's signature."""
+def receipt_said(service: str, request_id: str, *, root=None, watch_public: bytes | None = None) -> tuple[dict | None, str]:
+    """(the watch's receipt of a request, "") — or (None, why there is none to believe): ``""``
+    while there is none at all; else what is there and is not one — unreadable, another request's,
+    or (``watch_public``: the watch's key pinned, a service on another host) signed by another key
+    than the pinned one: both fingerprints said, and the gesture (FS1c: never told as « no
+    receipt »). The receipt never carries the request's signature."""
     from eregion_core import channel_reader
     try:
         doc = json.loads(channel_reader.read_file(receipt_path(service, request_id, root), RECEIPT_BYTES))
-    except (OSError, ValueError, RecursionError):
-        return None
+    except FileNotFoundError:
+        return None, ""
+    except (OSError, ValueError, RecursionError) as e:
+        return None, f"a receipt is there but unreadable ({type(e).__name__})"
     if (not isinstance(doc, dict) or doc.get("kind") != "receipt" or doc.get("request") != request_id
             or doc.get("service") != service or doc.get("state") not in RECEIPT_STATES):
-        return None
+        return None, "a receipt is there but is not this request's"
+    if _believed(doc, watch_public) is None:
+        said = doc.get("key") if isinstance(doc.get("key"), str) else "?"
+        return None, (f"a receipt is there, but {watch_refusal(doc, 'receipt', watch_public)}: signed by "
+                      f"{watch_key._short(said)}, the watch's key pinned here is "
+                      f"{watch_key._short(watch_key.fingerprint(watch_public))} — the watch's key drawn again "
+                      f"(pin the new one: {watch_key.KEY_ENV}, `make glorfindel-host-watch-key` or `make "
+                      "watch-key`), or another hand")
+    return doc, ""
+
+
+def _believed(doc: dict, watch_public: bytes | None) -> dict | None:
+    """The receipt, when nothing says not to believe it: signed by the watch's key when the service
+    pins it (a service on another host); from the mount, on one host."""
     if watch_public is not None and watch_refusal(doc, "receipt", watch_public):
         return None
     return doc
+
+
+def read_receipt(service: str, request_id: str, *, root=None, watch_public: bytes | None = None) -> dict | None:
+    """The watch's receipt of a request — None while there is none, or when what is there is not
+    one (``receipt_said`` says which)."""
+    return receipt_said(service, request_id, root=root, watch_public=watch_public)[0]
 
 
 def await_receipt(service: str, request_id: str, *, final: bool, timeout_s: float, root=None,
@@ -848,6 +879,67 @@ TAKE_S = MAX_LIFETIME_S + SKEW_S    # a request is taken within its life, or nev
 RUN_S = 600                         # a lift of a multi-NIC VM takes minutes (the CLI's timeout)
 
 
+NOT_TAKEN = (f"the watch did not take the request in {MAX_LIFETIME_S} s — is it running, with {FLAG_ENV}=1 "
+             f"and this service's key pinned ({KEYS_ENV})?")
+
+
+def deposit_request(service: str, verb: str, resource_id: str, *, by: Mapping[str, str], root=None,
+                    ip: str = "", scope: str = "", card: tuple[str, str] | None = None) -> dict:
+    """FS1c: a service's gesture as a request of the queue, deposited and never awaited — signed by
+    its key (drawn at its first use), written in its directory. ``{"request": id}``, or
+    ``{"error": …}`` when the service could not ask. Its fate is read by ``follow``."""
+    try:
+        signer = load_service_key(service)
+    except watch_key.KeyUnavailable as e:
+        return {"error": f"the {service}'s key of the action queue is unavailable: {e}"}
+    sweep_requests(service, root)
+    request = new_request(signer, service=service, verb=verb, resource_id=resource_id, by=by, ip=ip,
+                          scope=scope, card=card)
+    try:
+        deposit(request, root)
+    except OSError as e:
+        return {"error": f"the request could not be written in runs/{service}/queue/: {e}"}
+    return {"request": request["id"]}
+
+
+def _issued(service: str, request_id: str, root=None) -> datetime | None:
+    """When the service's own request was issued — None when it is no longer there (withdrawn,
+    swept) or cannot be read as one."""
+    from eregion_core import channel_reader
+    try:
+        doc = json.loads(channel_reader.read_file(request_dir(service, root) / f"{request_id}.json", MAX_BYTES))
+        when = datetime.fromisoformat(doc["issued_at"])
+    except (OSError, ValueError, KeyError, TypeError, RecursionError):
+        return None
+    return when if when.tzinfo is not None else None
+
+
+def follow(service: str, request_id: str, *, root=None, watch_public: bytes | None = None,
+           now: datetime | None = None) -> dict:
+    """FS1c: where a request stands, read once — never waiting. ``state``: the receipt's
+    (``received``, ``accepted``, ``done``, ``failed``, ``refused``), or ``waiting`` (deposited, no
+    receipt yet, within its life), ``not_taken`` (no receipt within its life: the watch did not take
+    it), ``untrusted`` (a receipt there that is not one to believe — another key than the watch's
+    pinned one: said, never « no receipt »), ``unknown`` (neither the request nor a receipt).
+    ``final``: nothing more will come of it."""
+    if not _ID.fullmatch(str(request_id)):
+        return {"request": "", "state": "unknown", "final": True, "error": "not a request of the queue"}
+    doc, why = receipt_said(service, request_id, root=root, watch_public=watch_public)
+    if doc is not None:
+        return {"request": request_id, "state": doc["state"], "final": doc["state"] in FINAL_STATES,
+                "receipt": doc}
+    if why:
+        return {"request": request_id, "state": "untrusted", "final": True, "error": why}
+    issued = _issued(service, request_id, root)
+    if issued is None:
+        return {"request": request_id, "state": "unknown", "final": True,
+                "error": "no request of this id here, and no receipt (withdrawn, or swept after an hour)"}
+    now = now or datetime.now(timezone.utc)
+    if (now - issued).total_seconds() > TAKE_S:
+        return {"request": request_id, "state": "not_taken", "final": True, "error": NOT_TAKEN}
+    return {"request": request_id, "state": "waiting", "final": False}
+
+
 def ask(service: str, verb: str, resource_id: str, *, by: Mapping[str, str], root=None, ip: str = "",
         scope: str = "", card: tuple[str, str] | None = None, take_s: float | None = None,
         run_s: float | None = None, poll_s: float = 0.2) -> dict:
@@ -860,25 +952,18 @@ def ask(service: str, verb: str, resource_id: str, *, by: Mapping[str, str], roo
     (``EREGION_WATCH_KEY``, a service on another host)."""
     take_s = TAKE_S if take_s is None else take_s
     run_s = RUN_S if run_s is None else run_s
-    try:
-        signer = load_service_key(service)
-    except watch_key.KeyUnavailable as e:
-        return {"error": f"the {service}'s key of the action queue is unavailable: {e}"}
-    sweep_requests(service, root)
-    request = new_request(signer, service=service, verb=verb, resource_id=resource_id, by=by, ip=ip,
-                          scope=scope, card=card)
-    rid = request["id"]
-    try:
-        deposit(request, root)
-    except OSError as e:
-        return {"error": f"the request could not be written in runs/{service}/queue/: {e}"}
+    deposited = deposit_request(service, verb, resource_id, by=by, root=root, ip=ip, scope=scope, card=card)
+    if "error" in deposited:
+        return deposited
+    rid = deposited["request"]
     public, _ = watch_key.pinned()
     got = await_receipt(service, rid, final=False, timeout_s=take_s, root=root, watch_public=public,
                         poll_s=poll_s)
     if got is None or got["state"] not in ("accepted",) + FINAL_STATES:
         withdraw(service, rid, root)
-        return {"error": (f"the watch did not take the request in {MAX_LIFETIME_S} s — is it running, with "
-                          f"{FLAG_ENV}=1 and the {service}'s key pinned ({KEYS_ENV})?"), "request": rid}
+        # FS1c: a receipt there but not one to believe is said as such, never « not taken ».
+        _, why = receipt_said(service, rid, root=root, watch_public=public)
+        return {"error": why or NOT_TAKEN, "request": rid}
     if got["state"] not in FINAL_STATES:
         got = await_receipt(service, rid, final=True, timeout_s=run_s, root=root, watch_public=public,
                             poll_s=poll_s) or got
@@ -889,19 +974,92 @@ def ask(service: str, verb: str, resource_id: str, *, by: Mapping[str, str], roo
     return {"receipt": got, "request": rid}
 
 
-def read_status(*, root=None, watch_public: bytes | None = None) -> dict | None:
-    """The status the watch publishes for the queue (its posture, the keys it pins, since when it
-    picks the queue up) — None when there is none, or it is not one."""
+def status_said(*, root=None, watch_public: bytes | None = None) -> tuple[dict | None, str]:
+    """(the status the watch publishes for the queue, "") — or (None, why): "" when there is none;
+    else unreadable, not a status, or signed by another key than the watch's pinned one."""
     from eregion_core import channel_reader
     try:
         doc = json.loads(channel_reader.read_file(receipts_dir(root) / STATUS_NAME, RECEIPT_BYTES))
-    except (OSError, ValueError, RecursionError):
-        return None
+    except FileNotFoundError:
+        return None, ""
+    except (OSError, ValueError, RecursionError) as e:
+        return None, f"the watch's status of the queue is unreadable ({type(e).__name__})"
     if not isinstance(doc, dict) or doc.get("kind") != "status":
-        return None
-    if watch_public is not None and watch_refusal(doc, "status", watch_public):
-        return None
-    return doc
+        return None, "the watch's status of the queue is not one"
+    if watch_public is not None:
+        why = watch_refusal(doc, "status", watch_public)
+        if why:
+            said = doc.get("key") if isinstance(doc.get("key"), str) else "?"
+            return None, (f"the watch's status of the queue: {why} ({watch_key._short(said)}, the watch's key "
+                          f"pinned here is {watch_key._short(watch_key.fingerprint(watch_public))}) — pin the "
+                          f"watch's new key ({watch_key.KEY_ENV}), or another hand writes it")
+    return doc, ""
+
+
+def read_status(*, root=None, watch_public: bytes | None = None) -> dict | None:
+    """The status the watch publishes for the queue (its posture, the keys it pins, since when it
+    picks the queue up) — None when there is none, or it is not one."""
+    return status_said(root=root, watch_public=watch_public)[0]
+
+
+STATUS_STALE_S = 60      # the watch rewrites its status every 10 s while it picks the queue up
+
+
+def service_fingerprint(service: str) -> str:
+    """The fingerprint of a service's key, read — never drawn: "" when it is not there yet."""
+    try:
+        return watch_key.fingerprint(watch_key.read_public(service_key_dir(service), name=watch_key.SERVICE_KEY_FILE))
+    except watch_key.KeyUnavailable:
+        return ""
+
+
+def posture(service: str, *, root=None, watch_public: bytes | None = None, fingerprint: str | None = None,
+            now: datetime | None = None) -> dict:
+    """FS1c: may this service ask the watch now — read from the status the watch signs, never from
+    the service's own environment. ``{"ok": bool, "why": …, "status": …}``: refused when the status
+    is missing, not one to believe, older than STATUS_STALE_S, says the watch read-only, or pins
+    no key — or another key — for this service. ``fingerprint``: the service's own key's (read
+    by default, never drawn)."""
+    doc, why = status_said(root=root, watch_public=watch_public)
+    if doc is None:
+        return {"ok": False, "why": why or (f"the watch publishes no status of the queue (runs/glorfindel/queue/"
+                                            f"{STATUS_NAME}): is it running, with {FLAG_ENV}=1?"), "status": None}
+    said = {k: doc.get(k) for k in ("posture", "since", "at")}
+    try:
+        at = datetime.fromisoformat(doc.get("at"))
+        if at.tzinfo is None:
+            raise ValueError
+    except (TypeError, ValueError):
+        return {"ok": False, "why": "the watch's status of the queue carries no readable time", "status": said}
+    age = ((now or datetime.now(timezone.utc)) - at).total_seconds()
+    if age > STATUS_STALE_S:
+        return {"ok": False, "why": (f"the watch's status of the queue is {age:.0f} s old: the watch is stopped, "
+                                     "or no longer picks the queue up"), "status": said}
+    if doc.get("posture") != "write":
+        return {"ok": False, "why": REFUSALS["read_only"] + ": no gesture is taken", "status": said}
+    pins = doc.get("pins") if isinstance(doc.get("pins"), dict) else {}
+    pinned = pins.get(service) if isinstance(pins.get(service), str) else ""
+    if not pinned:
+        return {"ok": False, "why": f"the watch pins no key for the {service}: {PIN_GESTURE}", "status": said}
+    own = service_fingerprint(service) if fingerprint is None else fingerprint
+    if not own:
+        return {"ok": False, "why": (f"the {service}'s key of the queue is not drawn yet (~/.eregion/{service}/"
+                                     f"{watch_key.SERVICE_KEY_FILE}): restart it with {FLAG_ENV}=1"), "status": said}
+    if pinned != own:
+        return {"ok": False, "why": (f"the watch pins another key for the {service} ({watch_key._short(pinned)}) "
+                                     f"than its own ({watch_key._short(own)}): a key drawn again — pin this one "
+                                     f"({KEYS_ENV}, make queue-keys or make glorfindel-host-queue-keys)"),
+                "status": said}
+    return {"ok": True, "why": "", "status": said}
+
+
+def pin_problems(pins: Mapping[str, bytes], wrong=(), services=SERVICES) -> list[str]:
+    """FS1c: what the watch's pins lack, said — each line ``parse_pins`` found wrong, then a line
+    per service of ``services`` without its key. Empty: every one of them may ask."""
+    out = [str(w) for w in wrong]
+    out += [f"no key pinned for the {s}: its requests are refused (no_key_pinned) — {PIN_GESTURE}"
+            for s in services if s not in pins]
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -910,18 +1068,23 @@ def main(argv: list[str] | None = None) -> int:
     ``~/.eregion/<service>/`` — never draws one, never the private half."""
     import sys
     args = list(sys.argv[1:] if argv is None else argv)
-    if args[:1] == ["pin"] and len(args) == 2 and args[1] in SERVICES:
-        # ``pin <service>``: that service's pin alone (``console=ed25519:…``) — make
+    if args[:1] == ["pin"] and len(args) in (2, 3) and args[1] in SERVICES and args[2:] in ([], ["--draw"]):
+        # ``pin <service> [--draw]``: that service's pin alone (``console=ed25519:…``) — make
         # glorfindel-host-queue-keys joins the console's and the bot's, read in their containers.
+        # FS1c: ``--draw`` draws the key first when there is none, in the service's own container and
+        # by its own code — the keys are pinned before the flag is set, never after.
         try:
-            public = watch_key.read_public(service_key_dir(args[1]), name=watch_key.SERVICE_KEY_FILE)
+            if args[2:] == ["--draw"]:
+                public = load_service_key(args[1]).public
+            else:
+                public = watch_key.read_public(service_key_dir(args[1]), name=watch_key.SERVICE_KEY_FILE)
         except watch_key.KeyUnavailable as e:
             print(f"✗ {args[1]} : {e}", file=sys.stderr)
             return 1
         print(f"{args[1]}={watch_key.public_text(public)}")
         return 0
     if not args or args[0] != "public" or any(a not in SERVICES for a in args[1:]):
-        print("usage: python -m eregion_core.action_queue public [console|bot] | pin console|bot")
+        print("usage: python -m eregion_core.action_queue public [console|bot] | pin console|bot [--draw]")
         return 2
     pins, missing = [], []
     for service in args[1:] or SERVICES:

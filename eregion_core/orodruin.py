@@ -114,22 +114,24 @@ AUTHZ_READ_ONLY = frozenset({
 # permission, no directory role. Read from the identity's own Graph token, its app roles
 # (``roles``) and its directory roles (``wids``): no Graph call, no right needed to read it.
 #
-# Strict only once the Graph read is DECLARED: orodruin.env names the bench's tenant
-# (``EREGION_TENANT_ID``, the step that makes the identity guard read Entra ID). Undeclared — every
-# Orodruin before IDI1's gestures — an app role in the token is a right nobody declared, passive
-# (``graph_undeclared_right``); a directory role (``wids``) outside ``APP_DEFAULT_WIDS``, or a
-# token that cannot be had, is SAID by orodruin-check, never passive: the hypothesis on ``wids``
-# is measured at the first orodruin-check after the release, then the undeclared case turns strict
-# (IDI1s, #559).
+# A directory role (a ``wids`` outside ``APP_DEFAULT_WIDS``) is passive, the Graph read declared or
+# not (IDI1s, #559): the hypothesis on ``wids`` was measured on 05/11. The declaration still
+# decides two things, and only those — GRAPH_DECLARED_ENV.
 GRAPH = "https://graph.microsoft.com"
 GRAPH_READ_ONLY = frozenset({"Application.Read.All", "RoleManagement.Read.Directory"})
-# A ``wids`` value seen in the app-only tokens of service principals that hold no directory role
-# (published decoded tokens of managed identities) — not a built-in role's template id.
-# Hypothesis, to measure on Orodruin (`make orodruin-check`): any other value is a role — passive
-# once the Graph read is declared, said before.
+# The ``wids`` value of an app-only token whose principal holds no directory role (published decoded
+# tokens of managed identities) — not a built-in role's template id. Measured on 05/11 (#559): the
+# first orodruin-check after v0.5.6, armed, said nothing of Graph — the token of Orodruin's managed
+# identity carries no ``wids``, or this one alone. Any other value is a role: passive.
 APP_DEFAULT_WIDS = frozenset({"0997a1d0-0d1d-4acb-b408-d5ca73121e90"})
-# The Graph read is declared when orodruin.env names the bench's tenant; undeclared, a ``wids``
-# outside the hypothesis or a token not had is only said — until IDI1s (#559) makes it strict.
+# The Graph read is declared when orodruin.env names the bench's tenant (``EREGION_TENANT_ID``, the
+# step that makes the identity guard read Entra ID). It decides two things, and only those:
+# - an app role in the token: undeclared, any one is a right nobody declared
+#   (``graph_undeclared_right``); declared, the guard's two reads (``GRAPH_READ_ONLY``) hold;
+# - a Graph token that cannot be had: declared, passive (``graph_unreadable``) — the guard reads
+#   Graph with that very token, and a declared read that cannot happen is a contract unread;
+#   undeclared, only said (``Verdict.notes``): an Orodruin without a Graph right must not fall over a
+#   Graph it never reads, and having no token is no privilege — nothing uses what cannot be had.
 GRAPH_DECLARED_ENV = "EREGION_TENANT_ID"
 
 # Outside the perimeter (bench control plane, Entra ID, the model's API): reaching any
@@ -458,8 +460,9 @@ def graph_declared(env=None) -> bool:
 def assess_graph(claims: dict, *, declared: bool = True) -> list[dict]:
     """The Graph guarantee from the claims of the identity's own Graph token (IDI1): an app's
     token (a user's carries ``scp``), its app roles within ``GRAPH_READ_ONLY``, no directory
-    role (``wids``, but ``APP_DEFAULT_WIDS``). An unknown right refuses (A0). Undeclared, an app
-    role refuses (``graph_undeclared_right``) and a directory role is only said (``_note``)."""
+    role (``wids``, but ``APP_DEFAULT_WIDS``). An unknown right refuses (A0). A directory role
+    refuses declared or not (IDI1s, #559); undeclared, any app role is a right nobody declared
+    (``graph_undeclared_right``)."""
     missing = []
     if claims.get("scp") or not isinstance(claims.get("roles", []), list) \
             or not isinstance(claims.get("wids", []), list):
@@ -477,17 +480,16 @@ def assess_graph(claims: dict, *, declared: bool = True) -> list[dict]:
                              "nothing else (graph_read_enabled)"))
     roles = sorted({str(w).lower() for w in claims.get("wids") or []} - APP_DEFAULT_WIDS)
     if roles:
-        what = _miss if declared else _note
-        missing.append(what("graph_directory_role",
-                            f"directory role {', '.join(roles)}: an injector holds none in Entra ID"
-                            + ("" if declared else " (said, not yet strict: the wids hypothesis, to measure)")))
+        missing.append(_miss("graph_directory_role",
+                             f"directory role {', '.join(roles)}: an injector holds none in Entra ID"))
     return missing
 
 
 def read_graph(*, credential=None, env=None) -> list[dict]:
     """The identity's own Microsoft Graph token, asked for and read — no Graph call (IMDS gives
     it on Orodruin, Entra ID being in the perimeter). Declared, a token that cannot be had raises
-    (unreadable: passive); undeclared, it is said."""
+    (unreadable: passive, the identity guard reads Graph with it); undeclared, it is only said —
+    an Orodruin without a Graph right does not fall, and having no token is no privilege."""
     declared = graph_declared(env)
     try:
         if credential is None:
@@ -498,7 +500,7 @@ def read_graph(*, credential=None, env=None) -> list[dict]:
         if declared:
             raise
         return [_note("graph_unreadable", f"{type(e).__name__}: {e}"[:200]
-                      + " (said, not yet strict: no Graph read declared)")]
+                      + " (said: no Graph read declared, and no token is no privilege)")]
     return assess_graph(claims, declared=declared)
 
 

@@ -428,29 +428,57 @@ def test_undeclared_any_graph_role_is_a_right_nobody_declared(roles):
     assert not orodruin.check(_readers(graph=lambda: missing)).armed
 
 
-def test_undeclared_a_graph_directory_role_is_said_not_passive(capsys, monkeypatch):
-    """The wids hypothesis is not measured yet: undeclared, a value outside APP_DEFAULT_WIDS is
-    said by orodruin-check, with its value, and the contract stays armed (M3941)."""
-    wid = "00000000-0000-0000-0000-0000000000e7"
-    result = orodruin.read_graph(credential=_GraphCredential(_graph_token(wids=[wid])), env=UNDECLARED)
+@pytest.mark.parametrize("env", [DECLARED, UNDECLARED])
+@pytest.mark.parametrize("wid", [
+    "00000000-0000-0000-0000-0000000000e7",            # a value nobody knows
+    "62e90394-69f5-4237-9190-012177145e10",            # a built-in role's template id
+    "62E90394-69F5-4237-9190-012177145E10",            # the same, as another writer would case it
+])
+def test_a_graph_directory_role_is_passive_declared_or_not(env, wid, capsys, monkeypatch):
+    """IDI1s (#559): the wids hypothesis measured on 05/11, a value outside APP_DEFAULT_WIDS is a
+    directory role — passive with or without EREGION_TENANT_ID, never only said; its value in the
+    detail, its code published (M4225, M4228, M4229)."""
+    result = orodruin.read_graph(credential=_GraphCredential(_graph_token(wids=[wid])), env=env)
     verdict = orodruin.check(_readers(graph=lambda: result))
-    assert verdict.armed and verdict.missing == []
-    assert [n["code"] for n in verdict.notes] == ["graph_directory_role"] and wid in verdict.notes[0]["detail"]
+    assert verdict.verdict == orodruin.PASSIVE and verdict.notes == []
+    assert [m["code"] for m in verdict.missing] == ["graph_directory_role"]
+    assert wid.lower() in verdict.missing[0]["detail"]
+    assert orodruin.contract_doc(verdict)["codes"] == ["graph_directory_role"]
     monkeypatch.setattr(orodruin, "check", lambda: verdict)
     monkeypatch.setattr(orodruin, "publish_contract", lambda v: True)
-    assert orodruin.main() == 0
+    assert orodruin.main() != 0
     out = capsys.readouterr().out
-    assert "orodruin: armed" in out and f"⚠ graph_directory_role: directory role {wid}" in out
-    # Never published: the console sees the verdict and its codes, not what is only said.
-    assert orodruin.contract_doc(verdict)["codes"] == []
+    assert "orodruin: passive" in out and "⚠ graph_directory_role" not in out
 
 
-def test_undeclared_a_graph_token_that_cannot_be_had_is_said_not_passive():
+@pytest.mark.parametrize("env", [DECLARED, UNDECLARED])
+@pytest.mark.parametrize("wids", [[], ["0997a1d0-0d1d-4acb-b408-d5ca73121e90"],
+                                  ["0997A1D0-0D1D-4ACB-B408-D5CA73121E90"]])
+def test_the_measured_graph_wids_holds_declared_or_not(env, wids):
+    """What the 05/11 measure saw (no note, armed): no wids, or the value of a principal without a
+    role — whatever its case. The list is that value alone (M4229)."""
+    assert orodruin.APP_DEFAULT_WIDS == frozenset({"0997a1d0-0d1d-4acb-b408-d5ca73121e90"})
+    claims = {"wids": wids} if wids else {}
+    assert orodruin.read_graph(credential=_GraphCredential(_graph_token(**claims)), env=env) == []
+
+
+def test_undeclared_a_graph_token_that_cannot_be_had_is_said_not_passive(capsys, monkeypatch):
+    """Undeclared, a Graph token that cannot be had is only said (IDI1s, #559): an Orodruin without
+    a Graph right must not fall over a Graph it never reads, and having no token is no privilege.
+    Said, never published (M4226)."""
     class NoToken:
         def get_token(self, scope):
             raise RuntimeError("IMDS unreachable")
     verdict = orodruin.check(_readers(graph=lambda: orodruin.read_graph(credential=NoToken(), env=UNDECLARED)))
-    assert verdict.armed and [n["code"] for n in verdict.notes] == ["graph_unreadable"]
+    assert verdict.armed and verdict.missing == []
+    assert [n["code"] for n in verdict.notes] == ["graph_unreadable"]
+    assert "IMDS unreachable" in verdict.notes[0]["detail"] and "no privilege" in verdict.notes[0]["detail"]
+    assert orodruin.contract_doc(verdict)["codes"] == []
+    monkeypatch.setattr(orodruin, "check", lambda: verdict)
+    monkeypatch.setattr(orodruin, "publish_contract", lambda v: True)
+    assert orodruin.main() == 0
+    out = capsys.readouterr().out
+    assert "orodruin: armed" in out and "⚠ graph_unreadable" in out
 
 
 def test_the_graph_read_is_declared_by_the_tenant_in_orodruin_env():

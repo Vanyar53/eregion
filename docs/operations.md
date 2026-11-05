@@ -1803,6 +1803,14 @@ verrou, chaque reconstruction de l'image prenait la dernière version de tout.
   botocore exige `<3.0.0`, et tzdata, que seule la 3.0.0 tirait, en sort. Le SDK d'AWS est
   installé par litellm, jamais importé hors d'un adaptateur de fournisseur
   (`tests/unit/test_provider_boundary.py`, aussi une étape de la CI).
+- DEP2 (#590, 05/11) : oauthlib 4.0.0 → 4.0.1, seul, pour l'avis GHSA-3jp2-3mrg-2vxc. Il arrive
+  par chromadb → kubernetes → requests-oauthlib ; aucun code d'Eregion ne l'importe.
+  requests-oauthlib reste à 2.0.0 (`oauthlib>=3.0.0`). La 4.0.1 est du 31/10, après la date de
+  résolution (`LOCK_DATE` 2026-10-26) : `make lock UPGRADE_PACKAGE=oauthlib LOCK_DATE=2026-10-26`
+  (ci-dessous) la monte seule. Seuls `dev.txt` et `glorfindel.txt` changent : la ligne
+  d'oauthlib, ses deux empreintes, et l'en-tête, qui porte
+  `--exclude-newer-package oauthlib=2026-11-05T00:00:00Z`. `annatar.txt` et `audit.txt` ne la
+  portent pas : ils restent identiques à l'octet.
 
 **Mettre à jour** (une PR, jamais directement sur H0) :
 
@@ -1810,8 +1818,27 @@ verrou, chaque reconstruction de l'image prenait la dernière version de tout.
 pip install uv                          # ou pipx install uv ; seulement pour générer
 make lock                               # garde les versions verrouillées, ajoute ce qui manque (dépendance ajoutée à pyproject.toml)
 make lock UPGRADE=1                     # monte tout à la résolution du jour (LOCK_DATE=AAAA-MM-JJ pour une autre date)
+make lock UPGRADE_PACKAGE=oauthlib LOCK_DATE=2026-10-26   # ne monte que ce paquet (DEP2), le reste à sa date
 make install && pytest                  # la suite sur le nouveau verrou
 ```
+
+**Un seul paquet** (DEP2, `scripts/lock_flags.py`). Un correctif publié après la date de
+résolution est hors d'atteinte. Avancer `LOCK_DATE` pour lui réécrit l'en-tête de chaque
+verrou, même de ceux qui ne le portent pas.
+- `UPGRADE_PACKAGE=<paquet>[,<paquet>]` monte ces paquets, et eux seuls, à leur dernière version
+  d'avant `UPGRADE_DATE` (le jour, par défaut) : `--upgrade-package` et
+  `--exclude-newer-package <paquet>=<date>`.
+- Il n'agit que dans les verrous qui épinglent déjà le paquet. Les autres sont réécrits à
+  l'octet.
+- Un paquet qu'aucun verrou ne porte, une faute de frappe par exemple, est refusé avant que uv
+  tourne.
+- Garde `LOCK_DATE` à la date de l'en-tête (`--exclude-newer`) : sinon tout l'en-tête bouge.
+- **La date admise reste dans l'en-tête, et `make lock` la reprend.** uv écrit
+  `--exclude-newer-package` dans l'en-tête, jamais `--upgrade-package`. Le `make lock` suivant à
+  la même `LOCK_DATE`, sans cette date, redescendait le paquet sans rien dire (mesuré avec uv
+  0.13.6 : oauthlib 4.0.1 → 4.0.0). `make lock` repasse donc les dates de chaque verrou, tant
+  qu'elles sont postérieures à `LOCK_DATE`. Une date que `LOCK_DATE` a rattrapée plafonnerait
+  le paquet sous la résolution du jour : elle est retirée.
 
 La PR dit ce qui change (le diff du verrou : LiteLLM, anthropic, langgraph, chromadb surtout).
 Avant de la fusionner, **Jonathan relance le harnais** (appels payants), qui écrit l'attestation
@@ -2353,7 +2380,8 @@ rafraîchissement du verrou sans contrôle).
     d'un avis n'est jamais écrite.
 - **Jamais une PR de montée.** La montée passe par la procédure plus haut : `make lock`, une PR,
   puis le harnais (`make llm-compare … ATTEST=1`, Jonathan). Une montée de LiteLLM est le lot
-  DEP1 (#282).
+  DEP1 (#282). Une dépendance transitive corrigée seule, comme oauthlib, passe par
+  `make lock UPGRADE_PACKAGE=<paquet>` (DEP2, #590).
 - **Le run est rouge** quand un humain a du neuf à voir : une issue ouverte ou rouverte, ou un avis
   revenu. Il l'est aussi quand un audit a échoué. `notify.yml` annonce ce run rouge dans `#ci`, avec
   une mention, parce qu'une issue ouverte par le jeton du workflow ne déclenche aucun workflow.

@@ -40,10 +40,20 @@ steady_state:
       expect: ABSENT
     # The two files the test writes at predictable /tmp paths — /tmp/notevil is root's crontab,
     # reinstalled by the cleanup. Absent before (a file planted there would become root's
-    # crontab); the upstream cleanup does not remove them, and the after-check says so.
+    # crontab); the upstream cleanup does not remove them — the revert below does, and the
+    # after-check verifies it.
     - name: tmp-files-absent
       verify: "if [ -e /tmp/notevil ] || [ -L /tmp/notevil ] || [ -e #{tmp_cron} ] || [ -L #{tmp_cron} ]; then echo TMP_PRESENT; else echo TMP_ABSENT; fi"
       expect: TMP_ABSENT
+
+# The scenario's own return (E1 `revert`, decided 05/11): run AFTER the atomic's cleanup (which
+# reads /tmp/notevil) and only once it ran; it removes the two files the test leaves (`rm -f --`,
+# inside /tmp/ only — annatar/engines/atomic.py, revert_commands). The vendored file is never
+# touched. It must be the catalog entry's: another revert makes the run unknown, so destructive.
+revert:
+  - name: remove-tmp-files
+    action: remove_files
+    paths: ["/tmp/notevil", "#{tmp_cron}"]
 
 detection:
   timeout: "600s"

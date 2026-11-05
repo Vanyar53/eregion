@@ -180,6 +180,24 @@
               }
             }
           }
+        },
+        "revert": {
+          "description": "VM3 (#548): the scenario's own return after an atomic's cleanup — the files the upstream test leaves in a temporary directory, removed (annatar/engines/atomic.py, revert_commands). The vendored file is never edited. A scenario's revert other than its entry's makes the run unknown, so destructive (SEC5, V-19).",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "action", "paths"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "action": { "type": "string", "enum": ["remove_files"] },
+              "paths": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "pattern": "^(/tmp/|/var/tmp/|#\\{[A-Za-z0-9_]+\\}$)" }
+              }
+            }
+          }
         }
       },
       "allOf": [

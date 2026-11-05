@@ -242,7 +242,7 @@ def _synthesize_atomic(
     a ref the adapter (``annatar/engines/atomic.py``) cannot resolve. The engine_ref is resolved
     AT PLAN TIME, so an unknown test never reaches a run.
     """
-    from annatar.engines.atomic import AtomicError, resolve_ref
+    from annatar.engines.atomic import AtomicError, resolve_ref, revert_commands
     from annatar.runner.engine import Engine
 
     ttp = entry.get("ttp", "")
@@ -265,8 +265,10 @@ def _synthesize_atomic(
     # run plays, and the experiment carries them, so the catalog vouches for it) — an unknown
     # or refused test, or an override the adapter refuses, is NOT synthesized (fail closed).
     engine_args = entry.get("engine_args")
+    revert = entry.get("revert")
     try:
-        resolve_ref(engine_ref, engine_args)
+        # the entry's revert too (VM3: what the upstream cleanup leaves, removed after it).
+        revert_commands(revert, resolve_ref(engine_ref, engine_args))
     except AtomicError as e:
         return SynthesisResult(False, f"{ttp}: engine_ref unresolved — {e}")
 
@@ -297,6 +299,7 @@ def _synthesize_atomic(
             "vm_name": vm,
         },
         "steady_state": {"probes": [dict(p) for p in probes]},
+        **({"revert": [dict(r) for r in revert]} if revert else {}),
         "detection": {
             "timeout": f"{timeout_s}s",
             "hints": _build_hints(entry),

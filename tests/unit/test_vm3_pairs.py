@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -19,7 +20,7 @@ import yaml
 from annatar.campaign.catalog import catalog_destructive, load_catalog
 from annatar.campaign.scope import Scope
 from annatar.campaign.synthesizer import synthesize
-from annatar.engines.atomic import AtomicError, resolve_ref
+from annatar.engines.atomic import AtomicError, resolve_ref, revert_commands
 from annatar.runner.parser import ScenarioParser
 from glorfindel import auditd
 from glorfindel.detection_rules import _row_identity, has_recognized_indicator
@@ -164,10 +165,25 @@ def test_the_catalog_decides_the_engine_args():
     for other in ({**own, "host": "127.0.0.2"}, {"host": own["host"]}, None, ["x"]):
         assert catalog_destructive(ttp, engine="atomic", engine_ref=ref, engine_args=other) is None
     # An entry without engine_args takes none.
-    cron = PAIRS["T1053.003"][1]
-    assert catalog_destructive("T1053.003", engine="atomic", engine_ref=cron) is True
-    assert catalog_destructive("T1053.003", engine="atomic", engine_ref=cron,
+    cron, revert = PAIRS["T1053.003"][1], _entry("T1053.003")["revert"]
+    assert catalog_destructive("T1053.003", engine="atomic", engine_ref=cron, revert=revert) is True
+    assert catalog_destructive("T1053.003", engine="atomic", engine_ref=cron, revert=revert,
                                engine_args={"command": "/tmp/evil.sh"}) is None
+
+
+def test_the_catalog_decides_the_revert():
+    """The revert's steps are commands too: only the entry's own is what the catalog vouched for."""
+    ttp, ref = "T1053.003", PAIRS["T1053.003"][1]
+    own = _entry(ttp)["revert"]
+    assert catalog_destructive(ttp, engine="atomic", engine_ref=ref, revert=own) is True
+    other_path = [{**own[0], "paths": ["/tmp/notevil", "/tmp/other"]}]
+    for other in (None, [], other_path, own + own, {"name": "x"}, "rm -rf /"):
+        assert catalog_destructive(ttp, engine="atomic", engine_ref=ref, revert=other) is None
+    # A technique whose entry has no revert takes none.
+    shell = PAIRS["T1059.004"][1]
+    args = _entry("T1059.004")["engine_args"]
+    assert catalog_destructive("T1059.004", engine="atomic", engine_ref=shell, engine_args=args,
+                               revert=own) is None
 
 
 def _variant(tmp_path, ttp, **changes) -> Path:
@@ -235,6 +251,15 @@ def test_a_campaign_on_cron_needs_the_destructive_budget(tmp_path):
     assert not res.ok and "destructive" in res.reason
 
 
+def test_a_campaign_on_cron_carries_the_catalog_revert(tmp_path):
+    res = _synthesize(tmp_path, "T1053.003", allow_destructive=True)
+    assert res.ok, res.reason
+    s = ScenarioParser().load(str(res.path))
+    assert s.raw["revert"] == _entry("T1053.003")["revert"]
+    assert catalog_destructive(s.mitre, engine=s.engine, engine_ref=s.engine_ref,
+                               revert=s.raw["revert"]) is True
+
+
 # ── The scenarios validate, resolve, and run what the catalog vouched for ─────────────
 
 def test_scenarios_validate_resolve_and_carry_the_catalog_args():
@@ -291,11 +316,11 @@ def test_the_log_scenario_overwrites_the_disposable_path_only(tmp_path, monkeypa
 
 def test_the_cron_scenario_checks_the_tmp_files_before_and_after(tmp_path, monkeypatch):
     """B3: /tmp/notevil (root's crontab, reinstalled by the cleanup) and /tmp/persistevil absent
-    before — a planted file is refused — and the after-check says the cleanup left them."""
+    before — a planted file is refused, never removed — and checked again after the revert."""
     doc = yaml.safe_load(_scenario("T1053.003").read_text())
     probe = next(p for p in doc["steady_state"]["probes"] if p["name"] == "tmp-files-absent")
     assert "/tmp/notevil" in probe["verify"] and "#{tmp_cron}" in probe["verify"]
-    ex = _probe_executor(after="ABSENT TMP_PRESENT")   # the upstream cleanup leaves them
+    ex = _probe_executor(after="ABSENT TMP_PRESENT")   # what the revert did not remove
     out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
     assert out.error == "initial state not restored"
     probes = [c for c in _sent(ex) if "/tmp/notevil" in c and "TMP_ABSENT" in c]
@@ -305,7 +330,164 @@ def test_the_cron_scenario_checks_the_tmp_files_before_and_after(tmp_path, monke
     planted.run_command.side_effect = lambda cmd, label="": "ABSENT TMP_PRESENT"
     out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), planted)
     assert out.error == "initial state not clean before the atomic"
-    assert not any("crontab /tmp/persistevil" in c for c in _sent(planted))
+    assert not any("crontab /tmp/persistevil" in c or "rm -f" in c for c in _sent(planted))
+
+
+# ── The revert (decided 05/11): the scenario removes what the upstream cleanup leaves ──
+
+ROOT_CRONTAB = "0 3 * * * /usr/local/bin/backup.sh\n"
+
+
+class _ShellVM:
+    """A VM simulated by a real shell: every command the run sends is played by `sh`, its
+    /tmp/ redirected into the test's own directory, `crontab` a fake binary holding root's
+    crontab in a file. Nothing reaches the real /tmp or the real crontab."""
+
+    def __init__(self, root: Path, crontab: str | None = ROOT_CRONTAB):
+        self.tmp, self.bin = root / "vmtmp", root / "bin"
+        self.tmp.mkdir()
+        self.bin.mkdir()
+        self.store = root / "crontab.root"
+        if crontab is not None:
+            self.store.write_text(crontab)
+        fake = self.bin / "crontab"
+        fake.write_text(
+            "#!/bin/sh\n"
+            f'STORE="{self.store}"\n'
+            'if [ "$1" = "-l" ]; then\n'
+            '  [ -f "$STORE" ] || { echo "no crontab for root" >&2; exit 1; }\n'
+            '  cat "$STORE"; exit 0\n'
+            "fi\n"
+            'cp "$1" "$STORE"\n'
+        )
+        fake.chmod(0o755)
+        self.failing: set[str] = set()   # labels whose call raises (a Run Command that failed)
+
+    def run_command(self, cmd, label=""):
+        if any(f in label for f in self.failing):
+            raise RuntimeError(f"Run Command failed: {label}")
+        out = subprocess.run(["sh", "-c", cmd.replace("/tmp/", f"{self.tmp}/")],
+                             capture_output=True, text=True, timeout=20,
+                             env={"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.tmp)})
+        return out.stdout
+
+    def left(self) -> list[str]:
+        return sorted(p.name for p in self.tmp.iterdir())
+
+
+def _shell_executor(vm: _ShellVM):
+    ex = _executor()
+    ex.run_command.side_effect = vm.run_command
+    return ex
+
+
+def _labels(ex) -> list[str]:
+    return [c.kwargs.get("label", "") for c in ex.run_command.call_args_list]
+
+
+def test_a_simulated_cron_run_ends_with_the_initial_state_restored(tmp_path, monkeypatch):
+    """The atomic replaces root's crontab and leaves /tmp/notevil and /tmp/persistevil; its
+    cleanup restores the crontab, the scenario's revert removes both files, after it."""
+    vm = _ShellVM(tmp_path)
+    ex = _shell_executor(vm)
+    out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
+    assert not out.error, out.error
+    assert vm.store.read_text() == ROOT_CRONTAB and vm.left() == []
+    labels = _labels(ex)
+    cleanup = next(i for i, x in enumerate(labels) if x.endswith(" cleanup"))
+    revert = next(i for i, x in enumerate(labels) if " revert " in x)
+    first_after = next(i for i, x in enumerate(labels) if "(after)" in x)
+    assert cleanup < revert < first_after   # the cleanup reads /tmp/notevil: the revert after it
+    assert _sent(ex)[revert] == "#!/bin/sh\nrm -f -- /tmp/notevil /tmp/persistevil"
+
+
+def test_without_the_revert_the_simulated_run_is_not_restored(tmp_path, monkeypatch):
+    """The upstream cleanup alone leaves the two files: the after-probe sees them."""
+    vm = _ShellVM(tmp_path)
+    path = _variant(tmp_path, "T1053.003", revert=None)
+    out = _run(tmp_path, monkeypatch, path, _shell_executor(vm))
+    assert out.error == "initial state not restored"
+    assert vm.store.read_text() == ROOT_CRONTAB and vm.left() == ["notevil", "persistevil"]
+
+
+def test_a_failed_cleanup_keeps_root_crontab_backup(tmp_path, monkeypatch):
+    """A cleanup that failed may still need /tmp/notevil: the revert is not run, the file stays."""
+    vm = _ShellVM(tmp_path)
+    vm.failing.add(" cleanup")
+    ex = _shell_executor(vm)
+    out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
+    assert out.error
+    assert "notevil" in vm.left() and (vm.tmp / "notevil").read_text() == ROOT_CRONTAB
+    assert not any(" revert " in x for x in _labels(ex))
+
+
+def test_a_failed_revert_is_never_a_clean_run(tmp_path, monkeypatch):
+    ex = _probe_executor()
+    base = ex.run_command.side_effect
+
+    def run_command(cmd, label=""):
+        if " revert " in label:
+            raise RuntimeError("Run Command failed")
+        return base(cmd, label)
+    ex.run_command.side_effect = run_command
+    out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
+    assert out.error == "revert error after the cleanup"
+
+
+def test_the_catalog_revert_resolves_to_one_rm_inside_tmp():
+    r = resolve_ref(PAIRS["T1053.003"][1])
+    assert revert_commands(_entry("T1053.003")["revert"], r) == [
+        ("remove-tmp-files", "#!/bin/sh\nrm -f -- /tmp/notevil /tmp/persistevil")]
+    assert revert_commands(None, r) == []
+
+
+@pytest.mark.parametrize("revert,why", [
+    ({"name": "x"}, "must be a list"),
+    (["rm -rf /"], "a mapping"),
+    ([{"name": "x", "action": "remove_files", "paths": ["/tmp/a"], "script": "x.sh"}], "only name"),
+    ([{"action": "remove_files", "paths": ["/tmp/a"]}], "needs a name"),
+    ([{"name": "x", "action": "run_command", "paths": ["/tmp/a"]}], "is not one of"),
+    ([{"name": "x", "action": "remove_files", "paths": []}], "non-empty list"),
+    ([{"name": "x", "action": "remove_files", "paths": "/tmp/a"}], "non-empty list"),
+    ([{"name": "x", "action": "remove_files", "paths": [3]}], "a path is text"),
+    ([{"name": "x", "action": "remove_files", "paths": ["/etc/passwd"]}], "not a plain file path"),
+    ([{"name": "x", "action": "remove_files", "paths": ["/tmp/../etc/passwd"]}], "not a plain file path"),
+    ([{"name": "x", "action": "remove_files", "paths": ["/tmp/"]}], "not a plain file path"),
+    ([{"name": "x", "action": "remove_files", "paths": ["/tmp/a;reboot"]}], "not a plain file path"),
+    ([{"name": "x", "action": "remove_files", "paths": ["/tmp/a b"]}], "not a plain file path"),
+    ([{"name": "x", "action": "remove_files", "paths": ["tmp/a"]}], "not a plain file path"),
+    ([{"name": "x", "action": "remove_files", "paths": ["#{nope}"]}], "unresolved atomic argument"),
+])
+def test_a_revert_the_adapter_would_not_run_faithfully_is_refused(revert, why):
+    with pytest.raises(AtomicError, match=why):
+        revert_commands(revert, resolve_ref(PAIRS["T1053.003"][1]))
+
+
+def test_a_scenario_with_a_refused_revert_touches_nothing(tmp_path, monkeypatch):
+    bad = [{"name": "x", "action": "remove_files", "paths": ["/etc/crontab"]}]
+    path = _variant(tmp_path, "T1053.003", revert=bad)
+    ex = MagicMock()
+    out = _run(tmp_path, monkeypatch, path, ex)
+    assert out.refused and "not a plain file path" in out.error
+    ex.run_command.assert_not_called()
+
+
+@pytest.mark.parametrize("cap,refused", [(8, True), (9, False)])
+def test_the_cap_counts_the_revert_steps(tmp_path, monkeypatch, cap, refused):
+    """Command, cleanup, one revert step and two probes three times: 9 calls."""
+    import eregion_core.orodruin as orodruin
+
+    monkeypatch.setattr(orodruin, "READERS", {
+        "identity": lambda: [], "network": lambda: [],
+        "cap": lambda: ([], {"max_injections": cap, "max_run_s": 3600})})
+    ex = _probe_executor()
+    out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
+    if refused:
+        assert out.refused and "this atomic needs 9" in out.error
+        ex.run_command.assert_not_called()
+    else:
+        assert not out.error, out.error
+        assert ex.run_command.call_count == 9
 
 
 # ── The blue side: each rule fires on a realistic line and not on benign noise ────────

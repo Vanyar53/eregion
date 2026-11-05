@@ -81,6 +81,82 @@ def test_the_heartbeat_covers_only_what_was_delivered():
     assert json.loads(c.body(wc.HEARTBEAT))[wc.COVERS] == {RUN: [SID]}
 
 
+def test_a_later_heartbeat_still_lists_what_was_delivered_before_it():
+    """M3760: delivered at one tick, beaten, beaten again 61 s later with nothing new — the second
+    heartbeat still covers it (else a detection removed after the first beat would be a miss)."""
+    c = FakeContainer(URL)
+    pub = _publisher(c)
+    pub.note(_signal())
+    pub.tick(now=T0 + timedelta(minutes=3))
+    pub.tick(now=T0 + timedelta(minutes=3, seconds=61))
+    assert c.puts.count(wc.HEARTBEAT) == 2 and c.puts.count(_blob()) == 1
+    assert json.loads(c.body(wc.HEARTBEAT))[wc.COVERS] == {RUN: [SID]}
+
+
+def test_a_detection_at_the_window_s_start_is_listed_at_its_last_moment():
+    """M3761: seen at the window's start, the heartbeat beaten at its last moment (its expiry plus
+    the grace, KEEP_S later) — the window still live, the detection still listed."""
+    from eregion_core.exercise import last_moment, live
+    w = _window()
+    last = last_moment(w)
+    assert (last - T0).total_seconds() == wc.KEEP_S and live(w, last)
+    c = FakeContainer(URL)
+    pub = _publisher(c, windows=[w])
+    pub.note(_signal(at=T0))
+    pub.tick(now=T0 + timedelta(minutes=1))
+    pub.tick(now=last)
+    beat = json.loads(c.body(wc.HEARTBEAT))
+    assert beat["at"] == last.isoformat() and beat["windows"] == [RUN]
+    assert beat[wc.COVERS] == {RUN: [SID]}
+
+
+def test_each_window_lists_only_its_own_detections():
+    """M3763: two windows on two VMs — each heartbeat entry names its own window's detections."""
+    other_vm = VM.replace("gondolin", "bree")
+    other_run, other_sid = "20261104T101600Z", "rule-t1136-001-v1-cd34ef56"
+    c = FakeContainer(URL)
+    pub = _publisher(c, windows=[_window(), {**_window(run_id=other_run), "targets": [other_vm]}])
+    pub.note(_signal())
+    pub.note({**_signal(sid=other_sid), "resource_id": other_vm})
+    pub.tick(now=T0 + timedelta(minutes=3))
+    assert json.loads(c.body(wc.HEARTBEAT))[wc.COVERS] == {RUN: [SID], other_run: [other_sid]}
+
+
+def _sent(runs: dict[str, int], width: int = 40) -> set[tuple[str, str]]:
+    return {(run, f"rule-{run}-{i:04d}".ljust(width, "x")) for run, n in runs.items() for i in range(n)}
+
+
+def test_beyond_the_budget_the_heaviest_windows_are_left_out_and_it_is_said(monkeypatch, capsys):
+    """M3764, M3765, M3766: what ``covers`` may weigh for all the windows together — beyond, the
+    heaviest left out first (their runs unknown), said once in the watch's log."""
+    pub = _publisher(FakeContainer(URL))
+    sent = _sent({"run-a": 1, "run-b": 2, "run-c": 3})
+    full = pub._covers(["run-a", "run-b", "run-c"], sent)
+    assert sorted(full) == ["run-a", "run-b", "run-c"]
+    weight = {r: len(r) + 16 + sum(len(x) + 12 for x in ids) for r, ids in full.items()}
+    monkeypatch.setattr(wc, "MAX_COVERS_BYTES", weight["run-a"] + weight["run-b"])
+    capsys.readouterr()
+    out = pub._covers(["run-a", "run-b", "run-c"], sent)
+    assert sorted(out) == ["run-a", "run-b"] and len(out["run-b"]) == 2
+    said = capsys.readouterr().out
+    assert said.count("left out of what the heartbeat covers") == 1 and "run-c" in said
+    pub._covers(["run-a", "run-b", "run-c"], sent)
+    assert "left out" not in capsys.readouterr().out   # said once, not at every beat
+    why, _, _ = wc.uncovered({wc.COVERS: out}, "run-c", [])
+    assert "beyond what it may weigh" in why
+
+
+def test_the_heartbeat_stays_readable_with_every_window_full():
+    """The default budget: 80 windows of MAX_COVERED long names — ``covers`` as written stays under
+    MAX_COVERS_BYTES, so the heartbeat stays under what the injectors read (MAX_BLOB_BYTES)."""
+    pub = _publisher(FakeContainer(URL))
+    runs = [f"2026110{i // 10}T{i:02d}0000Z" for i in range(80)]
+    out = pub._covers(runs, _sent({r: wc.MAX_COVERED for r in runs}, width=100))
+    assert 0 < len(out) < len(runs)
+    written = len(json.dumps({wc.COVERS: out}, indent=2).encode())
+    assert written <= wc.MAX_COVERS_BYTES < wc.MAX_BLOB_BYTES
+
+
 def test_covers_changed_after_the_signature_never_holds(pinned):
     """A hand that removes a detection cannot also remove it from the heartbeat: signed."""
     c = FakeContainer(URL)
@@ -317,6 +393,34 @@ def test_a_heartbeat_of_another_key_listing_nothing_never_proves_a_miss(run):
     run.beat(covers={RUN: []}, signer=OTHER)
     engine, emitted = _wait(run.clock.now - 30)
     assert engine._detection_result == "unknown" and emitted == []
+
+
+def test_a_covered_detection_replaced_by_an_unsigned_blob_is_refused_and_missing(run, capsys):
+    """M3762, M3767: the heartbeat covers both; one read back, the run's own replaced by an unsigned
+    blob — unknown here, whatever the caller does, the refusal (SEC21) and the missing (SEC21b) both
+    said, in the console and in Orodruin's journal; never a detection_missed."""
+    attack = run.clock.now - 30
+    _file(run.container, _blob(sid=OTHER_SID), _other(attack + 5))
+    _file(run.container, _blob(), {k: v for k, v in _detection_at(attack + 10).items() if k not in ("key", "sig")})
+    run.beat(covers={RUN: sorted([SID, OTHER_SID])})
+    journal = _Journal()
+    engine, emitted = _wait(attack, session=journal)
+    assert engine._detection_result == "unknown" and emitted == []
+    assert engine._detection_missing == [_blob()]
+    assert [what for what, _ in journal.lines] == ["detection_refused", "detection_missing"]
+    out = " ".join(capsys.readouterr().out.split())
+    assert "1 detection(s) on the return channel refused (SEC21); 1 of the 2 detection(s)" in out
+
+
+def test_the_settling_itself_says_unknown_for_a_missing_detection(run):
+    """M3762: ``_settle_through_channel`` returns unknown itself — never a timeout the caller must
+    turn — when a covered detection is missing, refused or not."""
+    attack = run.clock.now - 30
+    _file(run.container, _blob(), {k: v for k, v in _detection_at(attack + 10).items() if k not in ("key", "sig")})
+    run.beat(covers={RUN: [SID]})
+    engine = engine_module.Engine()
+    result, latency, why = engine._settle_through_channel(RUN, "T1136.001", VM, attack)
+    assert (result, latency) == (None, None) and "refused (SEC21)" in why and "1 of the 1" in why
 
 
 def test_the_missing_are_bounded_in_the_run(run):

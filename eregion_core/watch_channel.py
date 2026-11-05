@@ -82,6 +82,10 @@ STALE = "no heartbeat since the end of the wait"
 # a miss (unknown, said). A run of the bench sees a handful.
 COVERS = "covers"
 MAX_COVERED = 256
+# And for all the windows together, what ``covers`` may weigh in the heartbeat as written: beyond,
+# the heaviest windows are left out (their runs unknown, said) — never a heartbeat the injectors'
+# reader refuses (MAX_BLOB_BYTES), which would refuse every run (V1).
+MAX_COVERS_BYTES = MAX_BLOB_BYTES // 2
 # The missing detections a run says — the rest counted only.
 MAX_MISSING = 20
 # A blob name part: a run_id or a signal_id, never a path.
@@ -197,7 +201,7 @@ class Publisher:
             "since": self.since,
             "windows": known,
             # SEC21b (#535): what this heartbeat vouches for — signed with the rest.
-            COVERS: self._covers(known),
+            COVERS: self._covers(known, self._sent),
             # SEC5 (N-03): the subscription this watch reads, as a digest — what binds this
             # heartbeat to the targets of a run (eregion_core/watch_gate.py).
             "perimeter": perimeter(),
@@ -205,17 +209,35 @@ class Publisher:
         self._last_beat = now
         self._report("")
 
-    def _covers(self, runs: list[str]) -> dict[str, list[str]]:
+    def _covers(self, runs: list[str], sent: set[tuple[str, str]]) -> dict[str, list[str]]:
         """SEC21b (#535): for each window the heartbeat knows, the sorted ``signal_id`` of every
-        detection delivered for it — each write acknowledged before this heartbeat is written. A
-        window with more than MAX_COVERED is left out: its run cannot conclude to a miss. What a
-        live window covers is still held (``_sent`` keeps a detection KEEP_S, the longest a window
-        lives)."""
+        detection delivered for it — at this tick or any before (``sent``: each write acknowledged
+        before this heartbeat is written), its own only. A window with more than MAX_COVERED is left
+        out, and, beyond MAX_COVERS_BYTES for all of them, the heaviest first: its run cannot
+        conclude to a miss, said in the watch's log and by the run. What a live window covers is
+        still held (``_sent`` keeps a detection KEEP_S, the longest a window lives)."""
         out = {}
         for run in runs:
-            ids = sorted(s for r, s in self._sent if r == run)
+            ids = sorted(s for r, s in sent if r == run)
             if len(ids) <= MAX_COVERED:
                 out[run] = ids
+
+        def weight(run: str) -> int:   # as written (indent=2): each id on its line, the run's key
+            return len(run) + 16 + sum(len(s) + 12 for s in out[run])
+        total = sum(weight(r) for r in out)
+        left_out = sorted(set(runs) - set(out))
+        while total > MAX_COVERS_BYTES:
+            heaviest = max(sorted(out), key=weight)
+            total -= weight(heaviest)
+            left_out.append(heaviest)
+            del out[heaviest]
+        said = ", ".join(sorted(left_out)[:5]) + (" …" if len(left_out) > 5 else "")
+        if said != getattr(self, "_left_out", ""):
+            if left_out:
+                print(f"[watch-channel] {len(left_out)} window(s) left out of what the heartbeat covers "
+                      f"(more than {MAX_COVERED} detections, or beyond {MAX_COVERS_BYTES} bytes): {said} — "
+                      "their runs cannot conclude to a miss (SEC21b)")
+            self._left_out = said
         return out
 
     def _signed(self, body: dict, now: datetime) -> dict:
@@ -437,7 +459,8 @@ def uncovered(heartbeat: dict, run_id: str, vouched: list[dict]) -> tuple[str, l
     listed = covers.get(run_id)
     if listed is None:
         return (f"the heartbeat does not list this run's detections: more than {MAX_COVERED} "
-                "(MAX_COVERED) — a miss cannot be proven"), [], 0
+                f"(MAX_COVERED), or beyond what it may weigh ({MAX_COVERS_BYTES} bytes, "
+                "MAX_COVERS_BYTES) — a miss cannot be proven"), [], 0
     if not isinstance(listed, list) or not all(isinstance(x, str) for x in listed):
         return f"the heartbeat's {COVERS} for this run is not a list of signals", [], 0
     read = {d.get("signal_id") for d in vouched if isinstance(d, dict)}

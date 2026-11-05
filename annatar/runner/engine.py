@@ -780,8 +780,7 @@ class Engine:
             if result_event == "detection_timeout" and self._detection_refused_total:
                 # SEC21: a detection the run could not believe is no silence — a watch older than
                 # this injector, or a hand on the channel: never a miss, never seen.
-                result_event, why = None, (f"{self._detection_refused_total} detection(s) on the "
-                                           "return channel refused (SEC21)")
+                result_event, why = None, self._refused_why()
             if result_event is None:
                 console.print(
                     f"[yellow]Detection not measured — the hosted watch cannot vouch for"
@@ -829,6 +828,9 @@ class Engine:
         )
         if stop_event is not None:
             stop_event.set()
+
+    def _refused_why(self) -> str:
+        return f"{self._detection_refused_total} detection(s) on the return channel refused (SEC21)"
 
     def _missing_metrics(self, metrics: dict) -> None:
         """SEC21b: what the heartbeat covers and the run could not read back, in its report."""
@@ -919,9 +921,12 @@ class Engine:
                     # SEC21b: a silence is a miss only once all the heartbeat covers was read back.
                     if watch_channel.source() == watch_channel.STORAGE:
                         why = self._covered(heartbeat, run_id, found)
-                    if not why or self._detection_refused_total:
-                        # Refused detections: the caller says the refusal (SEC21), never a miss.
-                        return "detection_timeout", None, ""
+                    if why:
+                        # Unknown here, whatever the caller does — the refusals (SEC21) said first.
+                        if self._detection_refused_total:
+                            why = f"{self._refused_why()}; {why}"
+                        return None, None, why   # SEC21b: never a miss
+                    return "detection_timeout", None, ""
             except Exception as e:
                 why = f"channel unreadable: {e}"
             transient = why == watch_channel.STALE or why.startswith("channel unreadable")

@@ -1712,6 +1712,57 @@ que GitHub compte comme réussi : le laisser requis ne bloquerait pas une PR, ma
 plus rien. Aucun autre check requis ne change : ceux de Components ne l'étaient pas, et Images garde
 les siens. Vérifier : `gh api repos/grootcyber/eregion/rules/branches/main` ne liste plus macOS.
 
+## Ce que la CI retente (CI8, #566, 05/11)
+
+Décision de Jonathan du 05/11. Aucun job n'est relancé seul : « Re-run failed jobs », c'est Jonathan
+qui le fait (l'App des sessions n'a qu'*Actions* en lecture), et seulement une fois le run fini. Les
+pannes vues venaient de l'infrastructure : un 504 au téléchargement d'un provider Terraform, une course
+sur le modèle de ChromaDB (corrigée par CI6b), un macOS sans runner. Une seule retardait une release de
+plus d'une heure.
+
+**Une boucle de retry du dépôt**, sans action tierce : `bash scripts/retry.sh <commande> [argument…]`.
+Elle lance la commande telle quelle (ses arguments intacts, ni `eval` ni shell entre les deux). Si la
+commande échoue, elle attend 10 s et recommence, puis 30 s et une dernière fois : trois tentatives en
+tout. Chaque tentative est dite dans le journal, et chaque échec en avertissement du run
+(`::warning::`, visible dans son résumé) : un retry n'est jamais muet. Après le troisième échec, une
+erreur, et le code de sortie de ce dernier échec. Une commande arrêtée par SIGINT ou SIGTERM (un job
+annulé, sa borne) n'est jamais relancée. Aucune valeur d'un `${{ }}` n'entre dans une étape retentée
+(SEC4) : ce qui varie passe par `env:`.
+
+**Ce qui est retenté** : la commande de téléchargement, seule, de chaque étape réseau.
+- L'installation des verrous (`pip install --require-hashes -r requirements/…`) : `ci.yml` (Linux,
+  macOS, l'audit), `release-gate.yml`, `mutants.yml`, `components.yml`, `invariants.yml`,
+  `pip-audit.yml`. Pas l'installation locale qui suit (`--no-deps --no-build-isolation -e .`) : elle
+  ne télécharge rien.
+- Terraform depuis le dépôt apt de HashiCorp (`ci.yml`, la porte, le canari) : la clé (`curl`), puis
+  `apt-get update` et `apt-get install`. La vérification de l'empreinte de la clé reste hors de la
+  boucle, et un échec l'arrête toujours.
+- `terraform init` de chaque module, qui télécharge ses providers verrouillés, dans une étape à part
+  (« Terraform init — … (the locked providers, retried) ») : le `test` et le `validate` qui suivent ne
+  sont jamais retentés. Un paquet qui ne correspond pas au verrou échoue trois fois (environ 40 s de
+  plus), puis le job est rouge.
+- Le modèle de ChromaDB, dans une étape à part, avant les tests : `python scripts/chroma_model.py`,
+  dans chaque job qui restaure son cache (`ci.yml`, les invariants, les tranches de mutants et le jeu de
+  contrôle de la porte et du lundi, le job Glorfindel de Components). Il ne télécharge que si un fichier
+  du modèle manque ; le cache restauré, rien ne part. Le harnais de mutation le trouve ensuite prêt
+  (CI6b). Après trois échecs, le job est rouge : le réseau du runner est en panne.
+- `syft` et `cosign`, binaires épinglés par leur sha256 (`publish.yml`) : l'empreinte est vérifiée à
+  chaque tentative.
+
+**Ce qui ne l'est jamais** : un test, la mutation, les invariants, `ruff`, la vérification d'une image
+(`image_check.py`, `published_image.py verify`), l'avis des vulnérabilités (son échec est dit, jamais
+rouge), le canari lui-même (`run.sh`), le push d'une image. Un test instable n'est jamais masqué : une
+étape qui télécharge puis teste se coupe en deux, et seule la première partie est retentée.
+`tests/unit/test_workflows.py` liste les étapes retentées, échoue si une étape qui mesure l'est, et
+échoue aussi si un téléchargement connu ne l'est pas.
+
+**Ce qui reste hors de la boucle** : les actions (`actions/setup-python`, `actions/cache`,
+`docker/build-push-action`…). Une action ne s'enveloppe pas. La construction des images (`images.yml`,
+`publish.yml`) tire ses images de base et ses paquets dans `docker/build-push-action` : elle n'est pas
+retentée. Si elle devient une source de pannes, l'option est de remplacer l'action par un
+`docker buildx build` dans une étape `run:`, enveloppée à son tour. `setup-python` prend Python dans le
+cache d'outils du runner (3.11 et 3.12 y sont) : aucune panne vue.
+
 ---
 
 ## La CI des images (CI1, #267, 29/10)
@@ -2361,7 +2412,10 @@ l'environnement, jamais dans le texte du script (SEC6).
   corrige par un lot, puis la PR de version se refait sur `main`.
 - **Une panne de GitHub sur un job qui bloque** (un job annulé à sa borne, un runner Linux jamais pris) :
   « Re-run failed jobs » ne relance que les jobs rouges, pas la batterie entière. C'est Jonathan qui le
-  fait : l'App n'a qu'*Actions* en lecture.
+  fait : l'App n'a qu'*Actions* en lecture. Un téléchargement (les verrous, Terraform et ses providers,
+  le modèle de ChromaDB) est déjà retenté trois fois dans le job (CI8, « Ce que la CI retente ») : un
+  rouge qui reste après ses trois tentatives est une vraie panne du réseau. Les tests, la mutation et
+  les invariants ne sont jamais retentés.
 - **Un macOS rouge, annulé ou sans runner** ne rend pas la porte rouge : il se lit dans le résumé du run,
   et un vrai rouge macOS se corrige par un lot, comme sur `main` et la nuit (CI5).
 - **À mesurer au premier run réel** : la conclusion du run quand le job macOS, qui a `continue-on-error`,

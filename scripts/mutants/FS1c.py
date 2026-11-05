@@ -59,8 +59,9 @@ MUTANTS = [
     ("M4055", "an approval's isolation off the gestures' executor (FS1c)", API,
      "            result = await _gesture(connector.isolate_vm, resource_id)\n",
      "            result = await asyncio.to_thread(connector.isolate_vm, resource_id)\n"),
-    ("M4056", "a promotion's slots full told as an Azure error: the call made (FS1c)", API,
-     "    except GesturesBusy:      # FS1c: refused at once, said (503)\n        raise\n", ""),
+    ("M4056", "an unblock's direct call off the gestures' executor (FS1c)", API,
+     '    result = await _gesture(\n        subprocess.run,\n        [_bin(), "unblock"',
+     '    result = await asyncio.to_thread(\n        subprocess.run,\n        [_bin(), "unblock"'),
     # ── The gesture noted once, by whoever reads the final receipt first ───────────
     ("M4057", "a gesture of the queue never noted: the feed and the indicators lose it (FS1c)", API,
      '        _note_queued(followed["receipt"])\n', "        pass\n"),

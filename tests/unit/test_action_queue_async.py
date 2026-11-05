@@ -649,3 +649,34 @@ def test_a_refused_revert_of_the_bot_is_noted_nowhere(world, monkeypatch):
     monkeypatch.setattr(aq, "withdraw", lambda *a, **k: True)
     code, _ = asyncio.run(bot._queue_revert({"id": "c1"}, None, _Thread(), poll_s=0))
     assert code == 1 and _lines(world, "bot") == []
+
+
+@pytest.mark.parametrize("route, setup", [("/api/action/release/web", "isolate"),
+                                          (f"/api/action/unblock/web?ip={ATTACKER}", "block"),
+                                          ("approve", "card"), ("queue", "isolate")])
+def test_each_step_of_a_gesture_runs_in_the_gestures_own_executor(world, monkeypatch, route, setup):
+    """Never the server's default threads, which serve every other route (FS1c)."""
+    pytest.importorskip("fastapi")
+    api, client = _console(world, monkeypatch)
+    monkeypatch.delenv(aq.FLAG_ENV, raising=False)
+    if setup == "isolate":
+        world["conn"].isolate_vm(WEB)
+    elif setup == "block":
+        world["conn"].block_suspicious_ip(ATTACKER, WEB, "vm")
+    where: list[str] = []
+    monkeypatch.setattr(api.subprocess, "run", lambda args, **k: where.append(threading.current_thread().name)
+                        or subprocess.CompletedProcess(args, 0, "ok", ""))
+    monkeypatch.setattr(AzureConnector, "isolate_vm",
+                        lambda self, rid: where.append(threading.current_thread().name) or {"status": "isolated"})
+    monkeypatch.setattr(api, "_verify_approved", lambda *a, **k: {"verified": True})
+    if route == "approve":
+        route = f"/api/action/approve/{_card()['id']}"
+    elif route == "queue":
+        from eregion_console import action_requests
+        real = action_requests.deposit
+        monkeypatch.setenv(aq.FLAG_ENV, "1")
+        monkeypatch.setattr(action_requests, "deposit",
+                            lambda *a, **k: where.append(threading.current_thread().name) or real(*a, **k))
+        route = "/api/action/release/web"
+    assert client.post(route, json={}).status_code == 200
+    assert where and all(n.startswith("console-gesture") for n in where), where

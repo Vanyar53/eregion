@@ -3575,18 +3575,24 @@ def test_an_isolation_written_again_keeps_the_deny_before_an_allow_and_says_it(m
 
 
 def test_a_reassertion_says_the_deny_it_kept_before_an_allow(monkeypatch):
-    """I4D: the same, written again by the reassertion — its card says the deny kept."""
+    """I4D: the same, written again by the reassertion — its card says the deny kept. And, the
+    isolation under the second name bypassed (`bypass`, as above), never « reposée une fois » nor
+    « Glorfindel alertera » (RW2, #555: Azure's side of the hole — the write read as it answered)."""
     import shutil
 
-    from glorfindel import escalations
+    from glorfindel import actions, escalations
 
     m, rules = _db1_moved(monkeypatch, _S1618_NET, block_first=False)
     try:
         m.reassert(Script("non_disruptive", None))
         assert rules[_DB1_ISO]["priority"] == 100 and _DB1_ISO_SECOND in rules
         said = [e["reason"] for e in escalations.pending() if e.get("action") == "isolate_vm"]
-        assert any("reposée une fois" in r and f"{_DB1_ISO}, notre deny, passe avant allow-ssh" in r
+        assert any("ne tient pas en entier : Isolation contournée" in r
+                   and f"{_DB1_ISO}, notre deny, passe avant allow-ssh" in r
                    and "10.0.0.7, à api, qu'il coupe" in r for r in said), said
+        assert not any("reposée une fois" in r or "alertera" in r for r in said), said
+        state = actions._load_isolation_state(DB)
+        assert not state.get("reasserted_at") and state.get("drift_alerted_at"), state
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
 

@@ -126,7 +126,7 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
     """Check every active isolation and block; re-apply missing rules once.
 
     Returns one record per isolation/block whose rules were missing:
-    {"kind", "vm", "ip"?, "outcome": "reapplied" | "escalated" | "failed", "detail"}.
+    {"kind", "vm", "ip"?, "outcome": "reapplied" | "escalated" | "partial" | "failed", "detail"}.
     """
     from glorfindel.actions import active_blocks, active_isolations, _vm_lock
 
@@ -284,21 +284,30 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
         return
     try:
         put = connector.isolate_vm(rid)
-        state = _load_isolation_state(ref or vm) or {}
-        # Keep the original isolation time (TTL); record the re-application.
-        _save_isolation_state(ref or vm, {**state, "isolated_at": iso.get("isolated_at", state.get("isolated_at")),
-                                   "reasserted_at": now})
-        reason = (f"L'isolation de {vm} avait disparu d'Azure (modification hors "
-                  "Glorfindel) : reposée une fois. Si elle disparaît encore, "
-                  "Glorfindel alertera sans la reposer." + who
-                  # I4B: what the rewrite left as it was, aimed at another VM — on the card.
-                  + (f" {put['left_note']}" if isinstance(put, dict) and put.get("left_note") else ""))
-        outcome = "reapplied"
+        # I4B: what the rewrite left as it was, aimed at another VM — on the card.
+        left = f" {put['left_note']}" if isinstance(put, dict) and put.get("left_note") else ""
+        short = _isolation_said(put)
+        if short:
+            # Written, but the provider does not read it whole (RW2, #555): never « reposée », nothing
+            # promised, and not marked put back — `reasserted_at` would keep it out of the passes.
+            reason = (f"L'isolation de {vm} avait disparu d'Azure ; reposée, elle ne tient pas en entier : {short}. "
+                      "Glorfindel ne la repose pas de nouveau : "
+                      f"`glorfindel release {rid} --yes` si la levée est voulue, sinon ré-isoler." + who + left)
+            outcome = "partial"
+        else:
+            state = _load_isolation_state(ref or vm) or {}
+            # Keep the original isolation time (TTL); record the re-application.
+            _save_isolation_state(ref or vm, {**state, "isolated_at": iso.get("isolated_at", state.get("isolated_at")),
+                                       "reasserted_at": now})
+            reason = (f"L'isolation de {vm} avait disparu d'Azure (modification hors "
+                      "Glorfindel) : reposée une fois. Si elle disparaît encore, "
+                      "Glorfindel alertera sans la reposer." + who + left)
+            outcome = "reapplied"
     except Exception as exc:
         reason = f"L'isolation de {vm} a disparu d'Azure ; la reposer a échoué : {exc}"
         outcome = "failed"
     _alert(_alert_id(vm, rid), resource_id=rid, action="isolate_vm", reason=reason)
-    if outcome == "failed":
+    if outcome in ("partial", "failed"):
         # No retry-and-alert every minute — marked AFTER the card exists (see blocks).
         _mark_alerted(ref or vm, now)
     report.append({"kind": "isolation", "vm": vm, "outcome": outcome, "detail": reason})
@@ -318,6 +327,12 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     # Its pair put back by the first time (L1Qs): read by it — the same first read here (the baseline, the
     # check's card, the bypass), then finished: its VM's rules, the re-read, the card.
     pair = (put_back or {}).get((rid.rstrip("/").lower(), ip)) if b.get("scoped") is False else None
+    if pair is None and b.get("scoped") is False and b.get("partial") and b.get("partial_unsaid"):
+        # Its pair written partial by a first time whose second never came (its lock held, the pass
+        # cut off — RW2, #555): said now, from a read of now. Held by the provider's `partial` alone,
+        # no pass read it again, its card never written. Nothing more written: the mode may have
+        # changed since that pass (human_only), and the card says what the read finds.
+        pair = {"error": None, "partial": b["partial_unsaid"], "read": None, "later": True}
     say_left(vm, rid, ip, b, report, ref)     # what the block left, aimed at another VM (I4A)
     if _stale(b.get("unblocking_at")) and not b.get("stale_alerted_at"):
         reason = (f"Le déblocage de {ip} sur {vm} a été interrompu (commencé le "
@@ -333,7 +348,8 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
                              "unblock_failed", "unblocking_at"):
         return
     try:
-        verification = pair["read"] if pair is not None else connector.verify_block_ip(ip, rid)
+        verification = (pair["read"] if pair is not None and pair["read"] is not None
+                        else connector.verify_block_ip(ip, rid))
     except Exception as exc:                                   # said once (V-16)
         say_unverified(vm, rid, exc, report, ip=ip)
         return
@@ -422,6 +438,7 @@ def _rewrite_block(connector, b: dict, vm: str, rid: str, ip: str, report: list[
         failed("subnet", pair["error"])
     if pair is not None and pair.get("partial"):
         failed("subnet", pair["partial"], short)
+    scopes = scopes[:1] if (pair or {}).get("later") else scopes      # a pair of an earlier pass: nothing written (RW2)
     for scope in scopes[1:] if pair is not None else scopes:
         try:
             put = connector.block_suspicious_ip(ip, rid, scope=scope, threat_port=b.get("threat_port"))
@@ -461,7 +478,7 @@ def _rewrite_block(connector, b: dict, vm: str, rid: str, ip: str, report: list[
                 [f"en partie selon le fournisseur : {' ; '.join(short)}"] if short else [])
             reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure ; ses règles réécrites une fois"
                       + (f" ({' ; '.join(notes)})" if notes else "")
-                      + ", il ne tient pas en entier — " + _block_drift(ip, vm, after, said=True)
+                      + ", il ne tient pas en entier — " + _block_drift(ip, vm, after, said=True, partial=not errors)
                       + f" Glorfindel ne les réécrit pas de nouveau : `glorfindel unblock {ip} {rid} --yes` si "
                       "c'est voulu, sinon re-bloquer." + _held_partial(ref or vm, ip))
             outcome = "partial"
@@ -477,6 +494,11 @@ def _rewrite_block(connector, b: dict, vm: str, rid: str, ip: str, report: list[
         # card: every later pass returned on the marker, and the block stayed gone in
         # silence (L1F, invariant machine).
         _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))
+        if b.get("partial_unsaid"):
+            # The first time's mark of a partial pair (RW2), off once its card is said. Not taken off
+            # (a crash, a full disk), the card is said again at the next pass: one card too many,
+            # never the silence.
+            _update_block_entry(ref or vm, ip, partial_unsaid=None)
         episode(ref or vm, ip, over=False)
     report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
 
@@ -501,6 +523,28 @@ def _write_said(put) -> tuple[str, str]:
         (f"{x['acl']} : {x.get('reason')}" if x.get("acl") else f"{x.get('reason')}")
         for x in put.get("bypass") or [] if isinstance(x, dict) and x.get("reason"))
     return status, why or str(put.get("error") or f"le fournisseur répond « {status} »")
+
+
+def _isolation_said(put) -> str:
+    """What an isolation's write answered without raising (RW2, #555): "" when it holds, else why not.
+
+    AWS answers `isolated` whatever its read-back found, with `verified` False (an ENI off the
+    quarantine group, the group altered) or None (unreadable), and `bypass` naming them. Azure
+    answers no `verified` — each deny is confirmed as it is written, a NIC left raises
+    (PartialActionError) — but an allow before its deny is answered in `bypass` (`shadowed_by`):
+    written, passed by. Read as written, both made the card say « reposée une fois. Si elle disparaît
+    encore, Glorfindel alertera » of an isolation that does not hold, and `reasserted_at` took it out
+    of every later put-back. An answer that says nothing (no dict) is read as before."""
+    if not isinstance(put, dict):
+        return ""
+    bypass = put.get("bypass") or []
+    named = ", ".join(str(x) for x in bypass) if isinstance(bypass, (list, tuple)) else str(bypass).rstrip(". ")
+    verified = put.get("verified", True)
+    if verified is None:
+        return f"le fournisseur n'a pas pu la relire ({named or 'vérification impossible'})"
+    if verified is not True:
+        return f"le fournisseur ne la relit pas entière ({named or 'non vérifiée'})"
+    return named
 
 
 def _held_partial(ref: str, ip: str) -> str:

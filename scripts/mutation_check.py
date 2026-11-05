@@ -5192,8 +5192,8 @@ MUTANTS += [
     ("M1904", "what the isolation left kept out of its outcome: nothing said (I4B)", ISO,
      '        if left:\n            out["left_rules"] = left\n', '        if False:\n            out["left_rules"] = left\n'),
     ("M1905", "the reassertion's card silent on what the isolation it put back left (I4B)", R,
-     """                  + (f" {put['left_note']}" if isinstance(put, dict) and put.get("left_note") else ""))\n""",
-     "                  )\n"),
+     """        left = f" {put['left_note']}" if isinstance(put, dict) and put.get("left_note") else ""\n""",
+     '        left = ""\n'),
 ]
 TESTS.update({f"M{n}": _I4B for n in range(1890, 1906)})
 # The review of I4B: the search on every NSG asks the guard too — a turned allow there, aimed at the

@@ -2313,13 +2313,17 @@ Ce qui change :
   chaque morceau refait son run non muté. Les morceaux vont du plus lourd au plus léger, chacun à la
   tranche la moins chargée. Le même arbre et le même fichier donnent les mêmes tranches, quel que soit
   le runner, et chaque mutant est dans une tranche exactement. Le fichier absent ou illisible, c'est
-  l'estimation qui découpe (dit).
+  l'estimation qui découpe (dit). Une durée qui n'en est pas une, dans le fichier ou dans un résultat
+  (0, qui veut dire « non mesuré », plus d'un jour — 86 400 s —, une valeur non finie ou hors des
+  flottants), est écartée et dite avec le nom du fichier : l'estimation la remplace, jamais une
+  exception qui arrête la tranche. `--plan 0` est refusé comme un mauvais `--shard`.
 - **Dans une tranche**, les runs non mutés puis les mutants partent du plus lourd au plus léger : un
   mutant de 20 min lancé en dernier faisait la queue de la tranche.
 - **`python scripts/mutation_check.py --plan 14`** dit le temps estimé de chaque tranche, sans rien
   mesurer (`--control --plan 2` pour le jeu de contrôle).
 
-**Sa durée : environ 42 minutes estimées sur un runner ordinaire** (05/11, sur les durées mesurées ;
+**Sa durée : environ 41 minutes estimées sur un runner ordinaire**, celle de sa tranche de mutants la
+plus lourde, telle que ce fichier la découpe aujourd'hui (05/11, sur les durées mesurées ;
 avant CI6d, 60 et 73 min mesurées). L'estimation reprend les mesures des deux runs (la plus petite de
 chaque mutant), et les runs non mutés chronométrés un par un sur un poste, ramenés à un runner par un
 facteur ajusté sur les débuts de tranche des 32 journaux (écart type de 2,9 min). Ses parties tournent
@@ -2327,7 +2331,7 @@ ensemble ; la plus longue fait la durée :
 
 | Job | Sur un runner | D'où |
 |---|---|---|
-| `mutants`, une tranche sur 14 | ~41 min estimées, la plus lourde (de 36 à 41 ; installation ~1 min comprise) | avant CI6d, de 22 à 72 min mesurées. La même estimation, une fois les runs non mutés mesurés par la porte : de 39 à 42 min |
+| `mutants`, une tranche sur 14 | ~41 min estimées, la plus lourde (de 36 à 41 ; installation ~1 min comprise) | avant CI6d, de 22 à 72 min mesurées. Une fois les runs non mutés mesurés par la porte et le fichier mis à jour, les tranches se resserrent (de 39 à 42 min estimées) ; la plus lourde reste vers 41 |
 | `invariants` (2 000) | 22 à 36 min mesurées | les deux runs du 05/11 |
 | `control`, une tranche sur 2 | ~31 min estimées | avant CI6d, de 24 à 36 min mesurées : 16 mutants d'invariants par tranche, dont une dizaine survivent (deux tours entiers chacun) |
 | `macos` (informe) | 4 à 8 min, s'il a un runner | les deux runs du 05/11 |

@@ -211,10 +211,43 @@ def test_a_durations_file_that_cannot_be_read_is_said_and_the_estimate_cuts(tmp_
 
 
 def test_an_entry_that_is_not_a_duration_is_left_out(tmp_path):
+    """Negative, a string, a boolean, 0 (« not measured »), past a float (10**400: OverflowError),
+    not finite, or above a day (1e308): left out, the estimate weighs it, and it is said with the
+    file's name — never a trace that stops the shard (CI6d, review)."""
     path = tmp_path / "durations.json"
-    path.write_text(json.dumps({"mutants": {"M1": 4, "M2": -1, "M3": "9", "M4": True, "M5": 2.5},
-                                "targets": {"t": 1e400, "u": 0}}), encoding="utf-8")
-    assert mc.load_durations(path) == {"mutants": {"M1": 4.0, "M5": 2.5}, "targets": {"u": 0.0}}
+    path.write_text(json.dumps({"mutants": {"M1": 4, "M2": -1, "M3": "9", "M4": True, "M5": 2.5, "M6": 10**400,
+                                            "M7": 1e308, "M8": 0, "M9": mc.MAX_SECONDS},
+                                "targets": {"t": float("inf"), "u": 0, "v": 86_400.5, "w": 30}}), encoding="utf-8")
+    said: list = []
+    assert mc.load_durations(path, say=lambda *a, **k: said.append(a[0])) == {
+        "mutants": {"M1": 4.0, "M5": 2.5, "M9": float(mc.MAX_SECONDS)}, "targets": {"w": 30.0}}
+    assert said == [f"durations.json: 6 mutants not a duration (above 0, at most {mc.MAX_SECONDS} s) — left out, "
+                    "the estimate weighs them",
+                    f"durations.json: 3 targets not a duration (above 0, at most {mc.MAX_SECONDS} s) — left out, "
+                    "the estimate weighs them"]
+
+
+def test_durations_at_zero_never_put_every_mutant_in_the_first_shard(tmp_path):
+    """A file of zeros is a file of nothing measured: the estimate cuts, every shard has its share."""
+    todo = _mutants(40)
+    tests = {m[0]: f"tests/unit/test_{i}.py" for i, m in enumerate(todo)}
+    path = tmp_path / "durations.json"
+    path.write_text(json.dumps({"mutants": {m[0]: 0 for m in todo}, "targets": {t: 0 for t in tests.values()}}),
+                    encoding="utf-8")
+    durations = mc.load_durations(path, say=lambda *a, **k: None)
+    assert sorted(len(s) for s in mc.shards_of(todo, 4, tests, durations)) == [10, 10, 10, 10]
+
+
+def test_a_duration_past_any_bound_never_stops_the_cut(tmp_path):
+    """Read from a file, the largest durations stay finite: the cut never meets inf, nor NaN."""
+    todo = _mutants(30)
+    tests = {m[0]: "tests/unit/test_one.py" for m in todo}
+    path = tmp_path / "durations.json"
+    path.write_text(json.dumps({"mutants": {m[0]: (10**400 if i % 2 else mc.MAX_SECONDS) for i, m in enumerate(todo)},
+                                "targets": {"tests/unit/test_one.py": 1e308}}), encoding="utf-8")
+    durations = mc.load_durations(path, say=lambda *a, **k: None)
+    shards = [mc.shard_of(todo, k, 3, tests, durations) for k in (1, 2, 3)]
+    assert sorted(m[0] for s in shards for m in s) == sorted(m[0] for m in todo)
 
 
 def _shard_json(where: Path, name, seconds=None, targets=None, rows=None, examples=500, rounds=2, legacy=None):
@@ -281,6 +314,19 @@ def test_the_update_counts_only_the_gate_s_budget(tree, tmp_path):
     assert mc.update_durations([tmp_path / "run"], path, say=lambda *a, **k: said.append(a[0])) == 0
     assert json.loads(path.read_text(encoding="utf-8"))["mutants"] == {"M002": 8}
     assert sum("left out" in s for s in said) == 2 and any("1000 sequences" in s for s in said)
+
+
+def test_the_update_leaves_out_a_measure_that_is_not_a_duration_and_says_it(tree, tmp_path):
+    """A row of before CI6d with an absurd detail (400 digits: inf), a measure at 0 or past a day:
+    left out, said, the file written — never `round(inf)` (CI6d, review)."""
+    path = tmp_path / "durations.json"
+    _shard_json(tmp_path / "run" / "m", "mutants-1", seconds={"M001": 0, "M002": 1e308, "M003": 7.0})
+    _shard_json(tmp_path / "run" / "old", "mutants-2", legacy={"M000": "9" * 400, "M004": 12})
+    said: list = []
+    assert mc.update_durations([tmp_path / "run"], path, say=lambda *a, **k: said.append(a[0])) == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["mutants"] == {"M003": 7, "M004": 12}
+    assert any("mutants-2.json: 1 mutants (rows) not a duration" in s for s in said), said
+    assert any("mutants-1.json: 2 mutants not a duration" in s for s in said), said
 
 
 def test_an_update_with_nothing_read_changes_nothing(tree, tmp_path):
@@ -537,6 +583,14 @@ def test_a_shard_runs_its_heaviest_first(tmp_path, monkeypatch):
                      ("base", "tests/unit/test_M1.py"), ("base", "tests/unit/test_M3.py"),
                      ("mutant", "tests/unit/test_M3.py"), ("mutant", "tests/unit/test_M1.py"),
                      ("mutant", "tests/unit/test_M2.py"), ("mutant", "tests/unit/test_M0.py")]
+
+
+@pytest.mark.parametrize("n", ["0", "-3", "x", "1.5"])
+def test_a_plan_of_no_shard_is_refused_as_a_shard_is(n, capsys):
+    """`--plan 0` (or negative) refused before anything is read, as a bad `--shard` is."""
+    with pytest.raises(SystemExit) as exc:
+        mc.main(["--plan", n])
+    assert exc.value.code == 2 and "a number of shards, 1 or more" in capsys.readouterr().err
 
 
 def test_the_plan_measures_nothing(monkeypatch, capsys):

@@ -10839,6 +10839,8 @@ UNCOUNTED = ("EQUIVALENT", "MULTI-HOST", "STALE")
 DURATIONS = LOTS_DIR / "durations.json"
 # The budget the durations are measured at, and the shards cut for: the release gate's.
 DURATIONS_BUDGET = (500, 2)
+# A duration above a day is no measure (a shard's bound is 90 min): left out, the estimate weighs it.
+MAX_SECONDS = 86_400
 SECONDS = re.compile(r"\((\d+(?:\.\d+)?)s\)")     # a row's detail before CI6d: "2/2 (19s)"
 
 
@@ -10847,11 +10849,31 @@ def _heavy(target: str) -> bool:
 
 
 def _seconds(value) -> float | None:
-    """A duration read from a file: a finite number >= 0, else None (never a cost)."""
+    """A duration read from a file: a number above 0 and at most MAX_SECONDS, else None — never a
+    cost: the estimate weighs what it leaves out. 0 is « not measured » (CI6d, review): a shard of
+    zeros would take every mutant into its first shard."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    value = float(value)
-    return value if math.isfinite(value) and value >= 0 else None
+    try:
+        value = float(value)
+    except OverflowError:             # an integer past a float's range (10**400)
+        return None
+    return value if math.isfinite(value) and 0 < value <= MAX_SECONDS else None
+
+
+def _durations_of(found, kind: str, where: str, say) -> dict:
+    """{key: seconds} of a file's or a result's `kind`, each entry that is not a duration left
+    out — and said, with where it was."""
+    out, left = {}, 0
+    for key, value in dict(found or {}).items():
+        if (s := _seconds(value)) is None:
+            left += 1
+        else:
+            out[str(key)] = s
+    if left:
+        say(f"{where}: {left} {kind} not a duration (above 0, at most {MAX_SECONDS} s) — left out, "
+            f"the estimate weighs them", flush=True)
+    return out
 
 
 def no_durations() -> dict:
@@ -10865,8 +10887,7 @@ def load_durations(path: Path | None = None, say=print) -> dict:
     path = DURATIONS if path is None else path
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
-        out = {kind: {str(key): s for key, value in dict(doc.get(kind) or {}).items()
-                      if (s := _seconds(value)) is not None} for kind in ("mutants", "targets")}
+        out = {kind: _durations_of(doc.get(kind), kind, path.name, say) for kind in ("mutants", "targets")}
     except FileNotFoundError:
         return no_durations()
     except (OSError, ValueError, TypeError, AttributeError) as exc:
@@ -10902,7 +10923,7 @@ def pieces_of(todo: list, n: int, tests: dict, durations: dict) -> list:
     for target in sorted(groups):
         ids = groups[target]
         work = sum(mutant[i] for i in ids)
-        p = max(1, min(len(ids), math.ceil(work / cap))) if cap > 0 else 1
+        p = max(1, min(len(ids), math.ceil(work / cap))) if cap > 0 and math.isfinite(work / cap) else 1
         parts, load = [[] for _ in range(p)], [0.0] * p
         for i in sorted(ids, key=lambda i: (-mutant[i], i)):
             j = min(range(p), key=lambda b: (load[b], b))
@@ -10974,17 +10995,18 @@ def say_plan(todo: list, n: int, jobs: int, durations: dict | None = None) -> in
     return 0
 
 
-def _result_durations(doc: dict) -> tuple[dict, dict]:
+def _result_durations(doc: dict, where: str = "", say=lambda *a, **k: None) -> tuple[dict, dict]:
     """A shard's --json: each mutant's seconds (its own field; before CI6d, its row's detail) and
-    each target's unmutated run."""
-    mutants = {}
-    for row in doc.get("rows") or []:
+    each target's unmutated run — each through _seconds, what is not a duration left out and said.
+    The rows are read only in a result of before CI6d, without its own field."""
+    legacy = {}
+    for row in [] if "seconds" in doc else doc.get("rows") or []:
         if isinstance(row, list) and len(row) >= 4 and isinstance(row[0], str) and isinstance(row[3], str):
             if (m := SECONDS.search(row[3])):
-                mutants[row[0]] = float(m.group(1))
-    mutants.update({str(k): s for k, v in dict(doc.get("seconds") or {}).items() if (s := _seconds(v)) is not None})
-    targets = {str(k): s for k, v in dict(doc.get("targets") or {}).items() if (s := _seconds(v)) is not None}
-    return mutants, targets
+                legacy[row[0]] = float(m.group(1))
+    mutants = _durations_of(legacy, "mutants (rows)", where, say)
+    mutants.update(_durations_of(doc.get("seconds"), "mutants", where, say))
+    return mutants, _durations_of(doc.get("targets"), "targets", where, say)
 
 
 def update_durations(dirs: list[Path], path: Path | None = None, say=print) -> int:
@@ -11003,7 +11025,7 @@ def update_durations(dirs: list[Path], path: Path | None = None, say=print) -> i
             try:
                 doc = json.loads(result.read_text(encoding="utf-8"))
                 budget = (doc["examples"], doc["rounds"])
-                mutants, targets = _result_durations(doc)
+                mutants, targets = _result_durations(doc, f"  {result.name}", say)
             except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
                 say(f"  {result.name}: unreadable ({type(exc).__name__}), left out")
                 continue
@@ -11145,6 +11167,13 @@ def prepare_embedding_model(say=print) -> bool | None:
     return True
 
 
+def _positive(text: str) -> int:
+    """`--plan N`: N >= 1, as `--shard K/N` (parse_shard)."""
+    if not re.fullmatch(r"[1-9]\d*", text.strip()):
+        raise argparse.ArgumentTypeError(f"{text!r}: a number of shards, 1 or more")
+    return int(text)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--examples", type=int, default=60)
@@ -11161,7 +11190,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--total", default="", help="a directory of --json results: put the shards together (CI6)")
     ap.add_argument("--shards", type=int, default=1, help="with --total: the shards of the mutants")
     ap.add_argument("--control-shards", type=int, default=1, help="with --total: the shards of the control set")
-    ap.add_argument("--plan", type=int, default=0, metavar="N",
+    ap.add_argument("--plan", type=_positive, default=0, metavar="N",
                     help="say each of N shards' estimated time, from the durations measured; measure nothing (CI6d)")
     ap.add_argument("--update-durations", nargs="+", default=[], metavar="DIR",
                     help="scripts/mutants/durations.json from the --json results under these directories (CI6d)")

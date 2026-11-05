@@ -2,7 +2,9 @@
 measure, each piece by its target's unmutated run, a heavy target cut by its weight, the estimate
 only for what was never measured (M3790–M3793); a shard's --json says each mutant's seconds and each
 target's (M3794, M3795); the durations' file takes each smallest measure, of this tree only, at the
-gate's budget (M3796–M3798); a shard's pools take the heaviest first (M3799).
+gate's budget (M3796–M3798); a shard's pools take the heaviest first (M3799). After its review: a
+duration past a float, at 0 or above a day left out and said, never a crash nor a first shard of
+everything; `--plan` of no shard refused (M3805–M3809).
 """
 HARNESS = "scripts/mutation_check.py"
 _SH = "tests/unit/test_mutation_shards.py::"
@@ -20,7 +22,7 @@ MUTANTS = [
      "        guess = 0.0\n"),
     ("M3793", "a target never cut, whatever its weight: test_host_cd.py's quarter of the whole in one shard "
               "(CI6d)", HARNESS,
-     "        p = max(1, min(len(ids), math.ceil(work / cap))) if cap > 0 else 1\n",
+     "        p = max(1, min(len(ids), math.ceil(work / cap))) if cap > 0 and math.isfinite(work / cap) else 1\n",
      "        p = 1\n"),
     ("M3794", "a shard's --json without each mutant's seconds: the durations never measured again (CI6d)",
      HARNESS,
@@ -44,7 +46,30 @@ MUTANTS = [
      "            measured = list(pool.map(timed, heaviest_first(todo, mutant_cost, key=lambda m: m[0])))\n",
      "            measured = list(pool.map(timed, todo))\n"),
 ]
+_ENTRY = f"{_SH}test_an_entry_that_is_not_a_duration_is_left_out"
+MUTANTS += [
+    ("M3805", "an integer past a float's range in the durations: OverflowError, the shard stops (CI6d, review)",
+     HARNESS, "    except OverflowError:             # an integer past a float's range (10**400)\n        return None\n",
+     ""),
+    ("M3806", "a duration at 0 taken for a measure: every mutant in the first shard (CI6d, review)", HARNESS,
+     "    return value if math.isfinite(value) and 0 < value <= MAX_SECONDS else None\n",
+     "    return value if math.isfinite(value) and 0 <= value <= MAX_SECONDS else None\n"),
+    ("M3807", "no ceiling on a duration: 1e308 weighs, the sums run to inf (CI6d, review)", HARNESS,
+     "    return value if math.isfinite(value) and 0 < value <= MAX_SECONDS else None\n",
+     "    return value if math.isfinite(value) and 0 < value else None\n"),
+    ("M3808", "a duration left out says nothing: the file's fault unseen (CI6d, review)", HARNESS,
+     '    if left:\n        say(f"{where}: {left} {kind} not a duration',
+     '    if False:\n        say(f"{where}: {left} {kind} not a duration'),
+    ("M3809", "`--plan 0` taken: a division by zero, never said as a bad count (CI6d, review)", HARNESS,
+     '    ap.add_argument("--plan", type=_positive, default=0, metavar="N",',
+     '    ap.add_argument("--plan", type=int, default=0, metavar="N",'),
+]
 TESTS = {
+    "M3805": _ENTRY,
+    "M3806": f"{_ENTRY} {_SH}test_durations_at_zero_never_put_every_mutant_in_the_first_shard",
+    "M3807": _ENTRY,
+    "M3808": _ENTRY,
+    "M3809": f"{_SH}test_a_plan_of_no_shard_is_refused_as_a_shard_is",
     "M3790": f"{_SH}test_a_measured_mutant_outweighs_the_estimate {_SH}test_the_shards_weigh_each_mutant_by_its_measure",
     "M3791": f"{_SH}test_a_target_s_unmutated_run_is_weighed_once_per_piece",
     "M3792": f"{_SH}test_an_unmeasured_mutant_weighs_its_target_s_median_else_the_estimate",

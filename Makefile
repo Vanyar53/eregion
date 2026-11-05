@@ -151,6 +151,7 @@ DOCKER_GLORFINDEL_WATCH = $(WATCH_KEY_DIR) && $(RUNS_DIRS) && $(GLORFINDEL_AZURE
 	venv install lock audit test test-unit lint annatar-simulate annatar-simulate-gap clean release release-draft \
 	canary-jit providers-lock celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	celebrimbor-logs-plan celebrimbor-logs-up celebrimbor-auditd-plan celebrimbor-auditd-up \
+	celebrimbor-identity-plan celebrimbor-identity-up \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
@@ -159,7 +160,7 @@ DOCKER_GLORFINDEL_WATCH = $(WATCH_KEY_DIR) && $(RUNS_DIRS) && $(GLORFINDEL_AZURE
 	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-fault-rate glorfindel-host-known celebrimbor-workload \
 	orodruin-init orodruin-watch-guard orodruin-watch-principals orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
 	orodruin-stop orodruin-start orodruin-update orodruin-kill orodruin-down orodruin-ssh orodruin-exercise \
-	orodruin-known orodruin-fingerprint watch-key glorfindel-host-watch-key harness-key harness-sign harness-verify \
+	orodruin-known orodruin-identity orodruin-identity-id orodruin-fingerprint watch-key glorfindel-host-watch-key harness-key harness-sign harness-verify \
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run campaign-containment fault-rate \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
@@ -235,6 +236,8 @@ help:
 	@echo "  make celebrimbor-output [INSTANCE=]         Fragment glorfindel-config.yaml généré"
 	@echo "  make celebrimbor-logs-plan                  Plan des seuls paramètres de diagnostic (abonnement, tenant : ID1)"
 	@echo "  make celebrimbor-logs-up [YES=1]            Les applique (activity_log_enabled / entra_logs_enabled du tfvars)"
+	@echo "  make celebrimbor-identity-plan              Plan de l'identité de test du banc seule (Entra ID, IDI1)"
+	@echo "  make celebrimbor-identity-up [YES=1]        L'applique (entra_test_identity_enabled du tfvars ; false : la retire)"
 	@echo "  make celebrimbor-auditd-plan [INSTANCE=]    Plan d'auditd seul : l'extension des VM et la DCR (AUD1)"
 	@echo "  make celebrimbor-auditd-up [YES=1]          L'applique (auditd_enabled du tfvars ; false : le retire)"
 	@echo ""
@@ -267,6 +270,7 @@ help:
 	@echo "  make orodruin-push [REF=<tag|commit>]        Image d'Annatar publiée (digest vérifié ici) + orodruin.env"
 	@echo "  make orodruin-push-dev                       Développement : l'image construite ici, non vérifiée"
 	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive ; l'image, et la dernière release"
+	@echo "  make orodruin-identity ID=<object id>        Une identité d'Entra ID est-elle inscrite (IDI1), lu depuis la VM"
 	@echo "  make orodruin-fingerprint                    L'empreinte de sa clé d'hôte, lue par Azure (ORO_SSH_FINGERPRINT)"
 	@echo "  make watch-key / glorfindel-host-watch-key   La clé publique de la watch (ici / H0), à épingler : EREGION_WATCH_KEY (SEC19)"
 	@echo "  make harness-key / harness-sign              La clé de l'attestation (une fois) / signer requirements/harness.json (SEC19)"
@@ -692,6 +696,22 @@ celebrimbor-logs-plan celebrimbor-logs-up:
 	@$(TF) init
 	@$(TF) workspace select default
 	@$(TF) $(if $(filter celebrimbor-logs-up,$@),apply$(if $(YES), -auto-approve),plan) $(LOGS_TARGETS)
+
+# IDI1 (#546) : l'identité de test du banc dans Entra ID, seule — l'application, son principal, et
+# le groupe du banc qui la nomme (eregion-identities) ; plan et apply ciblés, rien d'autre du banc
+# (une dérive en attente sur le groupe y paraîtrait : alors s'arrêter, et la traiter par
+# celebrimbor-plan). Ce qu'ils posent vient de terraform.tfvars (entra_test_identity_enabled :
+# persistant), jamais d'un -var d'ici. Remis à false, le même `celebrimbor-identity-up` la retire.
+# Instance canonique seulement (entra_identity.tf), refusée ici avant tout appel.
+#   make celebrimbor-identity-plan             # lecture seule
+#   make celebrimbor-identity-up [YES=1]       # YES=1 : sans confirmation, plan relu avant
+IDENTITY_TARGETS = -target=azuread_application.bench_test -target=azuread_service_principal.bench_test -target=azurerm_resource_group.celebrimbor
+
+celebrimbor-identity-plan celebrimbor-identity-up:
+	@[ "$(INSTANCE)" = "default" ] || { echo "!! $@ : instance '$(INSTANCE)' refusée — l'identité de test vit dans le tenant, posée par l'instance canonique (default) seule."; exit 1; }
+	@$(TF) init
+	@$(TF) workspace select default
+	@$(TF) $(if $(filter celebrimbor-identity-up,$@),apply $(if $(YES),-auto-approve),plan) $(IDENTITY_TARGETS)
 
 # AUD1 : auditd sur les VM du banc et local6 dans la DCR, seuls — plan et apply ciblés sur
 # l'extension d'auditd et la DCR, rien d'autre du banc (une dérive en attente sur une VM ou le
@@ -1223,6 +1243,20 @@ orodruin-check: orodruin-known
 	 case "$$state" in older) w="plus ancienne";; absent) w="absente";; unreadable) w="illisible";; *) w="";; esac; \
 	 [ -z "$$w" ] || echo "  ⚠ image $$w : make orodruin-start ou make orodruin-push REF=$$release (un avertissement : le contrat suit)" >&2
 	$(ORO_SSH) '$(ORO_RUN_CONTRACT) python -m eregion_core.orodruin'
+
+# IDI1 (#546) : une identité d'Entra ID est-elle inscrite, et que peut-on y jouer — lu depuis
+# Orodruin, par son identité et son orodruin.env (EREGION_TENANT_ID, EREGION_OPERATOR_OBJECT_ID,
+# EREGION_PROTECTED_IDENTITIES). ID=<object id de l'application> sur la ligne de commande : vérifié
+# (un GUID, rien d'autre) avant tout ssh, jamais développé par make (passé par l'environnement).
+# L'ID est vérifié d'abord (orodruin-identity-id), la clé d'hôte ensuite (orodruin-known), puis le ssh.
+unexport ID
+orodruin-identity orodruin-identity-id: export EREGION_IDENTITY = $(value ID)
+orodruin-identity-id:
+	@printf '%s' "$$EREGION_IDENTITY" | tr '\n' ' ' | grep -Eqx '$(ORO_GUID)' \
+	   || { echo "ID invalide : l'object id d'une application d'Entra ID (un GUID), sur la ligne de commande" >&2; exit 1; }
+
+orodruin-identity: orodruin-identity-id orodruin-known
+	$(ORO_SSH) '$(ORO_RUN_CONTRACT) python -m eregion_core.inscription identity '"$$EREGION_IDENTITY"
 
 # @ : la commande porte l'identifiant d'abonnement, on ne la répète pas à l'écran.
 orodruin-stop:

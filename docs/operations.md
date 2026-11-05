@@ -972,11 +972,14 @@ Attribute Assignment Reader le rendent passif. Et `EREGION_OPERATOR_OBJECT_ID`, 
    **ils ne refusent jamais une absence** : sans la liste, ou mal écrite, elle est illisible et
    tout verbe d'un plan devient une étape de l'humain — fermé, pas une panne. Ils refusent en
    revanche une valeur **mal écrite**, de n'importe quelle variable recopiée : un saut de ligne, un
-   retour chariot ou un guillemet dans une valeur (une paire autour d'elle est retirée, comme le fait
-   compose), refusés à l'écriture — un saut de ligne ajouterait à `host.env` une variable à lui (la
-   file signée allumée, avec une clé venue de la valeur), un guillemet resté ouvert ferait refuser
-   tout le fichier par compose, et rien ne démarrerait sur H0 ; `--check` refuse une ligne dont la
-   valeur ouvre un guillemet sans le fermer. La variable est nommée, jamais sa valeur. Puis
+   retour chariot, un guillemet, un `$` ou une barre oblique inverse dans une valeur (une paire de
+   guillemets autour d'elle est retirée, comme le fait compose), refusés à l'écriture — un saut de
+   ligne ajouterait à `host.env` une variable à lui (la file signée allumée, avec une clé venue de
+   la valeur), un guillemet resté ouvert ferait refuser tout le fichier par compose, et rien ne
+   démarrerait sur H0, un `$` serait interpolé par compose ; `--check` refuse une ligne dont la
+   valeur ouvre un guillemet sans le fermer, ou porte une barre oblique inverse entre guillemets
+   (compose lit `\"` comme un guillemet échappé : la valeur avalerait la ligne suivante). Édité à
+   la main, `host.env` s'écrit donc sans guillemets. La variable est nommée, jamais sa valeur. Puis
    `make glorfindel-host-push`, et sur H0 `cd ~/eregion && docker compose up -d watch` : la watch
    est recréée avec le nouvel `.env` — un `docker restart` ne relit pas `.env`, elle garderait son
    ancien environnement.

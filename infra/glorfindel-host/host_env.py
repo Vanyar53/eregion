@@ -41,10 +41,13 @@ unreadable list refuses every identity — each verb of a plan a human's step, c
 breakdown. What is said names the variable and its source, never a value; the executor's client
 id empty is said as information (ℹ): it stays empty as long as the executor is not enabled.
 
-A value written, any of COPIED, never holds a line break, a carriage return or a quote (one pair
-around it is unwrapped, as compose reads it): refused, the variable named, never the value — a
-line break would add a variable of its own to host.env, a quote left open would make compose
-refuse the whole file. `--check` refuses a line whose value opens a quote it never closes.
+A value written, any of COPIED, never holds a line break, a carriage return, a quote, a `$` or a
+backslash (one pair of quotes around it is unwrapped, as compose reads it): refused, the
+variable named, never the value — a line break would add a variable of its own to host.env, a
+quote left open would make compose refuse the whole file, a `$` would be interpolated by compose
+(`'a$HOME'` written `a$HOME`: the watch would receive a path), a backslash read as an escape.
+`--check` refuses a line whose value opens a quote it never closes, or holds a backslash inside
+quotes (`"abc\\"`: compose takes the next line into the value, or refuses the file).
 """
 from __future__ import annotations
 
@@ -90,8 +93,10 @@ EXECUTOR = "EREGION_IDENTITY_EXECUTOR_CLIENT_ID"
 # What a value written into host.env never holds (NT1 review, measured with `docker compose
 # config`): a line break adds a line — a variable of its own, which compose reads (the signed
 # queue switched on, its keys); a quote compose opens and never closes refuses the whole file, and
-# no service starts on H0. Every value copied, not only the list's.
-UNSAFE = {"\n": "a line break", "\r": "a carriage return", '"': "a quote", "'": "a quote"}
+# no service starts on H0; compose interpolates a `$` (second review: `'a$HOME'`, unwrapped, gave
+# the watch a path) and reads a backslash as an escape. Every value copied, not only the list's.
+UNSAFE = {"\n": "a line break", "\r": "a carriage return", "$": "a dollar sign", "\\": "a backslash",
+          '"': "a quote", "'": "a quote"}
 COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID",
           "GLORFINDEL_LLM_MODEL", "GLORFINDEL_LLM_BASE_URL", *MODEL_KEYS,
           "GLORFINDEL_WEBHOOK_URL", "GLORFINDEL_BACKUP_VAULT",
@@ -282,18 +287,28 @@ def token_name(env: dict) -> str:
     return ""
 
 
-def unclosed(path: Path) -> list[str]:
-    """The variables of a host.env whose value opens a quote it never closes on its line: docker
-    compose refuses the whole file (« unterminated quoted value », measured) — read on the raw
-    line, before read_env cuts a « # » inside quotes."""
-    names = []
+def _quoted(path: Path):
+    """(variable, value) of each line of a host.env whose value starts with a quote, trimmed — read
+    on the raw line, before read_env cuts a « # » inside quotes."""
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip() and not line.lstrip().startswith("#") and "=" in line:
             key, value = line.split("=", 1)
             v = value.strip()
-            if v[:1] in ("\"", "'") and v.find(v[0], 1) == -1:
-                names.append(key.strip())
-    return names
+            if v[:1] in ("\"", "'"):
+                yield key.strip(), v
+
+
+def unclosed(path: Path) -> list[str]:
+    """The variables whose value opens a quote it never closes on its line: docker compose refuses
+    the whole file (« unterminated quoted value », measured)."""
+    return [k for k, v in _quoted(path) if v.find(v[0], 1) == -1]
+
+
+def escaped(path: Path) -> list[str]:
+    """The variables with a backslash inside a quoted value: compose reads `\\"` as an escaped
+    quote — `"abc\\"` never closes, it takes the next line into the value or refuses the file
+    (second review, measured); `'a\\'` the same."""
+    return [k for k, v in _quoted(path) if "\\" in v]
 
 
 def check(dst: str) -> int:
@@ -301,6 +316,10 @@ def check(dst: str) -> int:
         raise SystemExit(f"{dst}: {', '.join(names)} opens a quote it never closes — docker compose "
                          "would refuse the whole file, and no service would start on H0. Close it, or "
                          "write the value without quotes.")
+    if names := escaped(Path(dst)):
+        raise SystemExit(f"{dst}: {', '.join(names)} holds a backslash inside quotes — docker compose "
+                         "reads it as an escape: the value may take the next line, or the whole file be "
+                         "refused. Write the value without quotes nor backslash.")
     env = read_env(Path(dst))
     name = token_name(env)
     if name and env[name].startswith("#"):

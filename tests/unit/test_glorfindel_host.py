@@ -714,10 +714,16 @@ _INJECTED = f"{H0_OID}\nEREGION_ACTION_QUEUE=1\nEREGION_QUEUE_KEYS=console:fake-
     ("GLORFINDEL_WEBHOOK_URL", 'https://example.invalid/fake-hook"', "a quote"),
     ("DISCORD_CHANNEL_ID", '"', "a quote"),
     ("EREGION_OPERATOR_OBJECT_ID", f"'{OPERATOR_OID}", "a quote"),
-], ids=["line-break", "carriage-return", "quote-inside", "quote-alone", "single-quote-open"])
+    # Second review: unwrapped, `'a$HOME'` is written `a$HOME`, which compose interpolates.
+    ("DISCORD_CHANNEL_ID", "'fake-a$HOME'", "a dollar sign"),
+    ("GLORFINDEL_WEBHOOK_URL", "https://example.invalid/fake-${HOME}", "a dollar sign"),
+    ("EREGION_OPERATOR_OBJECT_ID", f"{OPERATOR_OID}\\", "a backslash"),
+], ids=["line-break", "carriage-return", "quote-inside", "quote-alone", "single-quote-open",
+        "dollar-in-quotes", "dollar", "backslash"])
 def test_host_env_refuses_a_value_that_would_inject_into_host_env(tmp_path, monkeypatch, name, value, held):
-    """M4230–M4232, M4234: refused — the variable named, never its value — and nothing written.
-    Refusing a value badly written is not refusing an absent one: the list's absence is still said."""
+    """M4230–M4232, M4234, M4243, M4244: refused — the variable named, never its value — and
+    nothing written. Refusing a value badly written is not refusing an absent one: the list's
+    absence is still said."""
     operator = {"AZURE_SUBSCRIPTION_ID": "sub", "ANTHROPIC_API_KEY": "fake-key", **NEVER_TARGET_ENV,
                 name: value}
     with pytest.raises(SystemExit) as exc:
@@ -725,6 +731,7 @@ def test_host_env_refuses_a_value_that_would_inject_into_host_env(tmp_path, monk
     message = str(exc.value)
     assert message.startswith(f"{name} holds") and held in message
     assert "fake-" not in message and H0_OID not in message and OPERATOR_OID not in message
+    assert "HOME" not in message
     for k in list(host_env.COPIED):
         monkeypatch.delenv(k, raising=False)
     for k, v in operator.items():
@@ -745,19 +752,29 @@ def test_host_env_writes_a_sane_value_and_unwraps_one_pair_of_quotes():
     assert {k: out[k] for k in NEVER_TARGET_ENV} == NEVER_TARGET_ENV
 
 
-@pytest.mark.parametrize("line, refused", [
-    ('EREGION_PROTECTED_IDENTITIES="\n', "EREGION_PROTECTED_IDENTITIES"),
-    (f'EREGION_OPERATOR_OBJECT_ID="{OPERATOR_OID}\n', "EREGION_OPERATOR_OBJECT_ID"),
-    ("GLORFINDEL_WEBHOOK_URL='https://example.invalid/fake-hook\n", "GLORFINDEL_WEBHOOK_URL"),
+_OPEN, _ESCAPE = "opens a quote it never closes", "holds a backslash inside quotes"
+
+
+@pytest.mark.parametrize("line, refused, why", [
+    ('EREGION_PROTECTED_IDENTITIES="\n', "EREGION_PROTECTED_IDENTITIES", _OPEN),
+    (f'EREGION_OPERATOR_OBJECT_ID="{OPERATOR_OID}\n', "EREGION_OPERATOR_OBJECT_ID", _OPEN),
+    ("GLORFINDEL_WEBHOOK_URL='https://example.invalid/fake-hook\n", "GLORFINDEL_WEBHOOK_URL", _OPEN),
+    # Second review, measured: compose reads `\"` as an escaped quote — the value never closes;
+    # followed by another line, compose takes it into the value (READ_ONLY arrives empty).
+    ('EREGION_PROTECTED_IDENTITIES="fake-abc\\"\n', "EREGION_PROTECTED_IDENTITIES", _ESCAPE),
+    ('EREGION_PROTECTED_IDENTITIES="fake-abc\\"\nGLORFINDEL_READ_ONLY=1"\n', "EREGION_PROTECTED_IDENTITIES",
+     _ESCAPE),
+    ("DISCORD_CHANNEL_ID='fake-a\\'\n", "DISCORD_CHANNEL_ID", _ESCAPE),
     # Closed, a « # » inside quotes and a comment after them: compose reads both.
-    ('GLORFINDEL_WEBHOOK_URL="https://example.invalid/fake-x#y"\n', None),
-    (f'EREGION_OPERATOR_OBJECT_ID="{OPERATOR_OID}"   # note\n', None),
-    ("DISCORD_CHANNEL_ID=123\n", None),
-], ids=["quote-alone", "double-open", "single-open", "closed-with-hash", "closed-then-comment", "sane"])
-def test_check_refuses_a_quote_its_line_never_closes(tmp_path, capsys, line, refused):
-    """M4233: compose refuses a whole host.env with a quoted value left open (« unterminated
-    quoted value », measured): `--check` refuses it before the push — the variable named, never
-    the value; a closed one, or none, passes."""
+    ('GLORFINDEL_WEBHOOK_URL="https://example.invalid/fake-x#y"\n', None, None),
+    (f'EREGION_OPERATOR_OBJECT_ID="{OPERATOR_OID}"   # note\n', None, None),
+    ("DISCORD_CHANNEL_ID=123\n", None, None),
+], ids=["quote-alone", "double-open", "single-open", "escaped-close", "escaped-then-a-line",
+        "single-escaped", "closed-with-hash", "closed-then-comment", "sane"])
+def test_check_refuses_a_quote_its_line_never_closes(tmp_path, capsys, line, refused, why):
+    """M4233, M4242: compose refuses a whole host.env with a quoted value left open (« unterminated
+    quoted value », measured), and reads a backslash inside quotes as an escape: `--check` refuses
+    both before the push — the variable named, never the value; a closed one, or none, passes."""
     path = tmp_path / "host.env"
     path.write_text("EREGION_CONSOLE_TOKEN=fake-token\nANTHROPIC_API_KEY=fake-key\n" + line, encoding="utf-8")
     if refused is None:
@@ -766,7 +783,7 @@ def test_check_refuses_a_quote_its_line_never_closes(tmp_path, capsys, line, ref
     with pytest.raises(SystemExit) as exc:
         host_env.check(str(path))
     message = str(exc.value)
-    assert f"{refused} opens a quote it never closes" in message
+    assert f"{refused} {why}" in message
     assert "fake-" not in message and OPERATOR_OID not in message
 
 

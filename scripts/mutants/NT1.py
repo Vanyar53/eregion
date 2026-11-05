@@ -1,7 +1,8 @@
 """NT1 (#583): the watch reads the never_target list (eregion_core/never_target.py) — docker-compose.yml
 passes it to the watch alone, infra/glorfindel-host/host_env.py copies it into host.env and says,
 writing and at `--check`, what it lacks, never refusing; no value it copies injects a line or a
-quote into host.env (the review of febef45f). M4200–M4209 and M4230–M4234, measured by
+quote into host.env (the review of febef45f), nor a `$` or a backslash (the second, of
+aac0d1a6). M4200–M4209, M4230–M4234 and M4242–M4244, measured by
 tests/unit/test_glorfindel_host.py."""
 COMPOSE = "docker-compose.yml"
 HOST_ENV = "infra/glorfindel-host/host_env.py"
@@ -61,16 +62,29 @@ MUTANTS = [
      ""),
     ("M4232", "a quote in a copied value written as is: compose refuses the whole host.env, nothing "
      "starts on H0 (NT1 review)", HOST_ENV,
-     ''', '"': "a quote", "'": "a quote"}\n''',
-     "}\n"),
+     '''          '"': "a quote", "'": "a quote"}\n''',
+     "          }\n"),
     ("M4233", "`--check` pushes a host.env whose value opens a quote it never closes (NT1 review)",
      HOST_ENV,
-     "            if v[:1] in (\"\\\"\", \"'\") and v.find(v[0], 1) == -1:\n",
-     "            if False:\n"),
+     "    return [k for k, v in _quoted(path) if v.find(v[0], 1) == -1]\n",
+     "    return [k for k, v in _quoted(path) if False]\n"),
     ("M4234", "the refusal of an injected value prints it: a secret pasted in the wrong line shown "
      "(NT1 review)", HOST_ENV,
      "raise SystemExit(f\"{k} holds {' and '.join(held)}: written",
      "raise SystemExit(f\"{k} holds {' and '.join(held)} ({v!r}): written"),
+    # After the second review of aac0d1a6: M4242–M4244.
+    ("M4242", "`--check` pushes a backslash inside quotes: compose takes the next line into the value "
+     "(READ_ONLY empty) or refuses the file (NT1, second review)", HOST_ENV,
+     '    return [k for k, v in _quoted(path) if "\\\\" in v]\n',
+     "    return [k for k, v in _quoted(path) if False]\n"),
+    ("M4243", "a `$` in a copied value written as is: compose interpolates it, the watch receives a "
+     "path (NT1, second review)", HOST_ENV,
+     '"$": "a dollar sign", ',
+     ""),
+    ("M4244", "a backslash in a copied value written as is: compose reads an escape (NT1, second "
+     "review)", HOST_ENV,
+     '"\\\\": "a backslash",',
+     ""),
 ]
 TESTS = {
     "M4200": _ALONE,
@@ -88,4 +102,7 @@ TESTS = {
     "M4232": _INJECT,
     "M4233": f"{_HOST}test_check_refuses_a_quote_its_line_never_closes",
     "M4234": _INJECT,
+    "M4242": f"{_HOST}test_check_refuses_a_quote_its_line_never_closes",
+    "M4243": _INJECT,
+    "M4244": _INJECT,
 }

@@ -67,9 +67,10 @@ seul sur le banc, dans le mode de chaque VM.
     `docs/operations.md`, « L'exécuteur d'identité », geste 6). Vide ou mal écrite, l'écriture et
     `--check` le disent, sans refuser : la liste est alors illisible, et chaque verbe d'un plan une
     étape de l'humain. Une valeur recopiée (de n'importe quelle variable) qui porte un saut de
-    ligne, un retour chariot ou un guillemet est en revanche refusée, la variable nommée, jamais sa
-    valeur : elle injecterait une variable dans `host.env`, ou ferait refuser tout le fichier par
-    compose ; `--check` refuse un guillemet ouvert jamais fermé.
+    ligne, un retour chariot, un guillemet, un `$` ou une barre oblique inverse est en revanche
+    refusée, la variable nommée, jamais sa valeur : elle injecterait une variable dans `host.env`,
+    serait interpolée par compose, ou ferait refuser tout le fichier ; `--check` refuse un guillemet
+    ouvert jamais fermé, et une barre oblique inverse entre guillemets.
   - **Un `make glorfindel-host-push` garde le mode de chaque VM** tel qu'il est sur H0
     (décision de Jonathan, 02/11 ; avant, SEC7 remettait toutes les VM en `human_only` à
     chaque push, et la posture se redonnait dans la console). Le push lit la config en place

@@ -659,3 +659,28 @@ def test_a_redirection_is_never_followed():
     with pytest.raises(Unreadable) as exc:
         r.get(f"/applications/{APP}")
     assert exc.value.kind == "error" and s.redirects is False
+
+
+# ── Relecture 2 (05/11) : a 404 is never « removed » ──────────────────────────────────────────
+
+def test_a_404_on_a_members_filtered_roles_is_unreadable_never_held(monkeypatch):
+    """An unknown member is a 200 and an empty list: a 404 there says nothing of the member."""
+    g = FakeGraph()
+    monkeypatch.setattr(g, "list", lambda path, params=None, deadline=None: None)
+    out = entra_check.check_item({"kind": "role_gone", "member": USER, "role_definition_id": ROLE_DEF,
+                                  "eligible": False}, g)
+    assert out["state"] == "unreadable"
+    assert entra_check.check_item({"kind": "role_gone", "member": USER, "role_definition_id": ROLE_DEF,
+                                   "eligible": False}, FakeGraph())["state"] == "held"    # 200, empty: held
+
+
+def test_a_deleted_application_still_holds_its_federated_credential_for_all_we_know():
+    """Deleted, an application is restored for 30 days with its credentials: unreadable, never held."""
+    out = entra_check.check_item({"kind": "federated_gone", "id": APP, "fic_id": FIC}, FakeGraph())
+    assert out["state"] == "unreadable" and "30 jours" in out["why"]
+
+
+def test_a_deleted_client_still_holds_its_app_role_assignment_for_all_we_know():
+    out = entra_check.check_item({"kind": "assignment_gone", "client": SP, "assignment_id": APP_ROLE_ASSIGNMENT},
+                                 FakeGraph())
+    assert out["state"] == "unreadable" and "30 jours" in out["why"]

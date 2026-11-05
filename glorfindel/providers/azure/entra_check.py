@@ -62,8 +62,9 @@ def _federated_gone(c: dict, reader) -> dict:
     if not (oid and fic):
         return _r(UNREADABLE, "vérification mal formée")
     fics = reader.list(f"/applications/{oid}/federatedIdentityCredentials")
-    if fics is None:
-        return _r(HELD, "l'application n'existe plus dans Graph")
+    if not isinstance(fics, list):      # deleted, an application is restored for 30 days, credentials too
+        return _r(UNREADABLE, "l'application n'est pas rendue par Graph (supprimée ? elle se restaure 30 jours, "
+                              "avec ses identifiants)")
     return _r(NOT_HELD, "l'identifiant fédéré est encore sur l'application") \
         if fic in {guid(f.get("id")) for f in fics} else _r(HELD, "l'identifiant fédéré n'y est plus")
 
@@ -128,8 +129,9 @@ def _assignment_gone(c: dict, reader) -> dict:
     if not (client and aid):
         return _r(UNREADABLE, "vérification mal formée")
     roles = reader.list(f"/servicePrincipals/{client}/appRoleAssignments")
-    if roles is None:
-        return _r(HELD, "l'application cliente n'existe plus dans Graph")
+    if not isinstance(roles, list):     # deleted, a principal is restored for 30 days, assignments too
+        return _r(UNREADABLE, "l'application cliente n'est pas rendue par Graph (supprimée ? elle se restaure "
+                              "30 jours)")
     return _r(NOT_HELD, "l'attribution est encore là") if aid in {str(a.get("id") or "") for a in roles} \
         else _r(HELD, "l'attribution n'y est plus")
 
@@ -163,8 +165,8 @@ def _role_gone(c: dict, reader) -> dict:
     coll = "roleEligibilitySchedules" if c.get("eligible") else "roleAssignments"
     found = reader.list(f"/roleManagement/directory/{coll}",
                         {"$filter": f"principalId eq '{member}'", "$expand": "roleDefinition"})
-    if found is None:
-        return _r(HELD, "le membre n'existe plus dans Graph")
+    # A filtered collection: an unknown member is a 200 and an empty list, never a 404 — a 404 says
+    # nothing of the member.
     if not isinstance(found, list):
         return _r(UNREADABLE, "les attributions du membre ne sont pas rendues par Graph")
     left, unsure = 0, 0

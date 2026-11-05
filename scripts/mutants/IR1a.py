@@ -3,7 +3,7 @@ list, never autonomous, always a human's, never in what the model reads; the pla
 Graph or the log, never invented, never a value of the log that is no id in a command; the check
 never « held » without Graph's answer; Graph read only, its answers told apart; Glorfindel's
 identity and never_target turned into a human's steps; the plan on the card, escaped on the page.
-M3880–M3899 and M3955–M3964 (the first review), measured by tests/unit/test_identity_plan.py and
+M3880–M3899, M3955–M3964 (the first review) and M3970–M3972 (the second), measured by tests/unit/test_identity_plan.py and
 tests/unit/test_console_identity_plan.py (the page: tests/unit/test_console_escaping.py)."""
 POLICY = "glorfindel/response/policy.py"
 AGENT = "glorfindel/agent.py"
@@ -110,8 +110,21 @@ MUTANTS = [
     ("M3964", "a redirection followed off Graph (IR1a r1)", GRAPH,
      "                            params=params, timeout=timeout, allow_redirects=False)\n",
      "                            params=params, timeout=timeout)\n"),
+    # Relecture 2 (05/11): M3970–M3972.
+    ("M3970", "a 404 on a member's filtered roles said held (IR1a r2)", CHECK,
+     "    if not isinstance(found, list):\n        return _r(UNREADABLE, \"les attributions du membre ne sont pas rendues par Graph\")\n",
+     "    if found is None:\n        return _r(HELD, \"le membre n'existe plus\")\n"
+     "    if not isinstance(found, list):\n        return _r(UNREADABLE, \"les attributions du membre ne sont pas rendues par Graph\")\n"),
+    ("M3971", "a deleted application said rid of its federated credential: it is restored for 30 days (IR1a r2)", CHECK,
+     "    if not isinstance(fics, list):      # deleted, an application is restored for 30 days, credentials too\n",
+     "    if fics is None:\n        return _r(HELD, \"supprimée\")\n"
+     "    if not isinstance(fics, list):      # deleted, an application is restored for 30 days, credentials too\n"),
+    ("M3972", "a deleted client said rid of its app role assignment: it is restored for 30 days (IR1a r2)", CHECK,
+     "    if not isinstance(roles, list):     # deleted, a principal is restored for 30 days, assignments too\n",
+     "    if roles is None:\n        return _r(HELD, \"supprimée\")\n"
+     "    if not isinstance(roles, list):     # deleted, a principal is restored for 30 days, assignments too\n"),
 ]
-TESTS = {f"M{n}": _PLAN for n in list(range(3880, 3900)) + list(range(3955, 3965))}
+TESTS = {f"M{n}": _PLAN for n in list(range(3880, 3900)) + list(range(3955, 3965)) + list(range(3970, 3973))}
 TESTS["M3884"] = _CONSOLE
 TESTS["M3898"] = f"{_CONSOLE} tests/unit/test_console_escaping.py"
 TESTS["M3899"] = f"{_PLAN} tests/unit/test_entra_detection.py"

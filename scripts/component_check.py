@@ -94,7 +94,7 @@ COMPONENTS: dict[str, Component] = {
             "test_annatar_run_exit.py", "test_annatar_wire.py", "test_campaign_channel.py", "test_campaign_declared.py",
             "test_campaign_manifest.py",
             "test_campaign_planner.py", "test_campaign_runner.py", "test_campaign_synthesizer.py", "test_campaign_drill.py",
-            "test_engine.py", "test_injector_guards.py", "test_inscription.py", "test_orodruin.py", "test_parser.py",
+            "test_engine.py", "test_identity_inscription.py", "test_injector_guards.py", "test_inscription.py", "test_orodruin.py", "test_parser.py",
             "test_signals.py",
         ),
     ),

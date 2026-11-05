@@ -127,8 +127,10 @@ GRAPH_READ_ONLY = frozenset({"Application.Read.All", "RoleManagement.Read.Direct
 # (published decoded tokens of managed identities) — not a built-in role's template id.
 # Hypothesis, to measure on Orodruin (`make orodruin-check`): any other value is a role — passive
 # once the Graph read is declared, said before.
-GRAPH_DECLARED_ENV = "EREGION_TENANT_ID"
 APP_DEFAULT_WIDS = frozenset({"0997a1d0-0d1d-4acb-b408-d5ca73121e90"})
+# The Graph read is declared when orodruin.env names the bench's tenant; undeclared, a ``wids``
+# outside the hypothesis or a token not had is only said — until IDI1s (#559) makes it strict.
+GRAPH_DECLARED_ENV = "EREGION_TENANT_ID"
 
 # Outside the perimeter (bench control plane, Entra ID, the model's API): reaching any
 # of these means the egress is open. Addresses, not names — DNS stays allowed.

@@ -2182,8 +2182,9 @@ mesurait en entier le commit publié.
   SHA-256 de l'archive et le charge comme un test. Le modèle déjà là, rien ne part sur le réseau ;
   sans ChromaDB, rien à préparer. Les runs héritent du `HOME` du harnais, donc du même cache. Un échec
   (pas de réseau, un cache illisible) est dit, avec son erreur et quoi faire ; les runs continuent comme
-  avant, et cet échec n'arrête jamais une tranche ni n'attrape un mutant. La mesure du lundi et un run
-  local en profitent de même ;
+  avant, et cet échec n'arrête jamais une tranche ni n'attrape un mutant. Les jobs `mutants` et
+  `control` restaurent aussi le cache `chroma-onnx-v1`, comme `invariants` et `ci.yml`, par la même
+  action épinglée par commit. La mesure du lundi et un run local en profitent de même ;
 - `terraform` : les tests Terraform de `ci.yml`, mot pour mot (providers simulés) ;
 - `macos` : le job macOS de `ci.yml`, mot pour mot, qu'une PR ne lance plus (CI5). **Il informe, il ne
   bloque pas** (décision de Jonathan du 04/11, H1c, #518 : seuls les checks requis bloquent, comme pour

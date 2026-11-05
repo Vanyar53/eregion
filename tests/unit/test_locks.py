@@ -173,18 +173,24 @@ def test_concurrent_writers_lose_no_card_and_no_reader_sees_half_a_store(tmp_pat
 
 
 class _ReadMidWrite:
-    """A file being written: half of each write done, then a reader reads the store (`look`), then
-    the rest — the moment a reader in another process may fall on."""
+    """A file being written, a reader reading the store (`look`) at several cuts of each write — a
+    quarter, a half, three quarters, and one character before its end: never only on a line's edge,
+    where a store rewritten in place would read as the one before (CI6e, review: two cards of one
+    length, cut at the half, read whole). The moments a reader in another process may fall on."""
 
     def __init__(self, f, look):
         self._f, self._look = f, look
 
     def write(self, text):
-        half = len(text) // 2
-        n = self._f.write(text[:half])
-        self._f.flush()
-        self._look()
-        return n + self._f.write(text[half:])
+        cuts = sorted({c for c in (len(text) // 4, len(text) // 2, 3 * len(text) // 4, len(text) - 1)
+                       if 0 < c < len(text)})
+        done, n = 0, 0
+        for cut in cuts:
+            n += self._f.write(text[done:cut])
+            self._f.flush()
+            self._look()
+            done = cut
+        return n + self._f.write(text[done:])
 
     def __enter__(self):
         return self
@@ -198,9 +204,10 @@ class _ReadMidWrite:
 
 def test_a_concurrent_reader_mid_write_reads_the_store_whole_never_half(monkeypatch):
     """CI6e (#553, M1223, M1224): the race above reads half a store only at times. Here the reader
-    reads at the worst moment, at every write: half of it done. The store is rewritten whole,
-    through a temporary file — the reader reads it as it was, whole: never a store cut short
-    (rewritten in place), nor half a line (a card appended)."""
+    reads at the worst moments, at every write: a quarter, a half, three quarters of it done, and
+    all but its last character. The store is rewritten whole, through a temporary file — the reader
+    reads it as it was, whole: never a store cut short (rewritten in place, M1223), nor half a line
+    (a card appended, M1224). The two cards differ in length: no cut falls on the first's end."""
     import builtins
     import io
     from glorfindel import escalations
@@ -216,11 +223,12 @@ def test_a_concurrent_reader_mid_write_reads_the_store_whole_never_half(monkeypa
     with monkeypatch.context() as m:
         m.setattr(io, "open", opening)               # Path.open, os.fdopen
         m.setattr(builtins, "open", opening)         # open()
-        escalations.record(signal_id="s-2", resource_id="/subscriptions/s/vm/b", action="isolate_vm",
-                           escalation_type="mode_hold", reason="r")
+        escalations.record(signal_id="s-2", resource_id="/subscriptions/s/vm/b-of-another-length",
+                           action="isolate_vm", escalation_type="mode_hold", reason="r, said at more length")
     after = store.read_text()
     assert seen, "no write of the store went through open: nothing was read mid-write"
     assert after.startswith(before) and len(after.splitlines()) == 2
+    assert len(seen) >= 4 and len(after) != 2 * len(before)
     assert all(text in (before, after) for text in seen), seen
 
 

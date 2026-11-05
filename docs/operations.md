@@ -1650,9 +1650,11 @@ Décidé par Jonathan le 31/10, sur le modèle du verrou Python. Chaque module (
 - **La CI** (`ci.yml`, job `terraform-test`) installe Terraform à la version épinglée, avec la clé
   de HashiCorp vérifiée par son empreinte, comme le canari. Elle fait ensuite
   `init -backend=false -lockfile=readonly` sur chaque module : un paquet dont l'empreinte ne
-  correspond pas, ou un provider absent du verrou, fait échouer `init` (vérifié le 02/11). Enfin,
-  `terraform test` sur Celebrimbor (ID1, G1), et `validate` sur les deux autres modules, qui
-  n'ont pas encore de test. Aucun identifiant Azure : uniquement de faux providers.
+  correspond pas, ou un provider absent du verrou, fait échouer `init` (vérifié le 02/11). `init` a
+  son étape à part, retentée (CI8, « Ce que la CI retente »). Enfin, `terraform test` sur chaque
+  module (précédé de `validate` pour les deux derniers) : Celebrimbor (ID1, G1), l'hôte de Glorfindel (SEC11) et Orodruin depuis CI7
+  (#554 : `watch_writers`, WC1 ; `graph_read`, IDI1). Aucun identifiant Azure : uniquement de faux
+  providers.
 - **Le canari** (`infra/canary/`) n'est pas concerné : il teste chaque jour le dernier azurerm.
   C'est son rôle.
 - **Une fois, sur un poste où ces modules ont déjà servi** : les verrous y étaient locaux et

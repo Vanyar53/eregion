@@ -43,6 +43,20 @@ principal of a resource, whoever owns one of them — is the shared list of
 enrolled (``privilege_refusal``): a directory role active or eligible, a membership, an object
 owned, an application permission (none is admitted) — IR1's executor will own what is enrolled. A read that
 fails refuses.
+
+A test user of Entra ID (IDI1b, #573) carries no tags either: it is enrolled by two halves, the way
+a VM is by its group and itself — ``user_enrollment``:
+
+  1. the unit: the bench's RESTRICTED administrative unit holds it — the group's equivalent,
+     posed by Celebrimbor, pinned by its object id (``EREGION_BENCH_ADMIN_UNIT_ID``), never looked
+     up by its name; in a restricted unit, only an administrator at its scope manages its members;
+  2. the attribute: a custom security attribute of Eregion's set, on the user itself, names the
+     bench and the zone (``Eregion.eregionTarget``, ``Eregion.eregionZone``: an attribute's name
+     admits no hyphen). User Administrator does not write it: the executor of IR1, which holds that
+     role at the unit's scope, can neither enroll nor unenroll a user.
+
+A half missing, two halves that disagree (another bench, a zone that is not the unit's), a guest,
+a role, a group, an object owned, an identity of ``never_target``: refused, as for a VM.
 """
 
 from __future__ import annotations
@@ -426,6 +440,18 @@ _GUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 ADMITTED_APP_PERMISSIONS: tuple[str, ...] = ()
 _READ_ONLY_ROLE = re.compile(r"[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*\.Read(?:\.All)?")
 
+# A test user (IDI1b, #573): the unit and the attribute. The names are those Celebrimbor poses
+# (infra/terraform/scripts/entra_bench_unit.py, entra_bench_unit.tf); an attribute's name admits no
+# hyphen, so eregion-target is written eregionTarget there, and the guard maps one onto the other.
+ADMIN_UNIT_ENV = "EREGION_BENCH_ADMIN_UNIT_ID"
+ATTRIBUTE_SET = "Eregion"
+ATTRIBUTE_NAMES = {TARGET_TAG: "eregionTarget", ZONE_TAG: "eregionZone"}
+# The bench's unit is Celebrimbor's, in zone bench by construction (locals.tf, common_tags): a user
+# it holds is in zone bench, and its attribute must say so — two halves that disagree refuse.
+UNIT_ZONE = "bench"
+MEMBER_USER = "Member"
+ADMIN_UNIT_TYPE = "#microsoft.graph.administrativeUnit"
+
 
 @dataclass(frozen=True)
 class IdentityScope:
@@ -437,6 +463,9 @@ class IdentityScope:
     subscription_id: str = ""
     resource_group: str = ""
     never: NeverTarget | None = None
+    # IDI1b: the bench's restricted administrative unit, by its object id (terraform output
+    # entra_bench_unit_id of infra/terraform) — "" names none, and no user is enrolled.
+    admin_unit_id: str = ""
 
     @classmethod
     def for_bench(cls, env=None) -> "IdentityScope":
@@ -447,7 +476,7 @@ class IdentityScope:
         return cls(bench=bench, tenant_id=_guid(env.get(TENANT_ENV)),
                    subscription_id=(env.get(SUBSCRIPTION_ENV) or "").strip(),
                    resource_group=(env.get(BENCH_RG_ENV) or f"rg-{bench}").strip(),
-                   never=NeverTarget.from_env(env))
+                   never=NeverTarget.from_env(env), admin_unit_id=_guid(env.get(ADMIN_UNIT_ENV)))
 
 
 def _scope_refusal(scope: IdentityScope) -> str:
@@ -574,6 +603,131 @@ def check_identity(identity: dict, rg_tags: dict | None, *, scope: IdentityScope
     return check_zone(enrolled.zone, kind=kind, destructive=destructive)
 
 
+# ── A test user of Entra ID (IDI1b, #573): the unit and the attribute ──────────────────
+
+def user_privilege_refusal(user: dict) -> str:
+    """Why this user is privileged — never enrolled — or "". ``user``: ``directory_roles`` (active
+    and eligible, at any scope), ``member_of`` (transitively, each with its ``@odata.type``: a group
+    or a directory role refuses; an administrative unit is judged by ``user_enrollment``), ``owned``
+    (owning a group with a role is holding it), ``app_roles_held`` (its application role
+    assignments). Each must have been read: absent, it refuses. A User Administrator at the unit's
+    scope manages only a member without a role (docs/design/reponse-identite.md §3.6): a member with
+    one would be out of the executor's reach, and its own rights within reach of whoever takes it."""
+    keys = ("directory_roles", "member_of", "owned", "app_roles_held")
+    if any(not isinstance(user.get(k), list) for k in keys):
+        return "its roles, memberships and ownerships are not all read: a privileged user is never enrolled"
+    if user["directory_roles"]:
+        return (f"it holds {len(user['directory_roles'])} directory role(s), active or eligible: a "
+                "privileged user is never enrolled")
+    groups = [m for m in user["member_of"]
+              if not (isinstance(m, dict) and m.get("@odata.type") == ADMIN_UNIT_TYPE)]
+    if groups:
+        return "it is a member of a group or a directory role (a group can carry a role): never enrolled"
+    if user["owned"]:
+        return f"it owns {len(user['owned'])} object(s) (an owner acts as what it owns): never enrolled"
+    if user["app_roles_held"]:
+        return (f"it holds {len(user['app_roles_held'])} application role(s): a test user holds none, "
+                "never enrolled")
+    return ""
+
+
+def _user_attributes(csa) -> tuple[dict, str]:
+    """The attributes of Eregion's set on a user, names in lower case (any case matched), values as
+    written; and why they cannot be read so (unread, the set absent or twice, a name twice)."""
+    if not isinstance(csa, dict):
+        return {}, ("its custom security attributes are not read (Attribute Assignment Reader, or "
+                    "CustomSecAttributeAssignment.Read.All): the attribute half is missing")
+    sets = [v for k, v in csa.items() if str(k).lower() == ATTRIBUTE_SET.lower()]
+    if not sets:
+        return {}, (f"it carries no attribute of the set '{ATTRIBUTE_SET}': the attribute half is "
+                    "missing")
+    if len(sets) > 1 or not isinstance(sets[0], dict):
+        return {}, f"the set '{ATTRIBUTE_SET}' is read twice, or not as attributes"
+    out: dict = {}
+    for name, value in sets[0].items():
+        name = str(name).lower()
+        if name.startswith("@odata"):
+            continue
+        if name in out:
+            return {}, f"it carries '{ATTRIBUTE_SET}.{name}' twice"
+        out[name] = value
+    return out, ""
+
+
+def user_enrollment(user: dict, unit: dict, *, scope: IdentityScope, token: dict) -> GuardResult:
+    """Is this user enrolled for the bench? ``user`` as Graph returned it — ``id``, ``userType``,
+    ``customSecurityAttributes``, and what ``user_privilege_refusal`` reads; ``unit``, the bench's
+    administrative unit — ``id``, ``isMemberManagementRestricted``, ``members`` (their object ids);
+    ``token``, the claims of the reader's own Graph token. Both halves, or nothing: the unit holds the
+    user, and the attribute names the bench and the unit's zone."""
+    why = _scope_refusal(scope)
+    if why:
+        return GuardResult(False, why)
+    if not scope.admin_unit_id:
+        return GuardResult(False, f"the scope names no administrative unit of the bench ({ADMIN_UNIT_ENV}): "
+                                  "no user is enrolled")
+    if _guid(token.get("tid")) != scope.tenant_id:
+        return GuardResult(False, "the reader's token is not of the bench's tenant")
+    uid = _guid(user.get("id"))
+    if not uid:
+        return GuardResult(False, "the user names no object id")
+    # Never a target: the operators, the break-glass accounts, Glorfindel, Orodruin, the reader.
+    reader = {_guid(token.get("oid")), _guid(token.get("appid"))} - {""}
+    if scope.never.covers(uid) or uid in reader:
+        return GuardResult(False, "a protected identity (an operator, a break-glass account, Glorfindel, "
+                                  "Orodruin, the reader) is never a target")
+    if str(user.get("userType") or "") != MEMBER_USER:
+        return GuardResult(False, f"a user of type '{user.get('userType')}', not a {MEMBER_USER} of the "
+                                  "bench's tenant: a guest is another tenant's")
+    why = user_privilege_refusal(user)
+    if why:
+        return GuardResult(False, why)
+
+    # The unit's half: the bench's restricted unit, pinned by its id, holds the user.
+    if _guid(unit.get("id")) != scope.admin_unit_id:
+        return GuardResult(False, "the administrative unit read is not the bench's (its pinned id)")
+    if unit.get("isMemberManagementRestricted") is not True:
+        return GuardResult(False, "the bench's administrative unit is not restricted: a tenant's "
+                                  "administrator would manage its members, the enrollment untraced")
+    members = unit.get("members")
+    if not isinstance(members, list):
+        return GuardResult(False, "the bench's unit's members are not read: the unit's half is missing")
+    if uid not in {_guid(m) for m in members}:
+        return GuardResult(False, "the user is not a member of the bench's administrative unit: a user "
+                                  "is enrolled by both halves")
+    others = {_guid(m.get("id")) for m in user["member_of"]
+              if isinstance(m, dict) and m.get("@odata.type") == ADMIN_UNIT_TYPE} - {scope.admin_unit_id}
+    if others:
+        return GuardResult(False, "the user is a member of another administrative unit: within another "
+                                  "administrator's reach, never enrolled")
+
+    # The attribute's half: Eregion's set names the bench and the zone, on the user itself.
+    attrs, why = _user_attributes(user.get("customSecurityAttributes"))
+    if why:
+        return GuardResult(False, why)
+    target_name = ATTRIBUTE_NAMES[TARGET_TAG]
+    target = attrs.get(target_name.lower())
+    if target is None:
+        return GuardResult(False, f"the user does not carry '{ATTRIBUTE_SET}.{target_name}={scope.bench}'")
+    if target != scope.bench:
+        return GuardResult(False, f"the user is enrolled for bench '{target}', not '{scope.bench}'")
+    zone_name = ATTRIBUTE_NAMES[ZONE_TAG]
+    zone = attrs.get(zone_name.lower())
+    if not isinstance(zone, str) or zone not in ZONES:
+        return GuardResult(False, f"the user's zone '{zone}' — '{ATTRIBUTE_SET}.{zone_name}' must be "
+                                  f"one of {', '.join(ZONES)}")
+    if zone != UNIT_ZONE:
+        return GuardResult(False, f"zones disagree: the bench's unit '{UNIT_ZONE}', the user '{zone}'")
+    return GuardResult(True, zone=zone)
+
+
+def check_user(user: dict, unit: dict, *, scope: IdentityScope, token: dict, kind: str,
+               destructive: bool | None) -> GuardResult:
+    """Everything, for a test user: its enrollment by both halves, then its zone."""
+    enrolled = user_enrollment(user, unit, scope=scope, token=token)
+    return check_zone(enrolled.zone, kind=kind, destructive=destructive) if enrolled.allowed else enrolled
+
+
 GRAPH = "https://graph.microsoft.com"
 _GRAPH_SCOPE = f"{GRAPH}/.default"
 _GRAPH_V1 = f"{GRAPH}/v1.0"
@@ -691,30 +845,81 @@ class GraphEnrollment:
         return check_identity(identity, rg_tags, scope=self.scope, token=claims,
                               kind=kind, destructive=destructive)
 
+    def read_user(self, user_object_id: str) -> tuple[dict, dict, dict]:
+        """(the user as Graph says it, the bench's unit, the reader's token claims), for a test
+        user (IDI1b). Graph only: the user with its custom security attributes, its memberships (each
+        with its type), what it owns, its application roles, its directory roles active and
+        eligible; the unit pinned by its id, restricted or not, and its members. The rights this
+        asks (hypotheses, docs/operations.md, « Les utilisateurs de test du banc ») are not
+        Orodruin's yet: until they are, a read fails, and the user is refused."""
+        oid = _guid(user_object_id)
+        if not oid:
+            raise ValueError("not a user's object id")
+        unit_id = self.scope.admin_unit_id
+        if not unit_id:
+            raise ValueError(f"the bench's administrative unit is not named ({ADMIN_UNIT_ENV})")
+        token = self._token(_GRAPH_SCOPE)
+        claims = token_claims(token)
+        g = {"Authorization": f"Bearer {token}"}
+        user = self._read(f"{_GRAPH_V1}/users/{oid}", g, {"$select": "id,userType,customSecurityAttributes"})
+        if _guid(user.get("id")) != oid:
+            raise RuntimeError("Graph answered for another user")
+        base = f"{_GRAPH_V1}/users/{oid}"
+        member_of = [{"id": str(o.get("id") or ""), "@odata.type": str(o.get("@odata.type") or "")}
+                     for o in self._pages(f"{base}/transitiveMemberOf", g, {"$select": "id"})]
+        owned = [str(o.get("id") or "") for o in self._pages(f"{base}/ownedObjects", g, {"$select": "id"})]
+        held = self._pages(f"{base}/appRoleAssignments", g, None)
+        by_user = {"$filter": f"principalId eq '{oid}'"}
+        roles = [*self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleAssignments", g, by_user),
+                 *self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleEligibilityScheduleInstances", g, by_user)]
+        unit_url = f"{_GRAPH_V1}/directory/administrativeUnits/{unit_id}"
+        unit = self._read(unit_url, g, {"$select": "id,isMemberManagementRestricted"})
+        members = [str(o.get("id") or "") for o in self._pages(f"{unit_url}/members", g, {"$select": "id"})]
+        out = {"id": user.get("id"), "userType": user.get("userType"),
+               "customSecurityAttributes": user.get("customSecurityAttributes"),
+               "member_of": member_of, "owned": owned, "app_roles_held": held, "directory_roles": roles}
+        return out, {"id": unit.get("id"), "isMemberManagementRestricted": unit.get("isMemberManagementRestricted"),
+                     "members": members}, claims
+
+    def check_user(self, user_object_id: str, *, kind: str, destructive: bool | None) -> GuardResult:
+        """The verdict for an experiment, or a verb of IR1, on this test user, read now. The scope is
+        judged before any token is asked for."""
+        why = _scope_refusal(self.scope)
+        if why:
+            return GuardResult(False, why)
+        try:
+            user, unit, claims = self.read_user(user_object_id)
+        except Exception as e:
+            return GuardResult(False, f"user unreadable: {type(e).__name__}: {e}"[:300])
+        return check_user(user, unit, scope=self.scope, token=claims, kind=kind, destructive=destructive)
+
 
 def main(argv: list[str] | None = None) -> int:
     """``python -m eregion_core.inscription identity <application object id>`` — on Orodruin,
-    with its env: is this application enrolled, and what may run on it. Exit 0 if a
-    non-destructive technique would pass."""
+    with its env: is this application enrolled, and what may run on it. ``user <user object id>``:
+    the same for a test user (IDI1b). Exit 0 if a non-destructive technique would pass."""
     import sys
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 2 or args[0] != "identity":
-        print("usage: python -m eregion_core.inscription identity <application object id>")
+    if len(args) != 2 or args[0] not in ("identity", "user"):
+        print("usage: python -m eregion_core.inscription identity <application object id>\n"
+              "       python -m eregion_core.inscription user <user object id>")
         return 2
     reader = GraphEnrollment()
+    read_it, judge, what = ((reader.read, check_identity, "identity") if args[0] == "identity"
+                            else (reader.read_user, check_user, "user"))
     why, read = _scope_refusal(reader.scope), None
     try:
-        read = None if why else reader.read(args[1])
+        read = None if why else read_it(args[1])
     except Exception as e:
-        why = f"identity unreadable: {type(e).__name__}: {e}"[:300]
+        why = f"{what} unreadable: {type(e).__name__}: {e}"[:300]
     if read is None:
         print(f"  refused — {why}")
         return 1
     identity, rg_tags, claims = read
     allowed = False
     for destructive in (False, True):
-        v = check_identity(identity, rg_tags, scope=reader.scope, token=claims,
-                           kind="technique", destructive=destructive)
+        v = judge(identity, rg_tags, scope=reader.scope, token=claims,
+                  kind="technique", destructive=destructive)
         what = "destructive" if destructive else "non-destructive"
         print(f"  {what} technique: " + (f"allowed (zone {v.zone})" if v.allowed else f"refused — {v.reason}"))
         allowed = allowed or (v.allowed and not destructive)

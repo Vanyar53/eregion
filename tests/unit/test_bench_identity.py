@@ -72,7 +72,14 @@ def test_the_test_identity_has_no_secret_no_right_no_owner():
     entra-credential-added sees it); no permission asked, no role, no consent."""
     every = "\n".join(p.read_text(encoding="utf-8") for p in TF.glob("*.tf"))
     resources = set(re.findall(r'resource "(azuread_\w+)"', every))
-    assert resources == {"azuread_application", "azuread_service_principal"}
+    # IDI1b adds the bench's test users, their unit membership and the executor's roles
+    # (entra_bench_unit.tf, tests/unit/test_bench_users.py): still no secret, no consent, no owner.
+    assert resources == {"azuread_application", "azuread_service_principal", "azuread_user",
+                         "azuread_administrative_unit_member", "azuread_directory_role_assignment"}
+    for word in ("azuread_application_password", "azuread_service_principal_password", "azuread_application_certificate",
+                 "azuread_application_federated_identity_credential", "azuread_app_role_assignment",
+                 "azuread_service_principal_delegated_permission_grant", "azuread_application_owner"):
+        assert f'resource "{word}"' not in every, word
     app = _block(_identity_tf(), "resource", "azuread_application\" \"bench_test")
     for word in ("password", "certificate", "federated", "required_resource_access", "owners", "app_role "):
         assert word not in app, word

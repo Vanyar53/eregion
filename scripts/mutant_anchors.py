@@ -3,7 +3,9 @@ unique, every mutant one the harness can apply (else it skips it as STALE), and 
 defined before the `__main__` guard of the harness (else the harness never sees it). The two
 places a mutant is written are read: the harness's own blocks, and each lot's file,
 scripts/mutants/<lot>.py, which the harness loads (CI5, #512). An id two places take is a fault
-naming them; so is a lot's file without a mutant, or whose TESTS names another's mutant.
+naming them; so is a lot's file without a mutant, or whose TESTS names another's mutant; so is
+a reason (a mutant's sixth field) whose mark the harness does not read (CI6e, #553): its mutant
+would be taken for an unknown survivor.
 
     python scripts/mutant_anchors.py            # the checkout this script is in
     python scripts/mutant_anchors.py /path/to/a/worktree
@@ -121,6 +123,20 @@ def lot_faults(mutants: list, lots: dict) -> list[str]:
     return faults
 
 
+def reason_faults(mutants: list, marks: tuple) -> list[str]:
+    """A mutant whose reason opens with no mark the harness reads (`MARK: why`, MARK one of
+    `marks`, the harness's KNOWN_MARKS): the harness takes it for an unknown survivor (CI6e)."""
+    faults = []
+    for m in mutants:
+        if len(m) <= 5:
+            continue
+        word, colon, _ = m[5].partition(":") if isinstance(m[5], str) else ("", "", "")
+        if not (colon and word in marks):
+            faults.append(f"{m[0]}: its reason opens with no mark the harness reads ({', '.join(marks)}, then "
+                          f"a colon): {str(m[5])[:60]!r}")
+    return faults
+
+
 def check(root: Path) -> list[str]:
     spec = importlib.util.spec_from_file_location("mutation_check", root / HARNESS)
     mc = importlib.util.module_from_spec(spec)
@@ -134,6 +150,7 @@ def check(root: Path) -> list[str]:
                for rel in lots if rel not in tracked]
     faults += [f for m in mutants if (f := _fault(m, getattr(mc, "RENAME", None), root, tracked))]
     faults += after_guard((root / "scripts/mutation_check.py").read_text())
+    faults += reason_faults(mutants, tuple(getattr(mc, "KNOWN_MARKS", ())))
     print(f"{len(mc.MUTANTS)} mutants and {len(mutants) - len(mc.MUTANTS)} of the control set "
           f"({len(lots)} lot file(s) in scripts/mutants/), {len(faults)} fault(s)")
     return faults

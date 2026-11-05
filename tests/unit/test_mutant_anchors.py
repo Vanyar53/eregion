@@ -214,3 +214,35 @@ def test_the_harness_loads_each_lot_s_file_its_tests_and_never_another_s(tmp_pat
     assert mc.TESTS["M9001"] == "tests/unit/test_a.py tests/unit/test_more.py"
     assert mc.TESTS["M9005"] == "tests/unit/test_f.py"
     assert mc.TESTS["M01"] == f"{mc.INVARIANTS} tests/unit/test_more.py"   # its own, then the lot's
+
+
+def test_a_reason_the_harness_does_not_read_is_a_fault():
+    """CI6e (#553): a reason opens with a mark the harness reads, then a colon — else its mutant is
+    taken for an unknown survivor, and the gate goes red on a mutant that says why. Every reason of
+    the tree is one it reads."""
+    marks = ("EQUIVALENT", "MULTI-HOST", "TIMING")
+    ok = [("M1", "a b", "f", "o", "n"), ("M2", "a b", "f", "o", "n", "TIMING: at times"),
+          ("M3", "a b", "f", "o", "n", "MULTI-HOST: a second host")]
+    bad = [("M4", "a b", "f", "o", "n", "FLAKY: at times"), ("M5", "a b", "f", "o", "n", "EQUIVALENT, no colon"),
+           ("M6", "a b", "f", "o", "n", None)]
+    assert anchors.reason_faults(ok, marks) == []
+    faults = anchors.reason_faults(ok + bad, marks)
+    assert [f.split(":")[0] for f in faults] == ["M4", "M5", "M6"]
+    assert "FLAKY: at times" in faults[0] and "EQUIVALENT, MULTI-HOST, TIMING" in faults[0]
+    mc = _load(HARNESS, "mutation_check_reasons")
+    assert anchors.reason_faults(mc.MUTANTS + mc.CONTROL, mc.KNOWN_MARKS) == []
+
+
+def test_mutant_anchors_reports_a_reason_it_cannot_read(tmp_path):
+    """The check run before a push names it, as it names an anchor gone."""
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / "scripts" / "mutation_check.py").write_text(
+        'KNOWN_MARKS = ("EQUIVALENT", "MULTI-HOST", "TIMING")\n'
+        'MUTANTS = [("M1", "a bug", "a.py", "x = 1", "x = 2", "FLAKY: at times"),\n'
+        '           ("M2", "a bug", "a.py", "x = 1", "x = 3", "TIMING: at times")]\n'
+        'CONTROL = []\n\n\nif __name__ == "__main__":\n    pass\n')
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True, capture_output=True)
+    faults = anchors.check(tmp_path)
+    assert len(faults) == 1 and faults[0].startswith("M1: its reason opens with no mark the harness reads")

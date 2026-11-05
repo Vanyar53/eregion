@@ -16,7 +16,14 @@ mutant, the code moved) — never counted as caught.
 Each round draws new seeds. The table says, per mutant, how many rounds caught it.
 A mutant the invariants can't see by construction says why: EQUIVALENT (no behaviour
 of the fake world tells it apart), MULTI-HOST (needs a second host writing between two of
-our calls — the locks are per host; a unit test covers it).
+our calls — the locks are per host; a unit test covers it). Those two, and STALE, are not
+counted. TIMING (a race its tests see only at times) is counted, and known.
+
+CI6e (#553): the known survivors are the mutants with a reason the harness reads (KNOWN_MARKS).
+A counted mutant that survives a round without one — SURVIVES, flaky, FIXED-ONLY — makes the
+command exit 1, said with its id and its title: kill it by a test, or write why it survives. A
+known survivor caught in every round is said, never red: take its reason off by hand. A shard
+(--json) writes and says, the total (--total) holds it; the control set is said, never held.
 """
 from __future__ import annotations
 
@@ -10817,7 +10824,8 @@ def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS
 # mutant — the unmutated runs, one target after the other, had not ended. The release gate
 # (.github/workflows/release-gate.yml) gives each runner a shard (`--shard K/N`), each shard
 # writes what it measured (`--json`), and `--total` says whether, together, the shards measured
-# each mutant of this tree once, at the budget given — then holds the count to `--min-caught`.
+# each mutant of this tree once, at the budget given — then that no counted mutant survived a
+# round outside the known survivors (CI6e: `--min-caught`, 14 of 2 850, held almost nothing).
 #
 # CI6d (#545): the shards cut on the durations measured. The gate's first two runs (05/11) took
 # 22 to 72 min a shard: the estimate weighed a mutant 1, or HEAVY on an invariant machine, and
@@ -10835,7 +10843,13 @@ HEAVY = 8
 UNIT = 13            # s: the median measure of a mutant outside the invariant machines (05/11)
 PIECES = 4
 SHARD = re.compile(r"([1-9]\d*)/([1-9]\d*)")
-UNCOUNTED = ("EQUIVALENT", "MULTI-HOST", "STALE")
+# CI6e (#553): a mutant's reason (the tuple's sixth field) opens with its mark, then a colon. The
+# harness reads these marks only: EQUIVALENT and MULTI-HOST are not counted; TIMING is counted,
+# and known. A reason with another mark is not read (scripts/mutant_anchors.py says it): its
+# mutant is no known survivor.
+UNCOUNTED_MARKS = ("EQUIVALENT", "MULTI-HOST")
+KNOWN_MARKS = (*UNCOUNTED_MARKS, "TIMING")
+UNCOUNTED = (*UNCOUNTED_MARKS, "STALE")
 DURATIONS = LOTS_DIR / "durations.json"
 # The budget the durations are measured at, and the shards cut for: the release gate's.
 DURATIONS_BUDGET = (500, 2)
@@ -11069,13 +11083,44 @@ def caught_of(rows: list) -> tuple[int, int]:
     return sum(1 for r in counted if r[2] == "CAUGHT"), len(counted)
 
 
-def total(where: Path, shards: int, control_shards: int, examples: int, rounds: int,
-          min_caught: int) -> int:
+def mark(mutant) -> str:
+    """The mark of a mutant's reason when the harness reads it (one of KNOWN_MARKS), else ''."""
+    why = mutant[5] if len(mutant) > 5 else None
+    word, colon, _ = why.partition(":") if isinstance(why, str) else ("", "", "")
+    return word if colon and word in KNOWN_MARKS else ""
+
+
+def known(mutants: list) -> dict[str, str]:
+    """The known survivors: {id: its reason}, each mutant whose reason the harness reads."""
+    return {m[0]: m[5] for m in mutants if mark(m)}
+
+
+def judge(rows: list, mutants: list) -> tuple[list, list]:
+    """(each counted mutant that survived a round and is no known survivor — a red —, each known
+    survivor caught in every round — said, to take off the list by hand)."""
+    reasons = known(mutants)
+    unknown = [r for r in rows if r[2] not in UNCOUNTED and r[2] != "CAUGHT" and r[0] not in reasons]
+    no_more = [r for r in rows if r[2] == "CAUGHT" and r[0] in reasons]
+    return unknown, no_more
+
+
+def say_judged(unknown: list, no_more: list, mutants: list, say=print) -> None:
+    reasons = known(mutants)
+    for mid, title, verdict, detail in unknown:
+        say(f"  ✗ {mid}  {verdict} {detail}: {title} — survived a round, and is no known survivor: kill it by "
+            f"a test, or write why it survives ({', '.join(KNOWN_MARKS)}: its reason)")
+    for mid, title, _verdict, detail in no_more:
+        say(f"  · {mid}  caught in every round ({detail}), a known survivor no more: take its reason "
+            f"({reasons[mid].partition(':')[0]}) off by hand — {title}")
+
+
+def total(where: Path, shards: int, control_shards: int, examples: int, rounds: int) -> int:
     """The shards' results under `where` (*.json, as --json writes them), put together. 1 when a
     shard is missing, given twice, or measured at another budget; when the shards together did
-    not measure each mutant of this tree (MUTANTS, CONTROL) exactly once; or when fewer than
-    min_caught of MUTANTS were caught in every round. The control set is said, never held to a
-    count: it measures what the suite was never shaped to find."""
+    not measure each mutant of this tree (MUTANTS, CONTROL) exactly once; or when a counted
+    mutant of MUTANTS survived a round and is no known survivor (CI6e) — a known survivor caught
+    is said, never red. The control set is said, never held: it measures what the suite was never
+    shaped to find."""
     problems: list[str] = []
     found: dict[bool, dict[int, list]] = {False: {}, True: {}}
     for path in sorted(where.rglob("*.json")):
@@ -11117,13 +11162,16 @@ def total(where: Path, shards: int, control_shards: int, examples: int, rounds: 
             if verdict != "CAUGHT":
                 print(f"  {mid}  {verdict:8}  {detail:16}  {title}")
     caught, counted = said[False]
+    mutant_rows = [r for shard_rows in found[False].values() for r in shard_rows]
+    unknown, no_more = judge(mutant_rows, MUTANTS)
     print(f"\nbudget {examples} sequences, {rounds} rounds, {shards} + {control_shards} shards:")
     print(f"mutants: {caught}/{counted} caught in every round (equivalent and multi-host mutants aside); "
-          f"at least {min_caught} wanted")
+          f"{len(unknown)} survived a round outside the known survivors ({len(known(MUTANTS))} known)")
     print(f"control: {said[True][0]}/{said[True][1]} caught in every round (said, not held)")
+    say_judged(unknown, no_more, MUTANTS)
     for p in problems:
         print(f"  ✗ {p}")
-    return 1 if problems or caught < min_caught else 0
+    return 1 if problems or unknown else 0
 
 
 # CI6b (#538): ChromaDB's embedding model, made ready once, here, before any run in parallel. On a
@@ -11183,8 +11231,6 @@ def main(argv: list[str] | None = None) -> int:
                     help="measure the control set (never used to shape the generation) instead")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2),
                     help="mutants measured at once")
-    ap.add_argument("--min-caught", type=int, default=0,
-                    help="exit 1 if fewer mutants (equivalent and multi-host aside) are caught in every round")
     ap.add_argument("--shard", default="", help="K/N: measure the K-th of N shards only (CI6)")
     ap.add_argument("--json", default="", help="write what was measured to this file (CI6)")
     ap.add_argument("--total", default="", help="a directory of --json results: put the shards together (CI6)")
@@ -11196,8 +11242,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="scripts/mutants/durations.json from the --json results under these directories (CI6d)")
     args = ap.parse_args(argv)
     if args.total:
-        return total(Path(args.total), args.shards, args.control_shards, args.examples, args.rounds,
-                     args.min_caught)
+        return total(Path(args.total), args.shards, args.control_shards, args.examples, args.rounds)
     if args.update_durations:
         return update_durations([Path(d) for d in args.update_durations])
     only = {m.strip() for m in args.only.split(",") if m.strip()}
@@ -11231,7 +11276,7 @@ def main(argv: list[str] | None = None) -> int:
         if failing:
             return 2
         def measure(mutant):
-            mid, title, rel, old, new, *why = mutant
+            mid, title, rel, old, new = mutant[:5]
             copy = Path(tmp) / mid
             shutil.copytree(base, copy)
             target = copy / rel
@@ -11258,8 +11303,8 @@ def main(argv: list[str] | None = None) -> int:
                      and _run(copy, 0, target="tests/unit/test_invariant_regressions.py"))
             shutil.rmtree(copy, ignore_errors=True)
             verdict = "CAUGHT" if caught == args.rounds else ("flaky" if caught else ("FIXED-ONLY" if fixed else "SURVIVES"))
-            if why and verdict != "CAUGHT":
-                verdict = why[0].split(":")[0]
+            if verdict != "CAUGHT" and mark(mutant):
+                verdict = mark(mutant)      # a known survivor: its reason's mark (CI6e)
             row = (mid, title, verdict, f"{caught}/{args.rounds} ({time.monotonic() - started:.0f}s)")
             print(f"{mid} {verdict:8} {row[3]:14} {title}", flush=True)
             return row
@@ -11276,6 +11321,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {mid}  {verdict:8}  {detail:16}  {title}")
     caught, counted = caught_of(rows)
     print(f"\n{caught}/{counted} caught in every round (equivalent and multi-host mutants aside)")
+    # CI6e: a counted mutant that survived a round, no known survivor, is red — here, or, for a
+    # shard (--json), in the total that reads it. The control set is said, never held.
+    unknown = []
+    if not args.control:
+        unknown, no_more = judge(rows, MUTANTS)
+        say_judged(unknown, no_more, MUTANTS)
+        if unknown and args.json:
+            print(f"{len(unknown)} survived a round outside the known survivors: the total (--total) holds it")
     if args.json:
         Path(args.json).write_text(json.dumps({
             "control": args.control, "shard": k, "shards": n, "examples": args.examples,
@@ -11283,7 +11336,7 @@ def main(argv: list[str] | None = None) -> int:
             # CI6d: each mutant's measure (its copy included) and each target's unmutated run, in seconds.
             "seconds": {mid: round(seconds[mid], 1) for mid in sorted(seconds)},
             "targets": {t: round(ran[t][1], 1) for t in sorted(ran)}}, indent=1) + "\n", encoding="utf-8")
-    return 1 if caught < args.min_caught else 0
+    return 1 if unknown and not args.json else 0
 
 
 

@@ -276,6 +276,8 @@ make celebrimbor-output      # → glorfindel-config.yaml fragment (workspace_id
 
 Optional, off by default (IDI1): a **test identity in Entra ID** — a single-tenant application and its service principal, no secret, no right — the target of identity techniques (R2). An identity carries no ARM tag, so it is enrolled by two keys, one per plane: the application's own Graph tags (`eregion-target=celebrimbor`, `eregion-zone=bench`) **and** the bench's resource group naming it (`eregion-identities`); either key alone enrolls nothing. `entra_test_identity_enabled = true`, then `make celebrimbor-identity-plan` / `celebrimbor-identity-up` (`docs/operations.md`, « L'identité de test du banc (IDI1) »).
 
+Optional, off by default (IDI1b): **test users in Entra ID**, held by the bench's **restricted administrative unit** — the target of IR1's user verbs. A user carries no tags either, so it is enrolled by two halves: the unit holding it (its id pinned, never looked up by name) **and** the custom security attribute `Eregion.eregionTarget` / `eregionZone` on the user; no role, no group, no licence. The azuread provider cannot make a unit restricted nor define an attribute set: `make celebrimbor-unit-prepare` does it through Microsoft Graph, then `entra_bench_unit_enabled = true` and `make celebrimbor-users-plan` / `celebrimbor-users-up` (`docs/operations.md`, « Les utilisateurs de test du banc (IDI1b) »).
+
 **Cost of the test sandbox** (West Europe, pay-as-you-go — only if you deploy the Terraform):
 
 | Item | Monthly cost |

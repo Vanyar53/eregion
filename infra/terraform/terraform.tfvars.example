@@ -26,3 +26,13 @@ vm_shutdown_email    = "you@example.com"
 # en -var. Puis : make celebrimbor-identity-plan, et make celebrimbor-identity-up YES=1
 # (docs/operations.md, « L'identité de test du banc (IDI1) »).
 # entra_test_identity_enabled = true
+
+# Optionnel (IDI1b) — l'unité administrative restreinte du banc et ses utilisateurs de test, inscrits
+# par l'unité et l'attribut Eregion. Désactivé par défaut ; à poser ici, jamais en -var. D'abord
+# make celebrimbor-unit-prepare YES=1 (l'unité, créée par Graph : son id à épingler), puis
+# make celebrimbor-users-plan, et make celebrimbor-users-up YES=1 (docs/operations.md,
+# « Les utilisateurs de test du banc (IDI1b) »).
+# entra_bench_unit_enabled = true
+# entra_bench_unit_id      = "<l'id que celebrimbor-unit-prepare a dit>"
+# entra_test_users         = ["tuor"]
+# entra_identity_executor_object_id = "<le principal de l'exécuteur d'IR1, quand IR1b l'a créé>"

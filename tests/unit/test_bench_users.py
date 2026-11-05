@@ -74,6 +74,8 @@ def test_the_unit_is_pinned_by_its_id_never_looked_up_by_name():
     assert "object_id = var.entra_bench_unit_id" in data and "display_name" not in data
     assert 'resource "azuread_administrative_unit"' not in _every_tf()   # never a non-restricted one
     assert 'output "entra_bench_unit_id"' in text
+    # IR1b's executor reads the set by its name (EREGION_IDENTITY_ATTRIBUTE_SET).
+    assert "value       = local.entra_attribute_set" in _block(text, "output", "entra_attribute_set")
     assert "data.azuread_administrative_unit.bench[0].object_id" in _block(text, "output", "entra_bench_unit_id")
 
 
@@ -85,7 +87,9 @@ def test_the_users_hold_no_role_no_licence_no_group():
                  "azuread_directory_role_member", "azuread_app_role_assignment", "azuread_application_owner"):
         assert word not in every, word
     user = _block(_tf(), "resource", 'azuread_user" "bench_test')
-    assert "ignore_changes = [password]" in user and "uuid()" in user
+    # The executor of IR1 disables and enables the user: a plan neither enables it again, nor fails on
+    # a member of the restricted unit that Terraform no longer modifies (M4135).
+    assert "ignore_changes = [password, account_enabled]" in user and "uuid()" in user
     # A role goes to the executor only, never to a test user.
     roles = _block(_tf(), "resource", 'azuread_directory_role_assignment" "identity_executor')
     assert "principal_object_id = var.entra_identity_executor_object_id" in roles
@@ -175,16 +179,30 @@ with open(os.environ["FAKE_AZ_LOG"], "a") as f:
     f.write(json.dumps(args) + "\n")
 world = json.load(open(os.environ["FAKE_AZ_WORLD"]))
 if args[:2] == ["account", "show"]:
-    print(json.dumps(world["account"]))
+    acct = world["account"]
+    print(acct["__raw__"] if "__raw__" in acct else json.dumps(acct))
     sys.exit(0)
 method, url = args[args.index("--method") + 1], args[args.index("--url") + 1]
 resp = world["routes"].get(f"{method} {url}")
 if resp is None and method == "GET":
     sys.stderr.write('ERROR: Not Found({"error":{"code":"Request_ResourceNotFound"}})')
     sys.exit(1)
+if isinstance(resp, dict) and "__seq__" in resp:
+    count = os.environ["FAKE_AZ_WORLD"] + ".count"
+    seen = json.load(open(count)) if os.path.exists(count) else {}
+    n = seen.get(url, 0)
+    seen[url] = n + 1
+    json.dump(seen, open(count, "w"))
+    resp = resp["__seq__"][min(n, len(resp["__seq__"]) - 1)]
+if resp is None and method == "GET":
+    sys.stderr.write('ERROR: Not Found({"error":{"code":"Request_ResourceNotFound"}})')
+    sys.exit(1)
 if isinstance(resp, dict) and "__error__" in resp:
     sys.stderr.write(resp["__error__"])
     sys.exit(1)
+if isinstance(resp, dict) and "__raw__" in resp:
+    print(resp["__raw__"])
+    sys.exit(0)
 print(json.dumps(resp) if resp is not None else "")
 '''
 
@@ -203,7 +221,9 @@ def _env(tmp_path, world=None):
                                                            "ARM_SUBSCRIPTION_ID")}
     env.update({"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "HOME": str(tmp_path),
                 "FAKE_TF_LOG": str(tmp_path / "tf.log"), "FAKE_AZ_LOG": str(tmp_path / "az.log"),
-                "FAKE_AZ_WORLD": str(tmp_path / "world.json"), "AZURE_SUBSCRIPTION_ID": SUB})
+                "FAKE_AZ_WORLD": str(tmp_path / "world.json"), "AZURE_SUBSCRIPTION_ID": SUB,
+                "EREGION_GRAPH_RETRY_S": "0"})
+    (tmp_path / "world.json.count").unlink(missing_ok=True)
     return env
 
 
@@ -268,14 +288,20 @@ def test_unit_prepare_takes_the_pinned_unit_by_the_environment_never_expanded(tm
 
 # ── The Graph script, against a fake az ─────────────────────────────────────────────────
 
+SEL = "id,displayName,isMemberManagementRestricted,membershipType"
+SAME_NAME = (f"GET {G}/directory/administrativeUnits?$filter=displayName%20eq%20'au-celebrimbor-bench'"
+             f"&$select={SEL}")
+
+
 def _world(**over):
     world = {
         "account": {"id": SUB, "type": "user"},
         "routes": {
-            f"POST {G}/directory/administrativeUnits": {"id": NEW_UNIT},
-            f"GET {G}/directory/administrativeUnits/{NEW_UNIT}?$select=id,isMemberManagementRestricted":
-                {"id": NEW_UNIT, "isMemberManagementRestricted": True},
-            f"GET {G}/directory/administrativeUnits/{UNIT}?$select=id,displayName,isMemberManagementRestricted":
+            f"POST {G}/directory/administrativeUnits": {"id": NEW_UNIT, "isMemberManagementRestricted": True},
+            SAME_NAME: {"value": []},
+            f"GET {G}/directory/administrativeUnits/{NEW_UNIT}?$select={SEL}":
+                {"id": NEW_UNIT, "isMemberManagementRestricted": True, "membershipType": None},
+            f"GET {G}/directory/administrativeUnits/{UNIT}?$select={SEL}":
                 {"id": UNIT, "displayName": "au-celebrimbor-bench", "isMemberManagementRestricted": True},
             f"POST {G}/directory/attributeSets": {"id": "Eregion"},
             f"POST {G}/directory/customSecurityAttributeDefinitions": {},
@@ -321,8 +347,9 @@ def test_prepare_creates_the_set_the_definitions_and_a_restricted_unit(tmp_path)
     assert posts[3][1]["isMemberManagementRestricted"] is True
     assert f'entra_bench_unit_id = "{NEW_UNIT}"' in out
     # Then read back, restricted.
-    assert ("GET", f"{G}/directory/administrativeUnits/{NEW_UNIT}?$select=id,isMemberManagementRestricted",
-            None) in _rest(calls)
+    assert ("GET", f"{G}/directory/administrativeUnits/{NEW_UNIT}?$select={SEL}", None) in _rest(calls)
+    # Before the creation, a unit of that name was looked for: never a second one.
+    assert ("GET", SAME_NAME.split(" ", 1)[1], None) in _rest(calls)
 
 
 def test_prepare_says_what_exists_and_creates_nothing_twice(tmp_path):
@@ -338,19 +365,89 @@ def test_prepare_says_what_exists_and_creates_nothing_twice(tmp_path):
 
 
 def test_a_pinned_unit_that_is_not_restricted_is_refused(tmp_path):
-    key = f"GET {G}/directory/administrativeUnits/{UNIT}?$select=id,displayName,isMemberManagementRestricted"
+    key = f"GET {G}/directory/administrativeUnits/{UNIT}?$select={SEL}"
     for restricted in (False, None):
         code, out, _ = _script(tmp_path, "prepare", "--yes", EREGION_BENCH_ADMIN_UNIT_ID=UNIT,
                                world=_world(**{key: {"id": UNIT, "isMemberManagementRestricted": restricted}}))
         assert code == 1 and "pas restreinte" in out, restricted
     code, out, _ = _script(tmp_path, "prepare", EREGION_BENCH_ADMIN_UNIT_ID=UNIT, world=_world(**{key: None}))
     assert code == 1 and "n'existe pas" in out
+    # Dynamic: a rule, not Celebrimbor, would choose its members (M4138).
+    for kind in ("Dynamic", "dynamic"):
+        code, out, _ = _script(tmp_path, "prepare", EREGION_BENCH_ADMIN_UNIT_ID=UNIT, world=_world(
+            **{key: {"id": UNIT, "isMemberManagementRestricted": True, "membershipType": kind}}))
+        assert code == 1 and "dynamique" in out, kind
 
 
 def test_a_unit_created_unrestricted_is_never_pinned(tmp_path):
-    key = f"GET {G}/directory/administrativeUnits/{NEW_UNIT}?$select=id,isMemberManagementRestricted"
+    """Graph's own answer to the creation says it (M4137), and the read back too."""
+    post = f"POST {G}/directory/administrativeUnits"
+    code, out, calls = _script(tmp_path, "prepare", "--yes", world=_world(**{post: {"id": NEW_UNIT}}))
+    assert code == 1 and "non restreinte" in out and "entra_bench_unit_id =" not in out
+    assert not any(m == "GET" and NEW_UNIT in u for m, u, _ in _rest(calls))
+    key = f"GET {G}/directory/administrativeUnits/{NEW_UNIT}?$select={SEL}"
     code, out, _ = _script(tmp_path, "prepare", "--yes", world=_world(**{key: {"id": NEW_UNIT}}))
     assert code == 1 and "pas restreinte" in out and "entra_bench_unit_id =" not in out
+    code, out, _ = _script(tmp_path, "prepare", "--yes", world=_world(
+        **{key: {"id": NEW_UNIT, "isMemberManagementRestricted": True, "membershipType": "Dynamic"}}))
+    assert code == 1 and "dynamique" in out and "entra_bench_unit_id =" not in out
+
+
+def test_a_unit_of_that_name_already_is_never_created_twice(tmp_path):
+    """Without UNIT, a second run would make a second unit: refused, the first one's id said (M4136).
+    A guard against the duplicate, never an enrollment by the name."""
+    world = _world(**{SAME_NAME: {"value": [{"id": UNIT, "displayName": "au-celebrimbor-bench"}]}})
+    for args in (("prepare",), ("prepare", "--yes")):
+        code, out, calls = _script(tmp_path, *args, world=world)
+        assert code == 1 and f"UNIT={UNIT}" in out and "existe déjà" in out
+        assert not any(m == "POST" and u.endswith("/administrativeUnits") for m, u, _ in _rest(calls))
+
+
+def test_a_unit_not_yet_readable_is_read_again_then_said_never_deleted(tmp_path):
+    """A 404 just after the creation is not « not restricted »: read again, spaced; still absent,
+    the id is said to read again with UNIT= — never to delete it, never to create another."""
+    key = f"GET {G}/directory/administrativeUnits/{NEW_UNIT}?$select={SEL}"
+    code, out, calls = _script(tmp_path, "prepare", "--yes", world=_world(**{key: {"__seq__": [None]}}))
+    assert code == 1 and "pas encore lisible" in out and f"UNIT={NEW_UNIT}" in out
+    assert "supprimer" not in out and "entra_bench_unit_id =" not in out
+    reads = [u for m, u, _ in _rest(calls) if m == "GET" and NEW_UNIT in u]
+    assert len(reads) == 4
+    posts = [u for m, u, _ in _rest(calls) if m == "POST" and u.endswith("/administrativeUnits")]
+    assert len(posts) == 1
+    # Readable at the third read: pinned.
+    ok = {"id": NEW_UNIT, "isMemberManagementRestricted": True}
+    code, out, _ = _script(tmp_path, "prepare", "--yes", world=_world(**{key: {"__seq__": [None, None, ok]}}))
+    assert code == 0 and f'entra_bench_unit_id = "{NEW_UNIT}"' in out, out
+
+
+@pytest.mark.parametrize("raw", ["not json", "[1, 2]"])
+def test_an_answer_that_is_not_json_is_refused_never_a_trace(tmp_path, raw):
+    world = _world(**{f"GET {G}/directory/attributeSets/Eregion": {"__raw__": raw}})
+    code, out, _ = _script(tmp_path, "prepare", world=world)
+    assert code == 1 and "!!" in out and "Traceback" not in out
+    code, out, _ = _script(tmp_path, "prepare", world=_world(account={"__raw__": raw}))
+    assert code == 1 and "Traceback" not in out
+
+
+def test_az_that_does_not_answer_is_refused_never_a_trace(monkeypatch, capsys):
+    """M4139."""
+    sys.path.insert(0, str(SCRIPT.parent))
+    try:
+        import entra_bench_unit as script
+    finally:
+        sys.path.pop(0)
+
+    def hang(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="az", timeout=120)
+    monkeypatch.setattr(script.subprocess, "run", hang)
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", SUB)
+    assert script.main(["prepare"]) == 1
+    assert "n'a pas répondu" in capsys.readouterr().err
+
+    def missing(*a, **k):
+        raise FileNotFoundError("az")
+    monkeypatch.setattr(script.subprocess, "run", missing)
+    assert script.main(["prepare"]) == 1
 
 
 def test_a_definition_not_as_eregion_defines_it_is_refused(tmp_path):
@@ -416,4 +513,4 @@ def test_the_script_uses_az_rest_with_an_argument_list_only():
     tree = ast.parse(text)
     imports = {(n.module or "").split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
     imports |= {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    assert imports <= {"__future__", "json", "os", "re", "subprocess", "sys"}, imports
+    assert imports <= {"__future__", "json", "os", "re", "subprocess", "sys", "time"}, imports

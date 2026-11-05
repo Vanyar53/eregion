@@ -31,6 +31,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 ATTRIBUTE_SET = "Eregion"
@@ -48,6 +49,10 @@ BENCH = re.compile(r"celebrimbor(-[a-z0-9-]{1,40})?")
 CSA_TYPE = "#Microsoft.DirectoryServices.CustomSecurityAttributeValue"
 # az rest says a 404 on its standard error (ERROR: Not Found(…Request_ResourceNotFound…)): to measure.
 _NOT_FOUND = re.compile(r"Not Found|NotFound|Request_ResourceNotFound")
+UNIT_SELECT = "id,displayName,isMemberManagementRestricted,membershipType"
+# A unit just created may not be readable yet (replication): read again, a few times, spaced.
+READ_TRIES = 4
+DELAY_ENV = "EREGION_GRAPH_RETRY_S"
 
 
 class Refused(Exception):
@@ -55,8 +60,23 @@ class Refused(Exception):
 
 
 def _az(*args: str) -> tuple[int, str, str]:
-    r = subprocess.run(["az", *args], capture_output=True, text=True, timeout=120)
+    try:
+        r = subprocess.run(["az", *args], capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        raise Refused(f"az {' '.join(args[:3])} n'a pas répondu en 120 s : rien n'est tenu pour fait, relancer")
+    except OSError as e:
+        raise Refused(f"az introuvable ou illisible : {e}")
     return r.returncode, r.stdout, r.stderr
+
+
+def _json(out: str, what: str) -> dict:
+    try:
+        got = json.loads(out) if out.strip() else {}
+    except json.JSONDecodeError:
+        raise Refused(f"{what} : une réponse qui n'est pas du JSON ({out.strip()[:120]!r})")
+    if not isinstance(got, dict):
+        raise Refused(f"{what} : une réponse qui n'est pas un objet JSON")
+    return got
 
 
 def rest(method: str, path: str, body: dict | None = None) -> dict | None:
@@ -69,7 +89,7 @@ def rest(method: str, path: str, body: dict | None = None) -> dict | None:
         if method == "GET" and _NOT_FOUND.search(err or ""):
             return None
         raise Refused(f"az rest {method} {path} : {(err or out).strip()[:300]}")
-    return json.loads(out) if out.strip() else {}
+    return _json(out, f"az rest {method} {path}")
 
 
 def check_login() -> None:
@@ -80,7 +100,7 @@ def check_login() -> None:
     code, out, err = _az("account", "show", "--query", "{id:id, type:user.type}", "-o", "json")
     if code != 0:
         raise Refused(f"az account show : {(err or out).strip()[:200]} (az login d'abord)")
-    acct = json.loads(out)
+    acct = _json(out, "az account show")
     if str(acct.get("id") or "").lower() != want:
         raise Refused("l'abonnement courant d'az n'est pas celui du banc : az account set --subscription "
                       "\"$AZURE_SUBSCRIPTION_ID\"")
@@ -95,6 +115,22 @@ def _definition(name: str) -> dict:
 
 def _unit_body() -> dict:
     return {"displayName": UNIT_NAME, "description": UNIT_DESCRIPTION, "isMemberManagementRestricted": True}
+
+
+def _unit_refusal(got: dict) -> str:
+    """Why this unit is not the bench's as Eregion builds it, or "": restricted, never dynamic."""
+    if got.get("isMemberManagementRestricted") is not True:
+        return "n'est pas restreinte — la restriction se fixe à la création, jamais après"
+    if str(got.get("membershipType") or "").lower() == "dynamic":
+        return "est dynamique — une règle, pas Celebrimbor, choisirait ses membres"
+    return ""
+
+
+def _delay() -> float:
+    try:
+        return max(0.0, float(os.environ.get(DELAY_ENV) or 5))
+    except ValueError:
+        return 5.0
 
 
 def prepare(yes: bool, unit: str, say=print) -> str:
@@ -125,14 +161,21 @@ def prepare(yes: bool, unit: str, say=print) -> str:
     if unit:
         if not GUID.fullmatch(unit):
             raise Refused(f"{UNIT_ENV} : un object id (GUID, en minuscules)")
-        got = rest("GET", f"/directory/administrativeUnits/{unit}?$select=id,displayName,isMemberManagementRestricted")
+        got = rest("GET", f"/directory/administrativeUnits/{unit}?$select={UNIT_SELECT}")
         if got is None:
-            raise Refused(f"l'unité épinglée {unit} n'existe pas dans ce tenant")
-        if got.get("isMemberManagementRestricted") is not True:
-            raise Refused(f"l'unité épinglée {unit} n'est pas restreinte — la restriction se fixe à la "
-                          "création, jamais après : en créer une autre (sans UNIT), l'épingler, supprimer celle-ci")
+            raise Refused(f"l'unité épinglée {unit} n'existe pas, ou n'est pas encore lisible, dans ce tenant")
+        why = _unit_refusal(got)
+        if why:
+            raise Refused(f"l'unité épinglée {unit} {why} : ne pas s'en servir")
         say(f"= l'unité restreinte {unit} ({got.get('displayName')}) : entra_bench_unit_id = \"{unit}\"")
         return unit
+    # No unit pinned. A unit of that name already: never a second one. A guard against a duplicate,
+    # not an enrollment by the name — the guard and the executor pin the id, never this lookup.
+    same = rest("GET", f"/directory/administrativeUnits?$filter=displayName%20eq%20'{UNIT_NAME}'&$select={UNIT_SELECT}")
+    existing = [str(u.get("id") or "") for u in (same or {}).get("value") or [] if isinstance(u, dict)]
+    if existing:
+        raise Refused(f"une unité nommée {UNIT_NAME} existe déjà ({', '.join(existing)}) : la relire avec "
+                      f"UNIT={existing[0]}, jamais en créer une seconde")
     body = _unit_body()
     say(f"+ POST {GRAPH}/directory/administrativeUnits {json.dumps(body, ensure_ascii=False)}")
     if not yes:
@@ -142,9 +185,23 @@ def prepare(yes: bool, unit: str, say=print) -> str:
     new = str(made.get("id") or "").lower()
     if not GUID.fullmatch(new):
         raise Refused(f"Graph n'a pas dit l'id de l'unité créée : {json.dumps(made)[:200]}")
-    got = rest("GET", f"/directory/administrativeUnits/{new}?$select=id,isMemberManagementRestricted") or {}
-    if got.get("isMemberManagementRestricted") is not True:
-        raise Refused(f"l'unité {new} est créée, mais pas restreinte : ne pas l'épingler, la supprimer")
+    # What Graph answered to the creation itself: restricted, or not to pin.
+    if made.get("isMemberManagementRestricted") is not True:
+        raise Refused(f"l'unité {new} est créée, mais Graph la dit non restreinte : ne pas l'épingler "
+                      f"(UNIT={new} la relit)")
+    got = None
+    for attempt in range(READ_TRIES):
+        got = rest("GET", f"/directory/administrativeUnits/{new}?$select={UNIT_SELECT}")
+        if got is not None:
+            break
+        if attempt < READ_TRIES - 1:
+            time.sleep(_delay())
+    if got is None:
+        raise Refused(f"l'unité restreinte {new} est créée, mais pas encore lisible : la relire dans une minute "
+                      f"avec UNIT={new} — ne pas en créer une autre")
+    why = _unit_refusal(got)
+    if why:
+        raise Refused(f"l'unité {new}, relue, {why} : ne pas l'épingler")
     say(f"✓ l'unité restreinte {new} — à épingler dans infra/terraform/terraform.tfvars :\n"
         f"    entra_bench_unit_id = \"{new}\"\n  puis, pour relancer ce script : UNIT={new}")
     return new

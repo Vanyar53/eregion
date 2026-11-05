@@ -100,6 +100,10 @@ run "on_the_unit_pinned_its_users_held_after_their_attribute" {
     error_message = "l'id de l'unité ne sort pas tel qu'épinglé"
   }
   assert {
+    condition     = output.entra_attribute_set == "Eregion"
+    error_message = "l'ensemble d'attributs ne sort pas sous le nom que l'exécuteur lit"
+  }
+  assert {
     condition     = data.azuread_administrative_unit.bench[0].object_id == "00000000-0000-0000-0000-0000000000d0"
     error_message = "l'unité n'est pas lue par son id épinglé"
   }

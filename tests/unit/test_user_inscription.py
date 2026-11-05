@@ -110,6 +110,15 @@ def test_an_unrestricted_unit_refuses():
     assert not _verdict(unit=unit).allowed
 
 
+@pytest.mark.parametrize("kind", ["Dynamic", "dynamic", "DYNAMIC"])
+def test_a_dynamic_unit_refuses(kind):
+    """A rule, not Celebrimbor, would choose its members: anyone who matches it enrolls (M4140)."""
+    v = _verdict(unit=_unit(membershipType=kind))
+    assert not v.allowed and "dynamic" in v.reason
+    for kind in (None, "Assigned"):
+        assert _verdict(unit=_unit(membershipType=kind)).allowed
+
+
 def test_the_unit_is_the_pinned_one_never_another():
     """Pinned by its id, never looked up by its name: another unit holding the user opens nothing
     (M4087)."""
@@ -340,8 +349,8 @@ class FakeGraph:
             f"{G}/users/{USER}/appRoleAssignments": {"value": user["app_roles_held"]},
             f"{G}/roleManagement/directory/roleAssignments": {"value": user["directory_roles"]},
             f"{G}/roleManagement/directory/roleEligibilityScheduleInstances": {"value": eligible or []},
-            f"{G}/directory/administrativeUnits/{UNIT}": {k: unit[k] for k in ("id", "isMemberManagementRestricted")
-                                                          if k in unit},
+            f"{G}/directory/administrativeUnits/{UNIT}": {k: unit[k] for k in ("id", "isMemberManagementRestricted",
+                                                                       "membershipType") if k in unit},
             f"{G}/directory/administrativeUnits/{UNIT}/members": {"value": [{"id": m} for m in unit["members"]]},
         }
 
@@ -405,6 +414,22 @@ def test_an_id_that_is_no_object_id_is_read_nowhere(user):
     graph = FakeGraph()
     v = _reader(graph).check_user(user, kind="technique", destructive=False)
     assert not v.allowed and graph.calls == []
+
+
+@pytest.mark.parametrize("unit", ["x", f"{UNIT}/../users", f"{UNIT}?$select=*", UNIT.upper()])
+def test_a_pinned_unit_that_is_no_object_id_is_read_nowhere(unit):
+    """A scope built by hand, not by for_bench: the unit's id is checked again before any URL (M4141)."""
+    cred, graph = _Credential(), FakeGraph()
+    v = _reader(graph, _scope(admin_unit_id=unit), cred).check_user(USER, kind="technique", destructive=False)
+    assert not v.allowed and graph.calls == [] and cred.asked == []
+
+
+def test_the_reader_reads_the_unit_s_membership_type():
+    graph = FakeGraph(unit=_unit(membershipType="Dynamic"))
+    v = _reader(graph).check_user(USER, kind="technique", destructive=False)
+    assert not v.allowed and "dynamic" in v.reason
+    (params,) = [p for u, _, p in graph.calls if u == f"{G}/directory/administrativeUnits/{UNIT}"]
+    assert params == {"$select": "id,isMemberManagementRestricted,membershipType"}
 
 
 def test_without_the_unit_nothing_is_read():

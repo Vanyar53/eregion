@@ -8,7 +8,9 @@ the users, their attribute before their membership, and the executor's three rol
 
 M4085–M4095 (the guard), caught by tests/unit/test_user_inscription.py on a fake Graph; M4096–M4099
 (the script and the Terraform), caught by tests/unit/test_bench_users.py (their plan:
-infra/terraform/tests/entra_bench_unit.tftest.hcl, `terraform test`).
+infra/terraform/tests/entra_bench_unit.tftest.hcl, `terraform test`). M4135–M4143, the review of
+7547eb25: account_enabled left to the executor, the unit never made twice, read in Graph's answer and
+again (a 404 is not « unrestricted »), never dynamic, az's silence a refusal, the pinned id checked again.
 """
 INS = "eregion_core/inscription.py"
 SCRIPT = "infra/terraform/scripts/entra_bench_unit.py"
@@ -49,8 +51,31 @@ MUTANTS = [
      TF, '  type        = bool\n  default     = false\n', '  type        = bool\n  default     = true\n'),
     ("M4099", "User Administrator at the tenant's scope: the executor would manage every user, operators included (IDI1b)",
      TF, 'scope = "/administrativeUnits/${var.entra_bench_unit_id}" }', 'scope = "/" }'),
+    # The review of 7547eb25.
+    ("M4135", "Terraform owns account_enabled: a plan enables again the user IR1's executor disabled (IDI1b)", TF,
+     "ignore_changes = [password, account_enabled]", "ignore_changes = [password]"),
+    ("M4136", "a second prepare without UNIT makes a second unit: two units, one pinned (IDI1b)", SCRIPT,
+     "    if existing:\n", "    if False:\n"),
+    ("M4137", "Graph's answer to the creation not read: a unit made unrestricted pinned if read back restricted (IDI1b)",
+     SCRIPT, '    if made.get("isMemberManagementRestricted") is not True:\n', "    if False:\n"),
+    ("M4138", "prepare accepts a dynamic unit: a rule chooses who is enrolled (IDI1b)", SCRIPT,
+     '    if str(got.get("membershipType") or "").lower() == "dynamic":\n        return "est dynamique',
+     '    if False:\n        return "est dynamique'),
+    ("M4139", "az that does not answer: a trace, not a refusal said (IDI1b)", SCRIPT,
+     "    except subprocess.TimeoutExpired:\n", "    except ZeroDivisionError:\n"),
+    ("M4140", "the guard accepts a dynamic unit: anyone who matches its rule is a target (IDI1b)", INS,
+     '    if str(unit.get("membershipType") or "").lower() == "dynamic":\n', "    if False:\n"),
+    ("M4141", "the pinned unit's id not checked again: a scope built by hand puts a path in a Graph URL (IDI1b)", INS,
+     '        if not _GUID.fullmatch(unit_id or ""):\n', "        if not unit_id:\n"),
+    ("M4142", "a unit not yet readable after its creation said unrestricted, to delete (IDI1b)", SCRIPT,
+     "    if got is None:\n        raise Refused(f\"l'unité restreinte {new} est créée, mais pas encore lisible",
+     "    if got is None:\n        got = {}\n    if False:\n        raise Refused(f\"l'unité restreinte {new} est créée, mais pas encore lisible"),
+    ("M4143", "a unit just created read once: the replication's delay taken for its absence (IDI1b)", SCRIPT,
+     "    for attempt in range(READ_TRIES):\n", "    for attempt in range(1):\n"),
 ]
 TESTS = {
     **{f"M{n}": _GUARD for n in range(4085, 4096)},
     **{f"M{n}": _BENCH for n in range(4096, 4100)},
+    **{f"M{n}": _BENCH for n in (4135, 4136, 4137, 4138, 4139, 4142, 4143)},
+    **{f"M{n}": _GUARD for n in (4140, 4141)},
 }

@@ -2952,15 +2952,16 @@ l'API de Graph, sous ton `az login` :
 
 | Quoi | La requête (`infra/terraform/scripts/entra_bench_unit.py`) | Ton rôle d'Entra |
 |---|---|---|
-| l'ensemble `Eregion` | `POST /directory/attributeSets` `{"id": "Eregion", …}` | Administrateur de définition d'attributs |
+| l'ensemble `Eregion` | `POST /directory/attributeSets` `{"id": "Eregion", …}` | Administrateur de définition d'attributs (au tenant) |
 | ses deux définitions | `POST /directory/customSecurityAttributeDefinitions` `{"attributeSet": "Eregion", "name": "eregionTarget"` (ou `"eregionZone"`), `"type": "String", "isCollection": false, "status": "Available", …}` | Administrateur de définition d'attributs |
-| l'unité restreinte | `POST /directory/administrativeUnits` `{"displayName": "au-celebrimbor-bench", "isMemberManagementRestricted": true, …}` — la restriction se fixe à la création, jamais après | Administrateur des rôles privilégiés |
-| l'attribut sur un utilisateur | `PATCH /users/<id>` `{"customSecurityAttributes": {"Eregion": {"@odata.type": "#Microsoft.DirectoryServices.CustomSecurityAttributeValue", "eregionTarget": "celebrimbor", "eregionZone": "bench"}}}`, puis relu | Administrateur d'attribution d'attributs |
+| l'unité restreinte | `GET /directory/administrativeUnits?$filter=displayName eq 'au-celebrimbor-bench'` d'abord (une unité de ce nom : refusé, son id dit), puis `POST /directory/administrativeUnits` `{"displayName": "au-celebrimbor-bench", "isMemberManagementRestricted": true, …}` — la restriction se fixe à la création, jamais après ; lue dans la réponse du `POST`, puis relue (restreinte, jamais `Dynamic`) | Administrateur des rôles privilégiés |
+| l'attribut sur un utilisateur | `PATCH /users/<id>` `{"customSecurityAttributes": {"Eregion": {"@odata.type": "#Microsoft.DirectoryServices.CustomSecurityAttributeValue", "eregionTarget": "celebrimbor", "eregionZone": "bench"}}}`, puis relu | Administrateur d'attribution d'attributs, à la portée de l'ensemble `Eregion` |
 
-L'Administrateur général n'a pas, par défaut, de droit sur les attributs de sécurité (doc) : les deux
-rôles d'attributs se donnent d'abord, à ton compte (geste 1). Un ensemble d'attributs et une définition
-**ne se suppriment pas** (une définition se désactive) : ils vivent dans le tenant, hors de la stack
-jetable.
+La recherche par le nom, avant la création, n'est qu'un garde-fou contre une **seconde** unité : la
+garde et l'exécuteur épinglent l'id, jamais ce nom. L'Administrateur général n'a pas, par défaut, de
+droit sur les attributs de sécurité (doc) : les deux rôles d'attributs se donnent à ton compte (gestes
+1 et 3). Un ensemble d'attributs et une définition **ne se suppriment pas** (une définition se
+désactive) : ils vivent dans le tenant, hors de la stack jetable.
 
 ### Ce que le Terraform pose, et sous quelle variable
 
@@ -2968,10 +2969,16 @@ jetable.
 
 | Variable | Ce qu'elle pose | Droit pour l'apply |
 |---|---|---|
-| `entra_bench_unit_enabled = true` + `entra_bench_unit_id = "<id>"` | l'unité, **lue** par son id (`data.azuread_administrative_unit.bench`), son id en sortie `entra_bench_unit_id` ; les utilisateurs de `entra_test_users` (défaut `["tuor"]` : `tuor.celebrimbor@<domaine initial>`), membres du tenant, sans rôle, sans groupe, sans licence, un mot de passe tiré à l'apply que personne ne connaît ; l'attribut sur chacun (`terraform_data.bench_test_user_attributes`, qui lance le script), **puis** son appartenance à l'unité | Administrateur des utilisateurs (créer, supprimer un utilisateur) ; Administrateur d'attribution d'attributs (l'attribut) ; Administrateur des rôles privilégiés (l'appartenance) |
+| `entra_bench_unit_enabled = true` + `entra_bench_unit_id = "<id>"` | l'unité, **lue** par son id (`data.azuread_administrative_unit.bench`), son id en sortie `entra_bench_unit_id` ; les utilisateurs de `entra_test_users` (défaut `["tuor"]` : `tuor.celebrimbor@<domaine initial>`), membres du tenant, sans rôle, sans groupe, sans licence, un mot de passe tiré à l'apply que personne ne connaît ; l'attribut sur chacun (`terraform_data.bench_test_user_attributes`, qui lance le script), **puis** son appartenance à l'unité ; la sortie `entra_attribute_set` (`Eregion`) | Administrateur des utilisateurs (créer, supprimer un utilisateur) ; Administrateur d'attribution d'attributs (l'attribut) ; Administrateur des rôles privilégiés (l'appartenance) |
 | `entra_identity_executor_object_id = "<principal de l'exécuteur>"` (IR1b le crée) | trois rôles d'annuaire au principal de l'exécuteur, et aucun autre : **User Administrator à la portée de l'unité** (`/administrativeUnits/<id>`), **Directory Readers** au tenant (la doc l'exige pour qu'un principal se serve d'un rôle borné), **Attribute Assignment Reader** à la portée de l'ensemble `Eregion` (relire l'attribut, hypothèse 15) ; chaque modèle de rôle vérifié contre la liste du tenant au plan : un identifiant qui nomme un autre rôle arrête le plan | Administrateur des rôles privilégiés |
 
 - **Instance `default` seule** (le plan le dit sinon) ; désactivé, rien n'est lu ni écrit dans le tenant.
+- **Un utilisateur déjà dans l'unité n'est plus modifiable par Terraform** : l'unité est restreinte,
+  un administrateur du tenant ne modifie plus ses membres. Changer son `display_name`, ou ce que
+  `triggers_replace` suit (le banc, la zone : `assign` relancé), échouerait ; pour le changer, le
+  retirer d'abord (`entra_test_users` sans lui, un apply), puis le recréer. `account_enabled` et le mot
+  de passe sont ignorés (`ignore_changes`) : l'exécuteur d'IR1 désactive et réactive l'utilisateur, et
+  un plan ne le réactive pas.
 - Le mot de passe initial d'un utilisateur de test vit dans l'**état Terraform local** (sensible),
   jamais montré : une technique de R2 qui doit se connecter pose le sien.
 - Contrat planifié contre de faux providers : `infra/terraform/tests/entra_bench_unit.tftest.hcl`
@@ -2987,30 +2994,40 @@ az rest --method GET --url "https://graph.microsoft.com/v1.0/me/memberOf/microso
   --query "value[].displayName" -o tsv
 # attendu : Privileged Role Administrator (ou Global Administrator) et User Administrator — un rôle PIM
 # éligible : l'activer d'abord
-
-# 1. Les deux rôles d'attributs, à ton compte (le PRA les donne ; l'Administrateur général ne les a pas).
 ME=$(az ad signed-in-user show --query id -o tsv)
-for ROLE in "Attribute Definition Administrator" "Attribute Assignment Administrator"; do
-  RID=$(az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions?\$filter=displayName eq '$ROLE'" --query "value[0].id" -o tsv)
-  az rest --method POST --url https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments \
-    --body "{\"principalId\": \"$ME\", \"roleDefinitionId\": \"$RID\", \"directoryScopeId\": \"/\"}"
-done
-# (un rôle d'annuaire tout juste donné peut mettre quelques minutes à valoir : az login à nouveau)
+role() {  # l'id d'un rôle d'annuaire intégré, par son nom affiché
+  az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions?\$filter=displayName eq '$1'" --query "value[0].id" -o tsv
+}
+
+# 1. Attribute Definition Administrator, à ton compte, au tenant (définir l'ensemble et ses définitions).
+az rest --method POST --url https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments \
+  --body "{\"principalId\": \"$ME\", \"roleDefinitionId\": \"$(role 'Attribute Definition Administrator')\", \"directoryScopeId\": \"/\"}"
+# (un rôle tout juste donné peut mettre quelques minutes à valoir : az login à nouveau)
 
 # 2. L'ensemble, ses définitions, l'unité : ce qui existe, ce qui serait créé (lecture seule).
 make celebrimbor-unit-prepare      # attendu, la première fois : « + POST …/attributeSets », deux
                                    # « + POST …/customSecurityAttributeDefinitions », et
                                    # « + POST …/administrativeUnits {… "isMemberManagementRestricted": true} »
+                                   # « une unité nommée au-celebrimbor-bench existe déjà (<id>) » : la relire
+                                   # avec UNIT=<id> (geste 3), ne pas en créer une seconde
+                                   # un 403 sur les attributs : le jeton d'az n'en porte pas les portées
+                                   # (« À mesurer », ci-dessous), passer par le repli
 
-# 3. Les créer. L'unité est NOUVELLE à chaque appel sans UNIT : une seule fois.
+# 3. Les créer. Une seule fois : sans UNIT, une seconde exécution est refusée (l'unité de ce nom).
 make celebrimbor-unit-prepare YES=1
                                    # attendu : « ✓ l'unité restreinte <id> — à épingler … entra_bench_unit_id = "<id>" »
-                                   # « … pas restreinte » : ne pas l'épingler, la supprimer (Revenir en arrière), s'arrêter
+                                   # « … pas encore lisible : la relire … avec UNIT=<id> » : la réplication ;
+                                   #   attendre une minute, relire (ci-dessous), ne rien créer d'autre
+                                   # « … Graph la dit non restreinte » : ne pas l'épingler ; la relire avec
+                                   #   UNIT=<id> ; relue non restreinte, la supprimer (Revenir en arrière)
 cat >> infra/terraform/terraform.tfvars <<'TFVARS'
 entra_bench_unit_enabled = true
 entra_bench_unit_id      = "<l'id dit ci-dessus>"
 TFVARS
 make celebrimbor-unit-prepare UNIT=<l'id>   # relue : « = l'unité restreinte <id> », rien de créé
+# Attribute Assignment Administrator, à ton compte, à la portée de l'ensemble seul (il existe maintenant) :
+az rest --method POST --url https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments \
+  --body "{\"principalId\": \"$ME\", \"roleDefinitionId\": \"$(role 'Attribute Assignment Administrator')\", \"directoryScopeId\": \"/attributeSets/Eregion\"}"
 
 # 4. Celebrimbor — les utilisateurs de test, leur attribut, leur appartenance, seuls.
 make celebrimbor-users-plan        # doit montrer, et rien d'autre :
@@ -3021,11 +3038,16 @@ make celebrimbor-users-plan        # doit montrer, et rien d'autre :
                                    # + azuread_administrative_unit_member.bench_test["tuor"]
                                    # Plan: 3 to add, 0 to change, 0 to destroy ; « Resource targeting is in effect » attendu
 make celebrimbor-users-up YES=1    # l'attribut se pose (« ✓ <id> : Eregion.eregionTarget=celebrimbor, … »), puis l'appartenance
+                                   # un 403 sur le PATCH de l'attribut : l'apply s'arrête là — l'utilisateur
+                                   # existe, sans attribut ni appartenance, et la garde le refuse (une moitié
+                                   # manque) ; le repli (« À mesurer »), puis le même users-up : terraform_data
+                                   # relance assign, puis l'appartenance. Ou le retirer : entra_test_users = [],
+                                   # un users-up (il n'est pas dans l'unité, Terraform le supprime)
 
 # 5. Ce qu'Entra en dit (lecture seule).
 UNIT=$(terraform -chdir=infra/terraform output -raw entra_bench_unit_id)
 USER_ID=$(terraform -chdir=infra/terraform output -json entra_test_user_object_ids | jq -r .tuor)
-az rest --method GET --url "https://graph.microsoft.com/v1.0/directory/administrativeUnits/$UNIT?\$select=id,isMemberManagementRestricted"
+az rest --method GET --url "https://graph.microsoft.com/v1.0/directory/administrativeUnits/$UNIT?\$select=id,isMemberManagementRestricted,membershipType"
 az rest --method GET --url "https://graph.microsoft.com/v1.0/directory/administrativeUnits/$UNIT/members?\$select=id,userPrincipalName"
 az rest --method GET --url "https://graph.microsoft.com/v1.0/users/$USER_ID?\$select=id,customSecurityAttributes"
 
@@ -3034,9 +3056,19 @@ EREGION_TENANT_ID=$(az account show --query tenantId -o tsv) EREGION_OPERATOR_OB
   EREGION_BENCH_ADMIN_UNIT_ID="$UNIT" .venv/bin/python -m eregion_core.inscription user "$USER_ID"
                                    # attendu : « non-destructive technique: allowed (zone bench) »,
                                    #           « destructive technique: allowed (zone bench) »
+# La première fois, mesurer ce que transitiveMemberOf dit des unités d'un utilisateur — le refus d'un
+# membre d'une autre unité en dépend (M4095) :
+az rest --method GET --url "https://graph.microsoft.com/v1.0/users/$USER_ID/transitiveMemberOf?\$select=id" \
+  --query "value[].{id:id, type:\"@odata.type\"}" -o table
+                                   # attendu : l'unité $UNIT, de type #microsoft.graph.administrativeUnit ;
+                                   # rien : ce refus ne tient pas (le dire, un lot de suite)
 
-# 7. Quand IR1b a créé l'exécuteur : ses trois rôles, seuls.
-#    Dans terraform.tfvars : entra_identity_executor_object_id = "<principal de l'exécuteur>"
+# 7. L'exécuteur d'IR1 : ce qu'il lit, et ses trois rôles. Dans son environnement (host.env sur H0,
+#    posé par IR1b et IR1c, jamais dans le dépôt) :
+terraform -chdir=infra/terraform output -raw entra_bench_unit_id    # → EREGION_BENCH_ADMIN_UNIT_ID=
+terraform -chdir=infra/terraform output -raw entra_attribute_set    # → EREGION_IDENTITY_ATTRIBUTE_SET=
+#    Quand IR1b a créé son principal, dans terraform.tfvars :
+#    entra_identity_executor_object_id = "<principal de l'exécuteur>"
 make celebrimbor-users-plan        # + azuread_directory_role_assignment.identity_executor["user_administrator"] :
                                    #   directory_scope_id = "/administrativeUnits/<id>" ;
                                    # ["directory_readers"] : "/" ; ["attribute_assignment_reader"] : "/attributeSets/Eregion" ;
@@ -3049,36 +3081,60 @@ Un autre changement au plan d'une de ces étapes : **s'arrêter**, et le traiter
 
 **Ce que Glorfindel verra**, si les journaux d'ID1 sont activés : la création de l'unité et des
 utilisateurs, l'entrée de chacun dans l'unité (`AuditLogs`, catégories `AdministrativeUnit`,
-`UserManagement`), les rôles donnés à l'exécuteur (`RoleManagement`) — des cartes `identity_change`,
-jamais une action.
+`UserManagement`), les rôles donnés à l'exécuteur et à ton compte (`RoleManagement`) — des cartes
+`identity_change`, jamais une action.
 
-**Revenir en arrière** : `entra_bench_unit_enabled = false`, puis `make celebrimbor-users-plan`
-(l'appartenance, les utilisateurs et les rôles de l'exécuteur à détruire) et
-`make celebrimbor-users-up YES=1`. L'unité, créée par Graph, reste : la supprimer à la main
-(`az rest --method DELETE --url https://graph.microsoft.com/v1.0/directory/administrativeUnits/<id>` ;
-ses protections peuvent mettre 30 minutes à se lever, doc). L'ensemble `Eregion` et ses définitions
-restent (ils ne se suppriment pas) ; une définition se désactive :
-`az rest --method PATCH --url https://graph.microsoft.com/v1.0/directory/customSecurityAttributeDefinitions/Eregion_eregionTarget --body '{"status": "Deprecated"}'`.
-Les deux rôles d'attributs donnés à ton compte au geste 1 se retirent ensuite, s'ils ne servent plus.
+**Revenir en arrière** :
+- `entra_bench_unit_enabled = false`, puis `make celebrimbor-users-plan` (l'appartenance, les
+  utilisateurs et les trois rôles de l'exécuteur à détruire) et `make celebrimbor-users-up YES=1`.
+- **`make celebrimbor-down`**, tant que `entra_bench_unit_enabled = true`, détruit aussi les
+  utilisateurs de test, leur appartenance et les trois rôles de l'exécuteur (le même droit que l'apply).
+- **L'unité et l'ensemble survivent** au `down` comme à `entra_bench_unit_enabled = false` : ils ne
+  sont pas dans l'état. L'unité se supprime à la main
+  (`az rest --method DELETE --url https://graph.microsoft.com/v1.0/directory/administrativeUnits/<id>` ;
+  ses protections peuvent mettre 30 minutes à se lever, doc) ; l'ensemble `Eregion` et ses définitions
+  ne se suppriment pas, une définition se désactive :
+  `az rest --method PATCH --url https://graph.microsoft.com/v1.0/directory/customSecurityAttributeDefinitions/Eregion_eregionTarget --body '{"status": "Deprecated"}'`.
+- **Attribute Assignment Administrator** sert à chaque recréation d'un utilisateur (son attribut) : ne
+  pas le retirer à ton compte tant que le banc vit. Attribute Definition Administrator peut se retirer
+  une fois l'ensemble et ses définitions faits.
 
 **Ce que la garde lit, et qui le lit** : l'utilisateur et ses attributs, ses appartenances (avec leur
 type), ce qu'il possède, ses rôles d'application, ses rôles d'annuaire actifs et éligibles ; l'unité
-épinglée, restreinte ou non, et ses membres. **Les droits d'un lecteur de service** (hypothèse) :
-`User.Read.All`, `AdministrativeUnit.Read.All`, `CustomSecAttributeAssignment.Read.All` (ou Attribute
-Assignment Reader à la portée de l'ensemble `Eregion`) et `RoleManagement.Read.Directory`. **Orodruin ne
-les tient pas** (son contrat n'admet que `Application.Read.All` et `RoleManagement.Read.Directory`) :
-jusqu'à un lot de suite, la garde d'un utilisateur se lit depuis ton poste (geste 6), et Orodruin
-refuserait tout utilisateur (une lecture qui échoue). L'exécuteur d'IR1 les tiendra par ses rôles
-(geste 7).
+épinglée, restreinte ou non, dynamique ou non (`membershipType`), et ses membres. **Les droits d'un
+lecteur de service** (hypothèse) : `User.Read.All`, `AdministrativeUnit.Read.All`,
+`CustomSecAttributeAssignment.Read.All` (ou Attribute Assignment Reader à la portée de l'ensemble
+`Eregion`) et `RoleManagement.Read.Directory`. **Orodruin ne les tient pas** (son contrat n'admet que
+`Application.Read.All` et `RoleManagement.Read.Directory`) : jusqu'à un lot de suite, la garde d'un
+utilisateur se lit depuis ton poste (geste 6), et Orodruin refuserait tout utilisateur (une lecture
+qui échoue). L'exécuteur d'IR1 les tiendra par ses rôles (geste 7).
 
-**À mesurer au banc** : que Graph v1.0 accepte `isMemberManagementRestricted` à la création (sinon,
-`/beta`) ; le texte d'un 404 d'`az rest` (le script le reconnaît à « Not Found ») ; qu'un Administrateur
-des rôles privilégiés ajoute un membre à une unité restreinte ; que l'attribut doive se poser avant
-l'appartenance (l'ordre suivi) ou non ; que le mot de passe tiré passe la politique du tenant ; qu'un rôle
-se donne à la portée `/attributeSets/Eregion` (hypothèse 15) ; que `transitiveMemberOf` d'un utilisateur
-liste ses unités (la garde n'en dépend pas : elle lit les membres de l'unité) ; la licence P1 qu'exige un
-administrateur d'unité, pour un principal (hypothèse 14) ; la portée réelle de
-`User.RevokeSessions.All` sur les membres d'une unité restreinte (hypothèse 12).
+**À mesurer au banc** :
+- **le jeton d'Azure CLI porte-t-il les portées des attributs de sécurité**
+  (`CustomSecAttributeDefinition.ReadWrite.All`, `CustomSecAttributeAssignment.ReadWrite.All`) ? Le
+  client public d'az demande des portées fixes ; s'il ne les porte pas, les requêtes sur l'ensemble,
+  les définitions et l'attribut prennent un 403 même avec les bons rôles. **Repli** : les mêmes
+  requêtes (le tableau ci-dessus) par Microsoft Graph PowerShell
+  (`Connect-MgGraph -Scopes "CustomSecAttributeDefinition.ReadWrite.All","CustomSecAttributeAssignment.ReadWrite.All"`,
+  puis `Invoke-MgGraphRequest`), ou par Graph Explorer, en consentant ces portées pour ton compte.
+  **L'état laissé par un 403** : au geste 3, rien de créé pour l'attribut (l'ensemble ou une définition
+  manque, `prepare` le redit) ; au geste 4, un utilisateur sans attribut ni appartenance, que la garde
+  refuse — le nettoyer par `entra_test_users = []` et un `users-up`, ou poser l'attribut par le repli
+  et relancer le même `users-up` ;
+- que Graph v1.0 accepte `isMemberManagementRestricted` à la création, et le rende dans la réponse du
+  `POST` (sinon, `/beta`) ; qu'il rende `membershipType` (absent, la garde le lit comme assigné) ;
+- le texte d'un 404 d'`az rest` (le script le reconnaît à « Not Found ») ; le délai avant qu'une unité
+  créée soit lisible (4 lectures, 5 s entre chacune) ;
+- qu'un Administrateur des rôles privilégiés ajoute un membre à une unité restreinte ; que l'attribut
+  doive se poser avant l'appartenance (l'ordre suivi) ou non ;
+- qu'un utilisateur supprimé juste après sa sortie de l'unité restreinte ne prenne pas un 403 (les
+  protections tardent à se lever) : sinon, relancer le même apply un peu plus tard ;
+- que le mot de passe tiré passe la politique du tenant ; qu'un rôle se donne à la portée
+  `/attributeSets/Eregion` (hypothèse 15, pour toi au geste 3 et pour l'exécuteur au geste 7) ;
+- que `transitiveMemberOf` d'un utilisateur liste ses unités (geste 6) : l'appartenance à l'unité du
+  banc se lit sur l'unité et n'en dépend pas, mais **le refus d'un membre d'une autre unité, si** ;
+- la licence P1 qu'exige un administrateur d'unité, pour un principal (hypothèse 14) ; la portée réelle
+  de `User.RevokeSessions.All` sur les membres d'une unité restreinte (hypothèse 12).
 
 ---
 

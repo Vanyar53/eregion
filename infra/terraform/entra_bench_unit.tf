@@ -143,8 +143,10 @@ resource "azuread_user" "bench_test" {
   # technique qui doit se connecter pose le sien.
   password = "${uuid()}A!"
 
+  # account_enabled : l'exécuteur d'IR1 désactive et réactive l'utilisateur — un plan ne doit ni le
+  # réactiver, ni échouer sur un membre de l'unité restreinte, que Terraform ne modifie plus.
   lifecycle {
-    ignore_changes = [password]
+    ignore_changes = [password, account_enabled]
   }
 }
 
@@ -216,4 +218,11 @@ output "entra_bench_unit_id" {
 output "entra_test_user_object_ids" {
   value       = { for k, u in azuread_user.bench_test : k => u.object_id }
   description = "Les object ids des utilisateurs de test du banc, par clé : ce que la garde juge (python -m eregion_core.inscription user <l'un>), une fois les droits de lecture du lecteur posés."
+}
+
+# IR1b : l'exécuteur lit le nom de l'ensemble (EREGION_IDENTITY_ATTRIBUTE_SET) et l'unité
+# (EREGION_BENCH_ADMIN_UNIT_ID) — docs/operations.md, « Les utilisateurs de test du banc (IDI1b) ».
+output "entra_attribute_set" {
+  value       = local.entra_attribute_set
+  description = "L'ensemble d'attributs de sécurité d'Eregion (son nom est son id) : EREGION_IDENTITY_ATTRIBUTE_SET de l'exécuteur d'IR1."
 }

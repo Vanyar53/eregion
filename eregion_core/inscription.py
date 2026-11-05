@@ -657,7 +657,7 @@ def _user_attributes(csa) -> tuple[dict, str]:
 def user_enrollment(user: dict, unit: dict, *, scope: IdentityScope, token: dict) -> GuardResult:
     """Is this user enrolled for the bench? ``user`` as Graph returned it — ``id``, ``userType``,
     ``customSecurityAttributes``, and what ``user_privilege_refusal`` reads; ``unit``, the bench's
-    administrative unit — ``id``, ``isMemberManagementRestricted``, ``members`` (their object ids);
+    administrative unit — ``id``, ``isMemberManagementRestricted``, ``membershipType``, ``members`` (their object ids);
     ``token``, the claims of the reader's own Graph token. Both halves, or nothing: the unit holds the
     user, and the attribute names the bench and the unit's zone."""
     why = _scope_refusal(scope)
@@ -689,6 +689,9 @@ def user_enrollment(user: dict, unit: dict, *, scope: IdentityScope, token: dict
     if unit.get("isMemberManagementRestricted") is not True:
         return GuardResult(False, "the bench's administrative unit is not restricted: a tenant's "
                                   "administrator would manage its members, the enrollment untraced")
+    if str(unit.get("membershipType") or "").lower() == "dynamic":
+        return GuardResult(False, "the bench's administrative unit is dynamic: a rule, not Celebrimbor, "
+                                  "would choose its members")
     members = unit.get("members")
     if not isinstance(members, list):
         return GuardResult(False, "the bench's unit's members are not read: the unit's half is missing")
@@ -856,8 +859,8 @@ class GraphEnrollment:
         if not oid:
             raise ValueError("not a user's object id")
         unit_id = self.scope.admin_unit_id
-        if not unit_id:
-            raise ValueError(f"the bench's administrative unit is not named ({ADMIN_UNIT_ENV})")
+        if not _GUID.fullmatch(unit_id or ""):
+            raise ValueError(f"the bench's administrative unit is not named as an object id ({ADMIN_UNIT_ENV})")
         token = self._token(_GRAPH_SCOPE)
         claims = token_claims(token)
         g = {"Authorization": f"Bearer {token}"}
@@ -873,13 +876,13 @@ class GraphEnrollment:
         roles = [*self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleAssignments", g, by_user),
                  *self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleEligibilityScheduleInstances", g, by_user)]
         unit_url = f"{_GRAPH_V1}/directory/administrativeUnits/{unit_id}"
-        unit = self._read(unit_url, g, {"$select": "id,isMemberManagementRestricted"})
+        unit = self._read(unit_url, g, {"$select": "id,isMemberManagementRestricted,membershipType"})
         members = [str(o.get("id") or "") for o in self._pages(f"{unit_url}/members", g, {"$select": "id"})]
         out = {"id": user.get("id"), "userType": user.get("userType"),
                "customSecurityAttributes": user.get("customSecurityAttributes"),
                "member_of": member_of, "owned": owned, "app_roles_held": held, "directory_roles": roles}
         return out, {"id": unit.get("id"), "isMemberManagementRestricted": unit.get("isMemberManagementRestricted"),
-                     "members": members}, claims
+                     "membershipType": unit.get("membershipType"), "members": members}, claims
 
     def check_user(self, user_object_id: str, *, kind: str, destructive: bool | None) -> GuardResult:
         """The verdict for an experiment, or a verb of IR1, on this test user, read now. The scope is

@@ -390,7 +390,7 @@ Un utilisateur n'a pas de `tags`. Il s'inscrit par **deux moitiés**, la même f
 | l'attribut | un attribut de sécurité personnalisé de l'ensemble `Eregion`, sur l'utilisateur | `Eregion.eregionTarget=<banc>`, `Eregion.eregionZone=<zone>` (un nom d'attribut n'admet pas le tiret : la garde fait la correspondance avec `eregion-target`) | un Administrateur d'attribution d'attributs seulement : ni User Administrator, ni l'Administrateur général par défaut |
 
 Une moitié qui manque, deux moitiés qui ne s'accordent pas (un autre banc, une zone qui n'est pas celle
-de l'unité), une unité qui n'est pas restreinte ou pas celle qui est épinglée, des attributs que le
+de l'unité), une unité qui n'est pas restreinte, qui est dynamique ou qui n'est pas celle qui est épinglée, des attributs que le
 lecteur ne peut pas lire : refusé. La garde refuse aussi : un invité (un utilisateur d'un autre
 tenant) ; un membre d'une autre unité administrative ; une identité de `never_target` (un opérateur,
 un compte de secours, le lecteur) ; **un utilisateur privilégié** — un rôle d'annuaire actif ou

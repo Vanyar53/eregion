@@ -66,6 +66,11 @@ def _scenario(ttp: str) -> Path:
     return SCENARIOS / f"{PAIRS[ttp][0]}.yaml"
 
 
+def _probes(ttp: str) -> list:
+    """The entry's own steady-state probes — the catalog compares them too (VM3b)."""
+    return _entry(ttp)["steady_state"]["probes"]
+
+
 # ── The catalog: three techniques turned implemented, each an atomic engine ───────────
 
 def test_catalog_three_pairs_implemented_atomic():
@@ -159,31 +164,42 @@ def test_engine_args_that_are_no_mapping_are_refused_never_a_crash(tmp_path, arg
 
 def test_the_catalog_decides_the_engine_args():
     ttp, ref = "T1059.004", PAIRS["T1059.004"][1]
-    own = _entry(ttp)["engine_args"]
-    assert catalog_destructive(ttp, engine="atomic", engine_ref=ref, engine_args=own) is False
+    own, probes = _entry(ttp)["engine_args"], _probes(ttp)
+    assert catalog_destructive(ttp, engine="atomic", engine_ref=ref, engine_args=own,
+                               probes=probes) is False
     # Another value, one more, one less, none, no mapping: not what the catalog vouched for.
     for other in ({**own, "host": "127.0.0.2"}, {"host": own["host"]}, None, ["x"]):
-        assert catalog_destructive(ttp, engine="atomic", engine_ref=ref, engine_args=other) is None
+        assert catalog_destructive(ttp, engine="atomic", engine_ref=ref, engine_args=other,
+                                   probes=probes) is None
     # An entry without engine_args takes none.
     cron, revert = PAIRS["T1053.003"][1], _entry("T1053.003")["revert"]
-    assert catalog_destructive("T1053.003", engine="atomic", engine_ref=cron, revert=revert) is True
+    cron_probes = _probes("T1053.003")
     assert catalog_destructive("T1053.003", engine="atomic", engine_ref=cron, revert=revert,
-                               engine_args={"command": "/tmp/evil.sh"}) is None
+                               probes=cron_probes) is True
+    assert catalog_destructive("T1053.003", engine="atomic", engine_ref=cron, revert=revert,
+                               probes=cron_probes, engine_args={"command": "/tmp/evil.sh"}) is None
 
 
 def test_the_catalog_decides_the_revert():
     """The revert's steps are commands too: only the entry's own is what the catalog vouched for."""
     ttp, ref = "T1053.003", PAIRS["T1053.003"][1]
-    own = _entry(ttp)["revert"]
-    assert catalog_destructive(ttp, engine="atomic", engine_ref=ref, revert=own) is True
+    own, probes = _entry(ttp)["revert"], _probes(ttp)
+    assert catalog_destructive(ttp, engine="atomic", engine_ref=ref, revert=own,
+                               probes=probes) is True
     other_path = [{**own[0], "paths": ["/tmp/notevil", "/tmp/other"]}]
-    for other in (None, [], other_path, own + own, {"name": "x"}, "rm -rf /"):
-        assert catalog_destructive(ttp, engine="atomic", engine_ref=ref, revert=other) is None
+    # VM3b: a step that waits on another probe, or on none, is another revert too.
+    other_gate = [{**own[0], "requires_probe": "tmp-files-absent"}]
+    no_gate = [{k: v for k, v in own[0].items() if k != "requires_probe"}]
+    for other in (None, [], other_path, other_gate, no_gate, own + own, {"name": "x"}, "rm -rf /"):
+        assert catalog_destructive(ttp, engine="atomic", engine_ref=ref, revert=other,
+                                   probes=probes) is None
     # A technique whose entry has no revert takes none.
     shell = PAIRS["T1059.004"][1]
     args = _entry("T1059.004")["engine_args"]
     assert catalog_destructive("T1059.004", engine="atomic", engine_ref=shell, engine_args=args,
-                               revert=own) is None
+                               probes=_probes("T1059.004")) is False
+    assert catalog_destructive("T1059.004", engine="atomic", engine_ref=shell, engine_args=args,
+                               probes=_probes("T1059.004"), revert=own) is None
 
 
 def _variant(tmp_path, ttp, **changes) -> Path:
@@ -232,7 +248,8 @@ def test_a_campaign_on_the_shell_technique_pings_the_loopback(tmp_path):
     command = resolve_ref(s.engine_ref, s.engine_args).command
     assert "8.8.8.8" not in command and "127.0.0.1" in command
     assert catalog_destructive(s.mitre, engine=s.engine, engine_ref=s.engine_ref,
-                               engine_args=s.engine_args) is False
+                               engine_args=s.engine_args,
+                               probes=s.raw["steady_state"]["probes"]) is False
 
 
 def test_a_campaign_on_log_clearing_targets_the_disposable_path(tmp_path):
@@ -257,7 +274,8 @@ def test_a_campaign_on_cron_carries_the_catalog_revert(tmp_path):
     s = ScenarioParser().load(str(res.path))
     assert s.raw["revert"] == _entry("T1053.003")["revert"]
     assert catalog_destructive(s.mitre, engine=s.engine, engine_ref=s.engine_ref,
-                               revert=s.raw["revert"]) is True
+                               revert=s.raw["revert"],
+                               probes=s.raw["steady_state"]["probes"]) is True
 
 
 # ── The scenarios validate, resolve, and run what the catalog vouched for ─────────────
@@ -275,17 +293,17 @@ def test_scenarios_validate_resolve_and_carry_the_catalog_args():
             assert "#{" not in r.substitute(probe["verify"]), ttp
 
 
-def _probe_executor(after: str = "ABSENT TMP_ABSENT"):
+def _probe_executor(after: str = "ABSENT TMP_ABSENT CRONTAB_RESTORED"):
     """A bench executor answering each probe by its phase: clean before, broken right after the
     command (the effect), `after` once cleaned up."""
     ex = _executor()
 
     def run_command(cmd, label=""):
         if "(before)" in label:
-            return "ABSENT TMP_ABSENT"
+            return "ABSENT TMP_ABSENT CRONTAB_RESTORED"
         if "(effect)" in label:
-            return "PRESENT TMP_PRESENT"
-        if "(after)" in label:
+            return "PRESENT TMP_PRESENT CRONTAB_CHANGED"
+        if "(after)" in label or "(before revert)" in label:
             return after
         return ""
     ex.run_command.side_effect = run_command
@@ -320,7 +338,7 @@ def test_the_cron_scenario_checks_the_tmp_files_before_and_after(tmp_path, monke
     doc = yaml.safe_load(_scenario("T1053.003").read_text())
     probe = next(p for p in doc["steady_state"]["probes"] if p["name"] == "tmp-files-absent")
     assert "/tmp/notevil" in probe["verify"] and "#{tmp_cron}" in probe["verify"]
-    ex = _probe_executor(after="ABSENT TMP_PRESENT")   # what the revert did not remove
+    ex = _probe_executor(after="ABSENT TMP_PRESENT CRONTAB_RESTORED")   # what the revert left
     out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
     assert out.error == "initial state not restored"
     probes = [c for c in _sent(ex) if "/tmp/notevil" in c and "TMP_ABSENT" in c]
@@ -362,6 +380,8 @@ class _ShellVM:
         )
         fake.chmod(0o755)
         self.failing: set[str] = set()   # labels whose call raises (a Run Command that failed)
+        # labels whose call raises once the script ran (VM3b: a Run Command that timed out late)
+        self.failing_after: set[str] = set()
 
     def run_command(self, cmd, label=""):
         if any(f in label for f in self.failing):
@@ -369,6 +389,8 @@ class _ShellVM:
         out = subprocess.run(["sh", "-c", cmd.replace("/tmp/", f"{self.tmp}/")],
                              capture_output=True, text=True, timeout=20,
                              env={"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.tmp)})
+        if any(f in label for f in self.failing_after):
+            raise RuntimeError(f"Run Command timed out: {label}")
         return out.stdout
 
     def left(self) -> list[str]:
@@ -410,10 +432,13 @@ def test_without_the_revert_the_simulated_run_is_not_restored(tmp_path, monkeypa
     assert vm.store.read_text() == ROOT_CRONTAB and vm.left() == ["notevil", "persistevil"]
 
 
-def test_a_failed_cleanup_keeps_root_crontab_backup(tmp_path, monkeypatch):
-    """A cleanup that failed may still need /tmp/notevil: the revert is not run, the file stays."""
+@pytest.mark.parametrize("ran", [False, True])
+def test_a_failed_cleanup_keeps_root_crontab_backup(tmp_path, monkeypatch, ran):
+    """A cleanup that failed may still need /tmp/notevil: the revert is not run, the file stays.
+    Even when its script ran before the call failed (VM3b): the probe the revert waits on would
+    hold then, but a cleanup in error is never followed by the revert."""
     vm = _ShellVM(tmp_path)
-    vm.failing.add(" cleanup")
+    (vm.failing_after if ran else vm.failing).add(" cleanup")
     ex = _shell_executor(vm)
     out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
     assert out.error
@@ -437,7 +462,8 @@ def test_a_failed_revert_is_never_a_clean_run(tmp_path, monkeypatch):
 def test_the_catalog_revert_resolves_to_one_rm_inside_tmp():
     r = resolve_ref(PAIRS["T1053.003"][1])
     assert revert_commands(_entry("T1053.003")["revert"], r) == [
-        ("remove-tmp-files", "#!/bin/sh\nrm -f -- /tmp/notevil /tmp/persistevil")]
+        ("remove-tmp-files", "#!/bin/sh\nrm -f -- /tmp/notevil /tmp/persistevil",
+         "root-crontab-restored")]
     assert revert_commands(None, r) == []
 
 
@@ -472,9 +498,10 @@ def test_a_scenario_with_a_refused_revert_touches_nothing(tmp_path, monkeypatch)
     ex.run_command.assert_not_called()
 
 
-@pytest.mark.parametrize("cap,refused", [(8, True), (9, False)])
+@pytest.mark.parametrize("cap,refused", [(12, True), (13, False)])
 def test_the_cap_counts_the_revert_steps(tmp_path, monkeypatch, cap, refused):
-    """Command, cleanup, one revert step and two probes three times: 9 calls."""
+    """Command, cleanup, one revert step and the probe it waits on (VM3b), three probes three
+    times: 13 calls."""
     import eregion_core.orodruin as orodruin
 
     # Every reader as the suite has it (identity, graph, network…), but the cap.
@@ -483,11 +510,11 @@ def test_the_cap_counts_the_revert_steps(tmp_path, monkeypatch, cap, refused):
     ex = _probe_executor()
     out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
     if refused:
-        assert out.refused and "this atomic needs 9" in out.error
+        assert out.refused and "this atomic needs 13" in out.error
         ex.run_command.assert_not_called()
     else:
         assert not out.error, out.error
-        assert ex.run_command.call_count == 9
+        assert ex.run_command.call_count == 13
 
 
 # ── The blue side: each rule fires on a realistic line and not on benign noise ────────

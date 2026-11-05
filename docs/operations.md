@@ -2294,22 +2294,25 @@ en lecture que la lecture des runs demande déjà.
   coûte rien, et un total qui se tromperait ne suffit pas.
 - **Un job qui informe** (macOS) rouge, annulé, sauté ou absent est **dit** à la suite de la ligne
   verte (« informe sans bloquer : « tests (macOS, …) » annulé »), et ne bloque jamais.
-- **Un job relancé** (« Re-run failed jobs ») : de deux jobs du même nom, celui de la tentative la
-  plus récente (`run_attempt`, puis son `id`) compte, dans l'ordre où GitHub les rend, quel qu'il
-  soit. Ce que `filter=latest` rend après une relance partielle n'est pas mesuré ici : le code tient
-  dans les deux cas.
+- **Un job relancé** (« Re-run failed jobs »). Mesuré sur le run 42061905987 : après une relance
+  partielle, la tentative 2 rend les 21 jobs, sans doublon ; les jobs non relancés y sont recopiés,
+  sous de nouveaux ids. Si une réponse mêlait pourtant deux tentatives, de deux jobs du même nom celui
+  de la tentative la plus récente (`run_attempt`) compte, dans l'ordre où GitHub les rend et quels que
+  soient leurs ids. Deux jobs du même nom dans une même tentative : refus, le motif dit.
 - **Une seule source pour les jobs qui informent.** `scripts/release.py` tient `GATE_JOB` (le nom du
   total) et `INFORMATIVE` (l'id et le nom de chaque job qui informe). `tests/unit/test_release.py` les
   lit face au workflow : l'`INFORMATIVE` de l'étape du total (par id), le `name:` de chaque job, le
   `needs` du total (tous les autres jobs), et `continue-on-error` sur les seuls jobs qui informent.
   Tout autre job bloque, sans liste à recopier. Le faux GitHub des tests tire ses jobs du workflow
   lui-même, chaque matrice dépliée.
-- Une lecture qui échoue, une réponse qui n'est pas une liste de jobs, une page de 100 jobs ou plus
-  (ou moins de jobs que GitHub n'en compte), un job sans nom, un run sans numéro : refus.
+- Une lecture qui échoue, une réponse qui n'est pas une liste de jobs, une réponse sans `total_count`,
+  une page de 100 jobs ou plus (ou moins de jobs que `total_count` n'en compte), un job sans nom, un run
+  sans numéro : refus.
 
 Tests : `tests/unit/test_release.py` (macOS annulé, rouge ou absent : le brouillon passe ; une tranche
-rouge, le total absent, rouge ou en cours : refus ; un job relancé : sa dernière tentative compte) ;
-mutants M4035–M4039 (`scripts/mutants/REL3.py`).
+rouge, le total absent, rouge ou en cours : refus ; un job relancé : sa dernière tentative compte,
+jamais son id seul ; deux jobs d'un nom dans une tentative : refus) ; mutants M4035–M4039 et
+M4120–M4122 (`scripts/mutants/REL3.py`).
 
 **Les tranches découpées sur les durées mesurées** (CI6d, #545). Les deux premiers runs réels de la
 porte (05/11 : 41997986094 sur la PR de la 0.5.5, 42009742778 en dispatch sur `main`) ont duré 73 et

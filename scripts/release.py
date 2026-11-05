@@ -678,7 +678,7 @@ def gate(root: Path, sha: str) -> tuple[bool, str]:
 
 
 def _attempt(job: dict) -> tuple[int, int]:
-    """A job's attempt, then its id: of two jobs of the same name, the later one stands."""
+    """A job's attempt, then its id: of two jobs of the same name, the later attempt's stands."""
     a, i = job.get("run_attempt"), job.get("id")
     return (a if isinstance(a, int) and not isinstance(a, bool) else 0,
             i if isinstance(i, int) and not isinstance(i, bool) else 0)
@@ -693,11 +693,14 @@ def _job_state(job: dict) -> str:
 def _jobs(root: Path, r: dict) -> tuple[bool, str]:
     """(green, what to say) of a completed run of the gate, by its jobs — never by its conclusion
     (REL3, #569: the 0.5.6's macOS, cancelled for want of a runner, set it to failure, every job
-    that blocks green). Read by one GET of the run's jobs, its last attempt's (filter=latest; and
-    of two jobs of the same name, the later attempt stands: a job re-run). Its total, GATE_JOB,
-    present, completed and green; every job that blocks — all but INFORMATIVE's — green: a
-    cancelled or a skipped one is red, as the total holds them. A job that informs, whatever it
-    is, is said, never blocking. A page of PAGE jobs or more, or fewer than GitHub counts, refuses."""
+    that blocks green). Read by one GET of the run's jobs, its last attempt's (filter=latest:
+    measured on run 42061905987, after « Re-run failed jobs » its attempt 2 gives the 21 jobs, no
+    two of one name, those not re-run copied into it under new ids; of two jobs of the same name
+    the later attempt's stands all the same, and two of one name in one attempt refuse). Its
+    total, GATE_JOB, present, completed and green; every job that blocks — all but INFORMATIVE's
+    — green: a cancelled or a skipped one is red, as the total holds them. A job that informs,
+    whatever it is, is said, never blocking. A page of PAGE jobs or more, no `total_count`, or
+    fewer jobs than it counts, refuses."""
     n = r.get("id")
     if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
         return False, f"les jobs de la porte de release ne se lisent pas, {_where(r)} : un run sans numéro"
@@ -716,7 +719,10 @@ def _jobs(root: Path, r: dict) -> tuple[bool, str]:
         return False, (f"les jobs de la porte de release ne se lisent pas, {_where(r)} : la réponse de gh api n'est "
                        "pas une liste de jobs")
     total = doc.get("total_count")
-    if len(jobs) >= PAGE or (isinstance(total, int) and not isinstance(total, bool) and total > len(jobs)):
+    if not isinstance(total, int) or isinstance(total, bool):
+        return False, (f"les jobs de la porte de release ne se lisent pas, {_where(r)} : la réponse de gh api ne "
+                       "les compte pas (total_count)")
+    if len(jobs) >= PAGE or total > len(jobs):
         return False, (f"les jobs de la porte de release ne se lisent pas, {_where(r)} : la page lue ne les montre "
                        "pas tous")
     last: dict[str, dict] = {}
@@ -724,6 +730,9 @@ def _jobs(root: Path, r: dict) -> tuple[bool, str]:
         name = job.get("name")
         if not isinstance(name, str) or not name:
             return False, f"les jobs de la porte de release ne se lisent pas, {_where(r)} : un job sans nom"
+        if name in last and _attempt(job)[0] == _attempt(last[name])[0]:
+            return False, (f"les jobs de la porte de release ne se lisent pas, {_where(r)} : deux jobs "
+                           f"« {_plain(name, 80)} » dans la même tentative")
         if name not in last or _attempt(job) >= _attempt(last[name]):
             last[name] = job
     total_job = last.get(GATE_JOB)

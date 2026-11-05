@@ -103,8 +103,9 @@ elif args[:2] == ["api", "--method"] and args[2] == "GET" and ("/pulls?head=" in
         listed = [pr for pr in listed if pr.get("state") == "open"]
     out = data["raw_" + which] if "raw_" + which in data else json.dumps(listed)
 elif args[:2] == ["api", "--method"] and args[2] == "GET" and "/actions/runs/" in args[3] and "/jobs?" in args[3]:
-    # REL3: a run's jobs, as GitHub lists them. What filter=latest gives after a job re-run is not
-    # measured here: the fake gives every attempt's it is told, the later must stand.
+    # REL3: a run's jobs, as GitHub lists them. filter=latest, measured on run 42061905987: after
+    # « Re-run failed jobs », attempt 2 gives the 21 jobs, no two of one name, those not re-run
+    # copied into it under new ids. The fake gives what it is told, other attempts' too.
     if os.environ.get("FAKE_GH_FAIL_JOBS"):
         state.write_text(json.dumps(data))
         print("HTTP 403: Resource not accessible by integration", file=sys.stderr)
@@ -1286,16 +1287,19 @@ def test_the_total_still_running_refuses(repo, tmp_path, capsys):
                   "attends-la, verte (30 à 60 minutes)")
 
 
+@pytest.mark.parametrize("newer_ids_smaller", [False, True])
 @pytest.mark.parametrize("newer_first", [False, True])
 @pytest.mark.parametrize("first, again, passes", [
     ("failure", "success", True),        # a shard red, re-run green (« Re-run failed jobs »): the total green again
     ("success", "failure", False),       # green, then re-run and red
 ])
-def test_a_job_re_run_its_last_attempt_stands(repo, tmp_path, capsys, newer_first, first, again, passes):
+def test_a_job_re_run_its_last_attempt_stands(repo, tmp_path, capsys, newer_ids_smaller, newer_first, first, again,
+                                              passes):
     """A run re-run: of two jobs of the same name, the later attempt's stands — in whatever order
-    GitHub lists them."""
+    GitHub lists them, and whatever their ids: the attempt decides, never the id alone."""
     older = jobs_of(total=first, **{SHARD_JOB: first})
-    newer = [job(rel.GATE_JOB, again, attempt=2), job(SHARD_JOB, again, attempt=2)]
+    ids = (1, 2) if newer_ids_smaller else (None, None)
+    newer = [job(rel.GATE_JOB, again, attempt=2, job_id=ids[0]), job(SHARD_JOB, again, attempt=2, job_id=ids[1])]
     _gate_with(repo, capsys, newer + older if newer_first else older + newer, run_conclusion=first)
     if passes:
         assert rel.main(["release-draft", "0.4.4"]) == 0
@@ -1314,8 +1318,14 @@ def test_a_job_re_run_its_last_attempt_stands(repo, tmp_path, capsys, newer_firs
     ({"raw_jobs": json.dumps({"total_count": 30, "jobs": [job(rel.GATE_JOB)]})}, "la page lue ne les montre pas tous"),
     ({"raw_jobs": json.dumps({"total_count": 100, "jobs": [job(f"j{i}") for i in range(99)] + [job(rel.GATE_JOB)]})},
      "la page lue ne les montre pas tous"),
-    ({"raw_jobs": json.dumps({"jobs": [job(rel.GATE_JOB), {"status": "completed", "conclusion": "success"}]})},
+    ({"raw_jobs": json.dumps({"total_count": 2, "jobs": [job(rel.GATE_JOB),
+                                                         {"status": "completed", "conclusion": "success"}]})},
      "un job sans nom"),
+    ({"raw_jobs": json.dumps({"jobs": [job(rel.GATE_JOB)]})}, "la réponse de gh api ne les compte pas (total_count)"),
+    ({"raw_jobs": json.dumps({"total_count": "1", "jobs": [job(rel.GATE_JOB)]})},
+     "la réponse de gh api ne les compte pas (total_count)"),
+    ({"raw_jobs": json.dumps({"total_count": True, "jobs": [job(rel.GATE_JOB)]})},
+     "la réponse de gh api ne les compte pas (total_count)"),
     ({"run_id": True}, "un run sans numéro"),
     ({"run_id": 0}, "un run sans numéro"),
 ])
@@ -1329,6 +1339,22 @@ def test_jobs_that_cannot_be_read_refuse(repo, tmp_path, capsys, monkeypatch, se
         _set_answer(tmp_path, "raw_jobs", setup["raw_jobs"])
     capsys.readouterr()
     _gate_refuses(capsys, tmp_path, "les jobs de la porte de release ne se lisent pas, sur ", said)
+
+
+@pytest.mark.parametrize("attempt", [1, 2])
+def test_two_jobs_of_one_name_in_one_attempt_refuse(repo, tmp_path, capsys, attempt):
+    """filter=latest gives one job per name (measured on run 42061905987): two of one name in one
+    attempt — a green beside a red — are no answer to choose from. Refused, said."""
+    _gate_with(repo, capsys, [j for j in jobs_of() if j["name"] != SHARD_JOB]
+               + [job(SHARD_JOB, "success", attempt=attempt, job_id=9), job(SHARD_JOB, "failure", attempt=attempt,
+                                                                           job_id=8)])
+    _gate_refuses(capsys, tmp_path, "les jobs de la porte de release ne se lisent pas, sur ",
+                  f": deux jobs « {SHARD_JOB} » dans la même tentative")
+
+
+def test_the_workflow_s_job_names_are_unique():
+    """What the fake GitHub gives, one job per name, as GitHub's attempt does."""
+    assert len(WORKFLOW_JOBS) == len(set(WORKFLOW_JOBS)) == 21
 
 
 def test_99_jobs_still_read(repo, tmp_path, capsys):

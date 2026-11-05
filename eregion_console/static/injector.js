@@ -42,7 +42,8 @@ const S = {
   errors: {},
   open: new Set(),          // expanded rows: 'w:<run_id>' / 'c:<dir>' / 'm:<technique or fault>'
   campDetail: {},           // dir → {facts, report_md} | {error} | 'loading'
-  delivered: {},            // run_id → {detections} | {error} | 'loading'
+  delivered: {},            // run_id → {configured, key: {pinned, fingerprint | why}, detections: [{signal, state: signed|refused, why, detection}],
+                            //   signed, refused, refused_shown} (CON-S) | {configured: false} | {error} | 'loading'
   showReport: new Set(),    // campaign dirs whose report.md is shown
   focus: null,              // the row a link opened (?run=, ?campaign=): scrolled to once
 };
@@ -195,7 +196,7 @@ function renderWindowDetail(w) {
   else if (d && d.error) rc = `<span style="color:var(--red)">${esc(d.error)}</span>`;
   else if (d && d.configured === false) rc = '<span style="color:var(--dim)">no return channel configured on this host</span>';
   else if (d) rc = channelDetections(d);
-  parts.push(`<div class="dsec s-green"><div class="dtitle">ON THE RETURN CHANNEL FOR THIS RUN — the run counts only those the pinned key signed</div>${rc}</div>`);
+  parts.push(`<div class="dsec s-green"><div class="dtitle">ON THE RETURN CHANNEL FOR THIS RUN — the run counts only those signed by the key it pins — judged here with the key pinned on this console</div>${rc}</div>`);
   return `<div class="detail">${parts.join('')}</div>`;
 }
 

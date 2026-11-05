@@ -209,11 +209,11 @@ def test_the_page_says_signed_only_with_a_key_pinned_and_the_server_s_signed():
     assert "const ok = pinned && x.state === 'signed';" in fn
     assert fn.count(">SIGNED<") == 1 and fn.count(">REFUSED<") == 1
     assert "DELIVERED TO THE RUN" not in JS and "nothing delivered" not in JS
-    assert "the run counts only those the pinned key signed" in JS
+    assert "judged here with the key pinned on this console" in JS
 
 
 def test_the_page_says_why_and_the_counts_escaped():
-    """M3758, M3759: the refusal, the fingerprint, the reason of no key — escaped; the counts are
+    """M3758: the refusal, the fingerprint, the reason of no key — escaped; the counts are
     numbers (#254). The whole page is read by tests/unit/test_console_escaping.py."""
     fn = _channel_detections()
     for said in ("esc(x.why)", "esc(key.fingerprint)", "esc(key.why)", "esc(det.ttp)", "esc(det.rule)",

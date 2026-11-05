@@ -335,8 +335,15 @@ ne l'était pas.
   `MAX_REFUSED` détections refusées au plus (20, la borne du run, SEC21) : un rédacteur du canal qui
   y dépose des centaines de blobs n'inonde pas la page. Les autres sont comptées. Une détection signée
   est toujours montrée, quelle que soit sa place dans la liste.
+- **La clé dont on parle** : la console juge avec son propre `EREGION_WATCH_KEY`, l'injecteur avec
+  celui d'Orodruin (`orodruin.env`). Les deux doivent épingler la même clé publique, celle de la
+  watch ; sinon leurs verdicts peuvent différer. L'empreinte affichée en tête permet de les comparer
+  (`make glorfindel-host-watch-key` donne celle de la watch de H0).
+- **Sans canal de stockage**, la route ne juge rien, comme avant : elle répond `configured: false`.
+  Le canal local des verdicts (SEC18, `runs/verdicts/`) n'est pas lu par elle.
 - **La page** (`injector.js`, `channelDetections`) : le titre dit « ON THE RETURN CHANNEL FOR THIS
-  RUN — the run counts only those the pinned key signed », jamais « delivered ». En tête, l'empreinte
+  RUN — the run counts only those signed by the key it pins — judged here with the key pinned on this
+  console », jamais « delivered ». En tête, l'empreinte
   épinglée et les comptes, ou, sans clé, « no watch key pinned on this console: no detection
   verified » et le geste. Chaque ligne porte `SIGNED` ou `REFUSED`, puis sa raison. `SIGNED` exige que
   la page ait vu la clé épinglée **et** que le serveur ait dit `signed`. Une ligne refusée est grisée.

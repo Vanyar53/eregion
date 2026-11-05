@@ -308,12 +308,34 @@ def test_owning_a_privileged_identity_is_beyond_the_contract(give, words):
     _beyond(_assess(g), "privileged identity", words)
 
 
-def test_an_owned_principal_holding_a_read_only_is_fine():
+@pytest.mark.parametrize("value", ["User.Read.All", "Mail.Read"])
+def test_an_owned_principal_holding_even_a_read_is_beyond_the_contract(value):
+    """IDI1's privilege_refusal admits no application permission: owning an application that reads
+    every mailbox, the executor could add it a credential and read them (Q6)."""
     g = _graph()
-    g.sps[GRAPH_SP]["appRoles"].append({"id": "00000000-0000-0000-0000-000000000d06", "value": "User.Read.All"})
+    g.sps[GRAPH_SP]["appRoles"].append({"id": "00000000-0000-0000-0000-000000000d06", "value": value})
     g.app_roles[ENROLLED_SP] = [{"principalId": ENROLLED_SP, "resourceId": GRAPH_SP,
                                  "appRoleId": "00000000-0000-0000-0000-000000000d06"}]
-    assert _assess(g).armed
+    _beyond(_assess(g), "privileged identity", value)
+
+
+def test_an_owned_principal_that_owns_in_turn_is_beyond_the_contract():
+    """A owned, A owning a principal that is Global Administrator: owning A is holding that role."""
+    g = _graph()
+    admin = "00000000-0000-0000-0000-0000000000a3"
+    g.sps[admin] = {"id": admin, "appId": "00000000-0000-0000-0000-0000000000a4"}
+    g.role_assignments.append({"principalId": admin, "roleDefinitionId": GA, "directoryScopeId": "/"})
+    g.owned[ENROLLED_SP] = [{"@odata.type": "#microsoft.graph.servicePrincipal", "id": admin}]
+    _beyond(_assess(g), "privileged identity", "owns 1 object")
+
+
+def test_more_owned_objects_than_its_start_reads_leave_it_passive():
+    g = _graph()
+    g.owned[OID] = [{"@odata.type": "#microsoft.graph.application", "id": f"00000000-0000-0000-0000-{n:012x}",
+                     "appId": f"00000000-0000-0000-0001-{n:012x}"} for n in range(ic.MAX_OWNED + 1)]
+    v = _assess(g)
+    assert not v.armed and _codes(v) == {ic.UNREADABLE} and str(ic.MAX_OWNED) in v.reasons()
+    assert ic.MAX_OWNED == 20          # the cap docs/operations.md says
 
 
 def test_what_an_owned_principal_holds_not_read_leaves_it_passive():

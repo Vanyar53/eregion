@@ -505,8 +505,9 @@ les siens.
   d'annuaire actifs (chacun à sa seule portée) et éligibles (aucun : `roleEligibilityScheduleInstances`,
   sans `$expand`), ses groupes (aucun : un groupe peut porter un rôle), et **ce qu'il possède** — des
   applications et leurs principaux, jamais lui-même ni une identité de `never_target`, ni une
-  identité privilégiée (Q6 : le principal de chacune ne tient ni rôle d'annuaire, actif ou éligible,
-  ni groupe, ni permission d'application autre qu'une lecture, comme `privilege_refusal` d'IDI1 ;
+  identité privilégiée (Q6, jugée par `privilege_refusal` d'IDI1 lui-même : le principal de chacune
+  ne tient ni rôle d'annuaire, actif ou éligible, ni groupe, ni aucune permission d'application, et
+  ne possède rien à son tour ; au-delà de 20 objets possédés, passif, une mesure d'IR1e ;
   ni ses rôles Azure ni ses consentements délégués ne sont lus, la limite d'IDI1) : posséder une
   identité, c'est pouvoir agir comme elle, et ce serait un droit en trop ;
 - `wids` ne porte que les rôles au tenant : User Administrator ou Attribute Assignment Reader qui

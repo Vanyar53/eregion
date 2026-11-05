@@ -3,7 +3,7 @@ rights read again on Graph, read only, against a closed list; a right too many i
 contract it cannot read contract_unreadable, both passive, and a passive executor refuses to start
 (glorfindel/providers/azure/identity_contract.py). Its application in H0's Terraform holds exactly
 the contract's two Graph permissions (infra/glorfindel-host/identity_executor.tf).
-M4070–M4083 and M4145–M4154 (the first review) measured by tests/unit/test_identity_contract.py
+M4070–M4083, M4145–M4154 (the first review) and M4165–M4169 (the second) measured by tests/unit/test_identity_contract.py
 (a fake Graph), M4084 by
 tests/unit/test_identity_executor_host.py (its plan: infra/glorfindel-host/tests/
 identity_executor.tftest.hcl, `terraform test`)."""
@@ -68,17 +68,17 @@ MUTANTS = [
      "a member of none (a group can carry a role)\")] if member_of else []\n",
      "a member of none (a group can carry a role)\")] if False else []\n"),
     ("M4147", "owning an identity that holds a directory role accepted (IR1b r1)", IC,
-     "    if held[\"roles\"] or held[\"eligible\"]:\n",
-     "    if held[\"eligible\"]:\n"),
+     "            \"directory_roles\": held[\"roles\"] + held[\"eligible\"], \"member_of\": held[\"member_of\"],\n",
+     "            \"directory_roles\": held[\"eligible\"], \"member_of\": held[\"member_of\"],\n"),
     ("M4148", "owning an identity eligible to a directory role accepted (IR1b r1)", IC,
-     "    if held[\"roles\"] or held[\"eligible\"]:\n",
-     "    if held[\"roles\"]:\n"),
+     "            \"directory_roles\": held[\"roles\"] + held[\"eligible\"], \"member_of\": held[\"member_of\"],\n",
+     "            \"directory_roles\": held[\"roles\"], \"member_of\": held[\"member_of\"],\n"),
     ("M4149", "owning an identity that is a member of a group accepted (IR1b r1)", IC,
-     "    if held[\"member_of\"]:\n",
-     "    if False:\n"),
-    ("M4150", "owning an identity that holds an application permission but a read accepted (IR1b r1)", IC,
-     "        if not _READ_ONLY.fullmatch(value) or \"write\" in value.lower():\n",
-     "        if \"write\" in value.lower():\n"),
+     "            \"directory_roles\": held[\"roles\"] + held[\"eligible\"], \"member_of\": held[\"member_of\"],\n",
+     "            \"directory_roles\": held[\"roles\"] + held[\"eligible\"], \"member_of\": [],\n"),
+    ("M4150", "owning an identity that holds an application permission accepted (IR1b r1)", IC,
+     "                               for a, v in zip(held[\"assignments\"], named(held[\"assignments\"]))],\n",
+     "                               for a, v in zip([], [])],\n"),
     ("M4151", "an owned application's principal never looked up: what it holds never read (IR1b r1)", IC,
      "            principal = guid((sp or {}).get(\"id\"))\n",
      "            principal = \"\"\n"),
@@ -92,7 +92,24 @@ MUTANTS = [
     ("M4154", "its eligible roles never read (IR1b r1)", IC,
      "                \"eligible\": listed(\"/roleManagement/directory/roleEligibilityScheduleInstances\", flt),\n",
      "                \"eligible\": [],\n"),
+    # Relecture 2 (05/11): M4165–M4169 — what it owns judged by IDI1's privilege_refusal itself.
+    ("M4165", "owning an identity that holds a read permission accepted: Mail.Read, every mailbox (IR1b r2)", IC,
+     "                               for a, v in zip(held[\"assignments\"], named(held[\"assignments\"]))],\n",
+     "                               for a, v in zip(held[\"assignments\"], named(held[\"assignments\"]))\n"
+     "                               if not v.endswith((\".Read\", \".Read.All\"))],\n"),
+    ("M4166", "what an owned identity owns in turn never read: a Global Administrator two hops away (IR1b r2)", IC,
+     "            \"owned\": listed(f\"/servicePrincipals/{principal}/ownedObjects\", {\"$select\": \"id\"}),\n",
+     "            \"owned\": [],\n"),
+    ("M4167", "more owned objects than its start can read, read in part all the same (IR1b r2)", IC,
+     "    if len(owned) > MAX_OWNED:\n",
+     "    if False:\n"),
+    ("M4168", "IDI1's privilege_refusal never consulted on what it owns (IR1b r2)", IC,
+     "        elif why := privilege_refusal(privileges[guid(o.get(\"id\"))]):\n",
+     "        elif why := \"\":\n"),
+    ("M4169", "the cap on what it owns raised past what the budget reads (IR1b r2)", IC,
+     "MAX_OWNED = 20\n",
+     "MAX_OWNED = 10_000\n"),
 ]
 TESTS = {f"M{n}": _CONTRACT for n in range(4070, 4084)}
 TESTS["M4084"] = _HOST
-TESTS.update({f"M{n}": _CONTRACT for n in range(4145, 4155)})
+TESTS.update({f"M{n}": _CONTRACT for n in list(range(4145, 4155)) + list(range(4165, 4170))})

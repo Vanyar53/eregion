@@ -13,10 +13,11 @@ within a closed list, else ``passive`` — and a passive executor refuses to sta
                                                  a role)
         what it owns                             its owned objects: never one of Eregion's identities,
                                                  never itself, never anything but an application or
-                                                 its principal — and none of them privileged (Q6):
-                                                 the principal of each holds no directory role, active
-                                                 or eligible, no group, no application permission but
-                                                 a read
+                                                 its principal — and none of them privileged (Q6),
+                                                 judged by IDI1's own ``privilege_refusal``: the
+                                                 principal of each holds no directory role, active or
+                                                 eligible, no group, no application permission (none,
+                                                 not even a read), and owns nothing in turn
 
 What it may hold — the closed list (§3.4, decisions of 05/11, Q2 and Q3):
   - in Microsoft Graph, ``Application.ReadWrite.OwnedBy`` (the credentials and the state of the
@@ -60,7 +61,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from eregion_core.inscription import token_claims
+from eregion_core.inscription import privilege_refusal, token_claims
 from eregion_core.never_target import NeverTarget, guid
 from eregion_core.orodruin import APP_DEFAULT_WIDS
 
@@ -121,8 +122,9 @@ VERB_RIGHTS = {
 # What it may own: the applications IDI1 enrolls and their principals, nothing else.
 _OWNABLE = frozenset({"#microsoft.graph.application", "#microsoft.graph.serviceprincipal"})
 _ATTRIBUTE_SET = re.compile(r"[A-Za-z0-9]{1,32}")
-# What an owned principal may hold among application permissions: a read (IDI1's own pattern).
-_READ_ONLY = re.compile(r"[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*\.Read(?:\.All)?")
+# What it owns is read object by object, about seven reads each, within READ_BUDGET_S: beyond this
+# many, it is not read whole — the contract stays passive at its start (to measure at IR1e).
+MAX_OWNED = 20
 # Its reads have this long in all: a start, not a card being written.
 READ_BUDGET_S = 60.0
 
@@ -290,19 +292,6 @@ def assess_member_of(member_of: list) -> list[dict]:
                           "a member of none (a group can carry a role)")] if member_of else []
 
 
-def privileged(held: dict) -> str:
-    """Why the principal of an owned object is privileged (Q6, as IDI1's ``privilege_refusal``), or
-    "": a directory role active or eligible, a membership, an application permission but a read."""
-    if held["roles"] or held["eligible"]:
-        return f"{len(held['roles']) + len(held['eligible'])} directory role(s), active or eligible"
-    if held["member_of"]:
-        return "a group or a role it is a member of (a group can carry a role)"
-    for value in held["permissions"]:
-        if not _READ_ONLY.fullmatch(value) or "write" in value.lower():
-            return f"the application permission '{value or 'unnamed'}', not a read"
-    return ""
-
-
 def assess_owned(owned: list, decl: Declared, oid: str, never: NeverTarget,
                  privileges: dict[str, dict] | None = None) -> list[dict]:
     """What it owns: applications and their principals only, never itself, never an identity that is
@@ -328,7 +317,7 @@ def assess_owned(owned: list, decl: Declared, oid: str, never: NeverTarget,
                                          "Annatar, an operator)"))
         elif not isinstance(privileges.get(guid(o.get("id"))), dict):
             missing.append(_miss(UNREADABLE, "what an object it owns holds is not read"))
-        elif why := privileged(privileges[guid(o.get("id"))]):
+        elif why := privilege_refusal(privileges[guid(o.get("id"))]):
             missing.append(_miss(BEYOND, f"it owns a privileged identity ({why}): owning it is acting as it (Q6)"))
     return missing
 
@@ -372,6 +361,9 @@ def read(reader, oid: str, deadline: float | None = None) -> dict:
     own = held_by(oid)
     named(own["assignments"])
     owned = listed(f"/servicePrincipals/{oid}/ownedObjects", {"$select": "id,appId"})
+    if len(owned) > MAX_OWNED:
+        raise ValueError(f"it owns {len(owned)} objects, more than the {MAX_OWNED} its start reads within "
+                         f"{READ_BUDGET_S:.0f} s")
     # The principal of each application or principal it owns, and what that principal holds.
     privileges: dict[str, dict] = {}
     for o in owned:
@@ -385,10 +377,18 @@ def read(reader, oid: str, deadline: float | None = None) -> dict:
                 if guid(o.get("appId")) else None
             principal = guid((sp or {}).get("id"))
             if not principal:            # an application without a principal holds nothing
-                privileges[obj] = {"roles": [], "eligible": [], "member_of": [], "permissions": []}
+                privileges[obj] = {"directory_roles": [], "member_of": [], "app_roles_held": [],
+                                   "owned": [], "assigned_to": []}
                 continue
         held = held_by(principal)
-        privileges[obj] = {**held, "permissions": named(held.pop("assignments"))}
+        # As IDI1's privilege_refusal reads an identity: what it owns in turn (a principal it owns
+        # that holds a role is that role), who holds a role on it, each permission by its value.
+        privileges[obj] = {
+            "directory_roles": held["roles"] + held["eligible"], "member_of": held["member_of"],
+            "app_roles_held": [{"appRoleId": guid(a.get("appRoleId")) if isinstance(a, dict) else "", "value": v}
+                               for a, v in zip(held["assignments"], named(held["assignments"]))],
+            "owned": listed(f"/servicePrincipals/{principal}/ownedObjects", {"$select": "id"}),
+            "assigned_to": listed(f"/servicePrincipals/{principal}/appRoleAssignedTo")}
     return {"assignments": own["assignments"], "resources": resources, "active": own["roles"],
             "eligible": own["eligible"], "member_of": own["member_of"], "owned": owned,
             "privileges": privileges}

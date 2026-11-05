@@ -868,10 +868,13 @@ ou un consentement (un plan, que l'humain exécute avec son compte) ; prendre l'
 H0 (celle de la watch : il n'a que son certificat, jamais `DefaultAzureCredential`) ; être
 membre d'un groupe (un groupe peut porter un rôle) ; posséder autre chose qu'une application
 inscrite et son principal (ni lui-même, ni une identité de Glorfindel, d'Orodruin, d'Annatar ou
-d'un opérateur, ni un groupe) ; posséder une identité **privilégiée** (décision du Q6) : le principal
-de chaque objet qu'il possède ne tient aucun rôle d'annuaire, actif ou éligible, aucun groupe,
-aucune permission d'application qui ne soit une lecture — comme la garde d'IDI1
-(`privilege_refusal`), lu avec les mêmes droits de lecture que les siens (hypothèse 10). **La
+d'un opérateur, ni un groupe) ; posséder une identité **privilégiée** (décision du Q6), jugée par
+la garde d'IDI1 elle-même (`eregion_core.inscription.privilege_refusal`) : le principal de chaque
+objet qu'il possède ne tient aucun rôle d'annuaire, actif ou éligible, aucun groupe, **aucune
+permission d'application, pas même une lecture** (posséder une application qui lit toutes les
+boîtes, c'est pouvoir lui ajouter un identifiant et les lire), et ne possède rien à son tour (un
+principal Global Administrator possédé par ce qu'il possède serait à sa portée) ; lu avec les
+mêmes droits de lecture que les siens (hypothèse 10). **La
 limite** : comme la garde d'IDI1, le contrat ne lit ni les rôles Azure (RBAC) d'un objet possédé,
 ni ses consentements délégués (`oauth2PermissionGrants`) — l'identité de test de Celebrimbor n'en a
 aucun (IDI2, #556, lèvera la limite) ; être la cible de qui que ce soit
@@ -889,8 +892,13 @@ comme celui d'Orodruin, rien n'est écrit :
   l'`id` de sa définition (jamais son nom, ni le `templateId` qu'un rôle personnalisé peut choisir),
   à sa seule portée, et aucun rôle éligible (`roleEligibilityScheduleInstances`, sans `$expand`,
   comme IDI1 : tout rôle éligible est refusé) ; aucun groupe (`transitiveMemberOf`) ; ce qu'il
-  possède, et ce que tient le principal de chaque objet possédé. Une permission ne compte comme
-  tenue que si le jeton **et** les attributions la disent.
+  possède, et ce que tient le principal de chaque objet possédé (sept lectures environ par objet :
+  ses rôles, actifs et éligibles, ses groupes, ses permissions, ce qu'il possède, qui tient un rôle
+  sur lui). Une permission ne compte comme tenue que si le jeton **et** les attributions la disent.
+- **Le plafond** : toutes ses lectures tiennent en 60 s (`READ_BUDGET_S`) ; au-delà de **20 objets
+  possédés** (`MAX_OWNED`), ce qu'il possède n'est pas lu en entier, et le contrat reste passif à son
+  démarrage (`contract_unreadable`). Le banc n'en compte qu'un ou deux ; le temps réel par objet est
+  une mesure d'IR1e.
 - **`armed`** : rien en trop. Un droit qui manque n'arme ni ne désarme : il retire seulement les
   verbes qui en ont besoin (`Verdict.allows`, `VERB_RIGHTS`).
 - **`passive`**, et il refuse de démarrer (`Passive`) : un droit en trop, `beyond_contract` (le
@@ -959,7 +967,8 @@ pour lire ses propres droits et ceux de ce qu'il possède (10) — Directory Rea
 contrat attend, pour les attributions de rôles, les appartenances, les permissions d'application et
 les instances éligibles de PIM ; **si Directory Readers ne lit pas PIM, le contrat ne s'arme
 jamais**, et un droit de lecture serait à ajouter après la mesure (jamais une écriture) ; `wids` ne
-porte que les rôles au tenant, jamais un rôle borné à une unité. Les identifiants des rôles intégrés
+porte que les rôles au tenant, jamais un rôle borné à une unité ; le temps de ses lectures par objet
+possédé, contre le budget de 60 s et le plafond de 20 objets (IR1e). Les identifiants des rôles intégrés
 que le contrat épingle (`DIRECTORY_READERS`, `USER_ADMINISTRATOR`, `ATTRIBUTE_ASSIGNMENT_READER`,
 `REFUSED_ROLES`) sont ceux de « Microsoft Entra built-in roles » (relus le 05/11).
 

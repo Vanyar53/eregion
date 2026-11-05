@@ -26,6 +26,7 @@ class FakeGraph:
         self.roles: dict[str, str] = {}                      # role definition id → display name
         self.owned: dict[str, list[dict]] = {}               # principal → its owned objects (IR1b)
         self.member_of: dict[str, list[dict]] = {}           # principal → its groups, transitively (IR1b)
+        self.assigned_to: dict[str, list[dict]] = {}         # principal → who holds an app role on it (IR1b)
         self.fail: str = ""                                  # right | error | delay | crash
         self.calls: list[tuple[str, str, dict | None]] = []
 
@@ -85,4 +86,6 @@ class FakeGraph:
             return list(self.owned.get(m.group(1), [])) if m.group(1) in self.sps else None
         if m := re.fullmatch(r"/servicePrincipals/" + _ID + "/transitiveMemberOf", path):
             return list(self.member_of.get(m.group(1), [])) if m.group(1) in self.sps else None
+        if m := re.fullmatch(r"/servicePrincipals/" + _ID + "/appRoleAssignedTo", path):
+            return list(self.assigned_to.get(m.group(1), [])) if m.group(1) in self.sps else None
         raise AssertionError(f"the fake Graph does not know {path}")

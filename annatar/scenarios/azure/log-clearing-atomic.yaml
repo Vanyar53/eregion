@@ -11,10 +11,11 @@
 # from the test's default /var/log/secure), so a real log is never destroyed and the initial
 # state is restored. The vendored YAML is never edited.
 #
-# Blue side: auditd's log_tamper rule (infra/terraform/scripts/auditd.sh) logs the write under
-# /var/log by a process that is not a log daemon; t1070-002-log-tamper reads it in Syslog
-# facility local6 (collected only with auditd_enabled). A shell redirect's O_TRUNC on an
-# EXISTING file is not caught by the directory watch — a documented limit (docs/azure.md).
+# Blue side: auditd's log_tamper rule (infra/terraform/scripts/vm3_auditd.sh) logs the write
+# under /var/log; t1070-002-log-tamper reads it in Syslog facility local6 (collected only with
+# auditd_enabled) and keeps it unless its writer (exe, never comm) is a log daemon or a known
+# writer on its own files. Whether the watch sees a shell's O_TRUNC on an EXISTING log is a
+# hypothesis to measure (docs/azure.md). engine_args must be the catalog entry's.
 schema_version: "1"
 kind: technique
 engine: atomic
@@ -55,11 +56,11 @@ detection:
     attack_commands_summary: >
       Atomic Red Team T1070.002 (Linux, guid d304b2dc…): `echo 0> /var/log/eregion-t1070-disposable.log`
       creates/truncates a log file; cleanup removes it. auditd's log_tamper rule logs the write
-      under /var/log by a non-log-daemon process (comm sh/bash/dash).
+      under /var/log; its writer (exe /usr/bin/dash) is no log daemon.
     expected_indicators:
       - "Syslog Facility: 'local6'"
       - "auditd record with key=\"log_tamper\" on a path under /var/log"
-      - "comm is not a log daemon (rsyslogd, systemd-journal, logrotate…)"
+      - "exe is not a log daemon (rsyslogd, systemd-journald, logrotate…)"
     failure_candidates:
       - "Syslog | where Facility == 'local6' | where SyslogMessage has 'log_tamper' | where TimeGenerated > ago(10m)"
-      - "a log daemon's own write (rsyslogd, logrotate) is excluded by comm — not this rule"
+      - "a log daemon's own write (rsyslogd, logrotate) is excluded by exe — not this rule"

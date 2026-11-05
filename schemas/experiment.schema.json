@@ -21,8 +21,8 @@
     },
     "engine_args": {
       "type": "object",
-      "description": "VM3 (#548): overrides for the engine's input arguments. For `atomic`, they fill a vendored test's input_arguments over its upstream defaults, so the test runs on an enrolled target with no outbound dependency and restores its initial state. The vendored file is never edited.",
-      "additionalProperties": { "type": ["string", "number", "boolean"] }
+      "description": "VM3 (#548): overrides for the engine's input arguments. For `atomic`, they fill a vendored test's input_arguments over its upstream defaults, so the test runs on an enrolled target with no outbound dependency and restores its initial state. The vendored file is never edited. Each key must be one of the test's input_arguments, each value a plain word, number, address or path; values other than the catalog entry's make the run unknown, so destructive (SEC5, V-19).",
+      "additionalProperties": { "anyOf": [{ "type": "string", "pattern": "^[A-Za-z0-9._/:-]+$" }, { "type": "number" }] }
     },
     "name": { "type": "string" },
     "description": { "type": "string" },

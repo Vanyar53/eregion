@@ -278,7 +278,8 @@ def test_records_of_another_event_are_not_taken_for_its_own():
 
 def test_a_row_that_says_no_human_login_as_root_is_never_cleared_on_what_it_says():
     """Read again by the poller, not trusted from the query: a SYSCALL that is not a human's root
-    exec (a client's rule of the same technique) is a card, never set aside as not sensitive."""
+    exec (a client's rule of the same technique, under any name but those of
+    auditd.EXEMPT_RULES — VM3) is a card, never set aside as not sensitive."""
     row = {"Syscall": [syscall(41, auid=0)], "Execve": [execve(41, "ls")]}
     assert "pas une commande root d'un humain" in auditd.read(row)["why"]
 

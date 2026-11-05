@@ -8,6 +8,10 @@
 # other T1053.003 atomics (they drop files in /etc/cron.* without a crontab REPLACE event, so
 # nothing is logged until cron reloads).
 #
+# DESTRUCTIVE (B3): it replaces root's whole crontab — `crontab -l > /tmp/notevil`, then
+# `crontab /tmp/persistevil` — and restores it from /tmp/notevil, a predictable path. Bench only,
+# refused in production by the inscription (the catalog: destructive, sandbox_disposable).
+#
 # Blue side: the crontab command logs a « REPLACE » line to Syslog facility cron
 # (t1053-003-cron-crontab-replace). That facility is NOT collected by the bench DCR by default
 # — infra/terraform/monitoring.tf proposes it behind `cron_logs_enabled` (off).
@@ -16,10 +20,10 @@ kind: technique
 engine: atomic
 engine_ref: T1053.003/435057fb-74b1-410e-9403-d81baf194f75
 name: cron-persistence-atomic
-description: "T1053.003 — Scheduled Task/Job: Cron, via a pinned Atomic Red Team test (crontab replace)"
+description: "T1053.003 — Scheduled Task/Job: Cron, via a pinned Atomic Red Team test (replaces root's crontab, bench only)"
 mitre: T1053.003
 version: "1.0.0"
-destructive: false
+destructive: true
 
 target:
   type: azure_vm
@@ -34,6 +38,12 @@ steady_state:
     - name: cron-entry-absent
       verify: "crontab -l 2>/dev/null | grep -qF '#{command}' && echo PRESENT || echo ABSENT"
       expect: ABSENT
+    # The two files the test writes at predictable /tmp paths — /tmp/notevil is root's crontab,
+    # reinstalled by the cleanup. Absent before (a file planted there would become root's
+    # crontab); the upstream cleanup does not remove them, and the after-check says so.
+    - name: tmp-files-absent
+      verify: "if [ -e /tmp/notevil ] || [ -L /tmp/notevil ] || [ -e #{tmp_cron} ] || [ -L #{tmp_cron} ]; then echo TMP_PRESENT; else echo TMP_ABSENT; fi"
+      expect: TMP_ABSENT
 
 detection:
   timeout: "600s"

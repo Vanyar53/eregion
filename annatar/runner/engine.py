@@ -42,6 +42,7 @@ def scenario_destructive(scenario) -> tuple[bool, str]:
                if isinstance(a, dict) and a.get("script")]
     said = catalog_destructive(scenario.mitre, engine=getattr(scenario, "engine", "") or "",
                                engine_ref=getattr(scenario, "engine_ref", "") or "",
+                               engine_args=getattr(scenario, "engine_args", None) or None,
                                scripts=scripts)
     own = scenario.raw.get("destructive")
     destructive = said is not False or own is True

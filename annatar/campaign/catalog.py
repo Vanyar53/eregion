@@ -103,7 +103,18 @@ def _pinned(entry: dict[str, Any], script: str) -> bool:
         return False
 
 
+def _plain_args(args: Any) -> dict[str, str] | None:
+    """engine_args as compared (VM3): each value as text; {} for none; None for what is no
+    mapping — never equal to the catalog's."""
+    if args is None:
+        return {}
+    if not isinstance(args, dict):
+        return None
+    return {str(k): str(v) for k, v in args.items()}
+
+
 def catalog_destructive(ttp: str, *, engine: str = "", engine_ref: str = "",
+                        engine_args: dict[str, Any] | None = None,
                         scripts: list[str] | tuple[str, ...] | None = None,
                         catalog: dict[str, dict[str, Any]] | None = None) -> bool | None:
     """Does the catalog say this technique destroys or alters data? ``None`` when it does not
@@ -111,6 +122,8 @@ def catalog_destructive(ttp: str, *, engine: str = "", engine_ref: str = "",
 
     The catalog decides, not the scenario: the entry of the technique, and only for the source
     the catalog names. An atomic (``engine: atomic``) must be the entry's own ``engine_ref``;
+    with the entry's own ``engine_args`` (VM3: an argument the catalog does not set, or sets
+    otherwise, makes it another run than the one it vouched for);
     a local script, the entry's ``reference_script`` or one of its ``setup_scripts`` — each of
     ``scripts``, when given —, its content the one the entry pins (``script_sha256``, SEC14
     V-19: a path is not a content; ``scripts/`` may be written). Another test, another script,
@@ -121,6 +134,9 @@ def catalog_destructive(ttp: str, *, engine: str = "", engine_ref: str = "",
         return None
     if engine and engine != "local-script":
         if entry.get("engine") != engine or entry.get("engine_ref") != engine_ref:
+            return None
+        own = _plain_args(engine_args)
+        if own is None or own != _plain_args(entry.get("engine_args")):
             return None
     elif scripts:
         known = {entry.get("reference_script")} | set(entry.get("setup_scripts") or [])

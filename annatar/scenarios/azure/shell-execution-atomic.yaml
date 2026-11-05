@@ -13,8 +13,9 @@
 # (t1059-004-shell-from-world-writable), read in Syslog facility local6 — collected only with
 # auditd_enabled (infra/terraform/auditd.tf). The shipped auditd-sensitive-root-command rule
 # (also T1059.004) reads a HUMAN login's root commands; a Run Command injection runs with auid
-# unset, which that rule's query filters out — this is a separate rule, read before any auditd
-# human-root post-processing (glorfindel/detection_rules.py gates it to that one rule).
+# unset, which that rule's query filters out — this is a separate rule, exempt by name from the
+# human-root reading every other T1059.004 rule keeps (glorfindel/auditd.py, EXEMPT_RULES).
+# engine_args must be the catalog entry's: others make the run unknown, so destructive.
 schema_version: "1"
 kind: technique
 engine: atomic

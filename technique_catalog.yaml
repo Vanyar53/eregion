@@ -253,8 +253,19 @@ resource_types:
             - name: cron-entry-absent
               verify: "crontab -l 2>/dev/null | grep -qF '#{command}' && echo PRESENT || echo ABSENT"
               expect: ABSENT
-        destructive: false
+            # B3 (VM3) : les deux fichiers que le test écrit dans /tmp, à des chemins prévisibles —
+            # /tmp/notevil est la crontab de root, réinstallée par le cleanup. Absents avant (un
+            # fichier posé là par un autre deviendrait la crontab de root) ; le cleanup amont ne
+            # les retire pas, la sonde d'après le dit.
+            - name: tmp-files-absent
+              verify: "if [ -e /tmp/notevil ] || [ -L /tmp/notevil ] || [ -e #{tmp_cron} ] || [ -L #{tmp_cron} ]; then echo TMP_PRESENT; else echo TMP_ABSENT; fi"
+              expect: TMP_ABSENT
+        # B3 (VM3) : il remplace TOUTE la crontab de root (crontab -l > /tmp/notevil, puis
+        # crontab /tmp/persistevil) et la rétablit depuis /tmp → altère l'état système, banc seulement.
+        destructive: true
         requires_testdata: false
+        safe_target: sandbox_disposable   # garde-fou = scope allowlist (VM Celebrimbor jetable)
+        testdata_marker: ""
         reference_script: null
         setup_scripts: []
 

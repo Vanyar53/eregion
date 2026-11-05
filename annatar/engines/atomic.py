@@ -50,6 +50,9 @@ _PLACEHOLDER = re.compile(r"#\{([a-zA-Z0-9_]+)\}")
 _NO_ATOMICS_FOLDER = "PathToAtomicsFolder"
 # A PIN line: "#   <sha256>  <path relative to the atomics directory>".
 _PIN_LINE = re.compile(r"^#\s+([0-9a-f]{64})\s+(\S+)\s*$")
+# What an override (engine_args, VM3) may hold: a word, a number, an address or a path —
+# nothing a shell would read as anything else.
+_ARG_VALUE = re.compile(r"^[A-Za-z0-9._/:-]+$")
 
 
 class AtomicError(ValueError):
@@ -124,12 +127,34 @@ def _find_test(doc: dict, guid: str) -> dict:
     raise AtomicError(f"no atomic test with guid {guid!r}; this technique has {known}")
 
 
-def _resolve_args(test: dict, overrides: dict | None) -> dict:
-    """Input-argument defaults, overridden by anything the caller passed."""
-    args = {}
-    for name, spec in (test.get("input_arguments") or {}).items():
-        args[name] = (spec or {}).get("default")
-    for name, value in (overrides or {}).items():
+def _resolve_args(test: dict, overrides) -> dict:
+    """Input-argument defaults, overridden by what the caller passed (``engine_args``, VM3).
+
+    An override reaches a shell command as written, so it is held (fail closed): a mapping
+    only, each key one of the test's own ``input_arguments``, each value a string or a number
+    of ``_ARG_VALUE``'s characters (no space, no quote, no ``;``, ``$``, ``|``, ``&``…). Whether
+    the values are the catalog's is the catalog's question (``catalog_destructive``)."""
+    declared = test.get("input_arguments") or {}
+    args = {name: (spec or {}).get("default") for name, spec in declared.items()}
+    if overrides is None:
+        return args
+    if not isinstance(overrides, dict):
+        raise AtomicError(
+            f"engine_args must be a mapping of the test's input arguments, not "
+            f"{type(overrides).__name__}"
+        )
+    for name, value in overrides.items():
+        if name not in declared:
+            raise AtomicError(
+                f"engine_args {name!r} is not an input argument of this test "
+                f"({sorted(declared)}) — refused"
+            )
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)) \
+                or not _ARG_VALUE.fullmatch(str(value)):
+            raise AtomicError(
+                f"engine_args {name!r}: {str(value)[:80]!r} is not a plain value "
+                f"({_ARG_VALUE.pattern}) — refused, never sent to a shell"
+            )
         args[name] = value
     return args
 

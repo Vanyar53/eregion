@@ -936,6 +936,11 @@ def _row_identity(row: dict) -> str:
         msg = row.get("SyslogMessage")
         if isinstance(msg, str):
             return f"ts:{ts}|{hashlib.sha256(msg.encode('utf-8', 'replace')).hexdigest()[:16]}"
+        # An audit event a rule gathered by its serial (VM3: no SyslogMessage of its own): its
+        # instant and its event — two events of the same instant stay two.
+        event = row.get("AuditEvent")
+        if isinstance(event, str) and event:
+            return f"ts:{ts}|ev:{event}"
         return f"ts:{ts}"
     keys = sorted(
         f"{k}={v}" for k, v in row.items()
@@ -1389,10 +1394,9 @@ class RulePoller:
         # outside the lock — a command of ADM1's sensitive list stays, the rest is no card.
         policy = getattr(self._cfg, "expected_sudo", None)
         audit_n = dict.fromkeys(auditd.COUNTS, 0)
-        # Only the human-root rule (auditd.RULE, or a client rule that replaces it under its
-        # name — P1): T1059.004 also carries the shell-from-a-world-writable-path rule (VM3,
-        # #548), whose rows are not of the human-root form and pass through as read.
-        if rule.name == auditd.RULE:
+        # Every rule of the technique, but the ones auditd.EXEMPT_RULES names (VM3, #548: the
+        # shell-from-a-world-writable-path rule, whose rows are not of the human-root form).
+        if auditd.reads(rule.name, rule.ttp):
             try:
                 rows, audit_n = auditd.settle(rule.ttp, rows, getattr(policy, "sensitive_commands", None) or ())
             except Exception as exc:  # the audit reading: every row stays a card
@@ -1464,7 +1468,7 @@ class RulePoller:
                 # sent. Aggregated rows (one per attacker, per account…) each count.
                 events = [r for r in kept if r.get("TimeGenerated")]
                 send = [r for r in kept if not r.get("TimeGenerated")]
-                if events and rule.ttp == auditd.TTP and rule.name == auditd.RULE:
+                if events and auditd.reads(rule.name, rule.ttp):
                     # AUD1: the newest exec, naming the others of this VM in its card.
                     send.append(auditd.fold(events))
                 elif events:
@@ -1505,7 +1509,7 @@ class RulePoller:
                                        "origin_confirmed": expected_counts(st)["origin_confirmed"] + confirmed_n}
             if any(corr.values()):
                 st["correlation"] = correlation.add_counts(st.get("correlation"), corr, now_iso)
-            if rule.ttp == auditd.TTP and rule.name == auditd.RULE:
+            if auditd.reads(rule.name, rule.ttp):
                 # AUD1: what the rule's window holds at this poll — zero events says no line arrives.
                 st["auditd"] = auditd.window(audit_n, now_iso)
             # Recorded AFTER the dispatch: a crash in between re-sends (at least once)

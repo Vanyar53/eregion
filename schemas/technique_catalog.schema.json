@@ -120,7 +120,10 @@
           "description": "VM3 (#548): overrides for an engine's input arguments (atomic: a vendored test's input_arguments over its upstream defaults), so a run stays faithful — no outbound dependency, initial state restored. The vendored file is never edited.",
           "type": "object",
           "additionalProperties": {
-            "type": ["string", "number", "boolean"]
+            "anyOf": [
+              { "type": "string", "pattern": "^[A-Za-z0-9._/:-]+$" },
+              { "type": "number" }
+            ]
           }
         },
         "params": {

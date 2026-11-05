@@ -1092,18 +1092,24 @@ def _terraform_job() -> dict:
 
 # What the job runs, word for word (review of #402, point 2): a `|| true`, a step skipped by an
 # `if:`, or a job that may fail and stay green would let a broken test through, unseen.
+# CI8 (#566): each module's `init`, which downloads its locked providers, in a step of its own and
+# retried (scripts/retry.sh); its test and its validation never.
+_TF_INIT = ("bash scripts/retry.sh terraform -chdir=infra/{} init -backend=false -lockfile=readonly -input=false "
+            "-no-color")
 TF_RUNS = {
+    "Terraform init — Celebrimbor (the locked providers, retried)": _TF_INIT.format("terraform"),
     "Terraform test — Celebrimbor (mock providers)":
-        "terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false -no-color\n"
         "terraform -chdir=infra/terraform test -no-color\n",
     # SEC11 (R-03): the session drain, VM by VM, planned against a mock azurerm.
+    "Terraform init — Glorfindel's host (the locked providers, retried)": _TF_INIT.format("glorfindel-host"),
     "Terraform test — Glorfindel's host (mock providers)":
-        "terraform -chdir=infra/glorfindel-host init -backend=false -lockfile=readonly -input=false -no-color\n"
         "terraform -chdir=infra/glorfindel-host validate -no-color\n"
         "terraform -chdir=infra/glorfindel-host test -no-color\n",
-    "Terraform validate — Orodruin":
-        "terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color\n"
-        "terraform -chdir=infra/orodruin validate -no-color\n",
+    "Terraform init — Orodruin (the locked providers, retried)": _TF_INIT.format("orodruin"),
+    # CI7 (#554): the watch channel's writers (WC1) and Microsoft Graph's reads (IDI1).
+    "Terraform test — Orodruin (mock providers)":
+        "terraform -chdir=infra/orodruin validate -no-color\n"
+        "terraform -chdir=infra/orodruin test -no-color\n",
 }
 
 
@@ -1125,26 +1131,31 @@ def test_the_terraform_tests_run_on_each_push_and_pull_request():
     (checkout,) = [s for s in steps if str(s.get("uses") or "").startswith("actions/checkout@")]
     assert checkout["with"]["persist-credentials"] is False
     assert job["env"]["CHECKPOINT_DISABLE"] == "1"
-    # Every module with Terraform tests has them run here: Celebrimbor's, and Glorfindel's host
-    # since SEC11 — each named in a step that runs its `test`. Orodruin's since WC1, once its step
-    # is in the workflow (TF_AWAITING_STEP): until then its `validate` still runs.
+    # Every module with Terraform tests has them run here: Celebrimbor's, Glorfindel's host since
+    # SEC11, Orodruin's since CI7 (#554) — each in a step that runs its `test`, after the retried
+    # step of its `init` (CI8).
     tested = {p.parent.parent.name for p in ROOT.glob("infra/*/tests/*.tftest.hcl")}
     assert tested == {"terraform", "glorfindel-host", "orodruin"}
     for module in tested:
-        runs_it = any(f"terraform -chdir=infra/{module} test -no-color" in str(s.get("run") or "") for s in steps)
+        runs = [i for i, s in enumerate(steps)
+                if f"terraform -chdir=infra/{module} test -no-color" in str(s.get("run") or "")]
+        inits = [i for i, s in enumerate(steps)
+                 if f"terraform -chdir=infra/{module} init " in str(s.get("run") or "")]
         # Awaiting, it is not run yet; run, it is awaiting no more — the list empties itself.
-        assert runs_it is (module not in TF_AWAITING_STEP), module
+        assert bool(runs) is (module not in TF_AWAITING_STEP), module
+        if runs:
+            assert len(runs) == len(inits) == 1 and inits[0] < runs[0], (module, inits, runs)
     for module in TF_AWAITING_STEP:
         assert any(f"terraform -chdir=infra/{module} validate -no-color" in str(s.get("run") or "")
                    for s in steps), module
 
 
-# A module whose tests wait for their step in ci.yml: a session never writes under .github/ (the
-# agents' App has no Workflows permission, SEC12) — Jonathan adds the step, then empties this. WC1
-# (#523): `terraform -chdir=infra/orodruin test -no-color` after its `validate`, in « Terraform
-# validate — Orodruin » (and TF_RUNS above).
-TF_AWAITING_STEP = {"orodruin": "WC1 (#523): infra/orodruin/tests/watch_writers.tftest.hcl; "
-                                "IDI1 (#546): infra/orodruin/tests/graph_read.tftest.hcl"}
+# A module whose tests wait for their step in ci.yml (Jonathan pushes what touches .github/: the
+# agents' App has no Workflows permission, SEC12). Empty since CI7 (#554): Orodruin's tests
+# (WC1 watch_writers, IDI1 graph_read) run in « Terraform test — Orodruin (mock providers) », the
+# step « Terraform validate — Orodruin » renamed. A module that gains tests before its step is
+# listed here, with its reason, and the test above holds it.
+TF_AWAITING_STEP: dict[str, str] = {}
 
 
 def test_every_terraform_test_only_plans():
@@ -1243,7 +1254,8 @@ def test_the_sbom_tool_is_pinned_by_its_sha256_never_fetched_by_an_action():
     assert not [a for a in _actions(_load(PUBLISH)) if a.startswith("anchore/")]
     names = [s.get("name") or s["uses"].split("@")[0] for s in steps]
     runs = {s.get("name"): s.get("run", "") for s in steps}
-    assert runs["syft"] == 'python3 scripts/published_image.py install-syft "$RUNNER_TEMP/syft"'
+    # CI8 (#566): its download retried, its sha256 checked at each attempt.
+    assert runs["syft"] == 'bash scripts/retry.sh python3 scripts/published_image.py install-syft "$RUNNER_TEMP/syft"'
     assert runs["SBOM"].startswith('"$RUNNER_TEMP/syft" scan "docker:$REF" -o spdx-json=sbom.spdx.json')
     order = [names.index(n) for n in ("Push", "syft", "SBOM", "actions/attest-sbom")]
     assert order == sorted(order)
@@ -1395,7 +1407,8 @@ def test_the_gate_runs_every_test_with_2000_invariant_sequences_on_linux():
 
 def test_the_gate_runs_the_whole_mutation_in_shards_control_set_included():
     """`--examples 500 --rounds 2 --jobs 4`, each shard of the matrix once; the control set too; the
-    total checks every shard and holds the count to mutants.yml's `min_caught`."""
+    total checks every shard, then that no mutant survived a round outside the known survivors
+    (CI6e: `min_caught` before) — the harness holds it, nothing of the workflow passes over it."""
     jobs = _gate()["jobs"]
     for name, n, flag in (("mutants", MUTANT_SHARDS, ""), ("control", CONTROL_SHARDS, "--control ")):
         job = jobs[name]
@@ -1410,12 +1423,8 @@ def test_the_gate_runs_the_whole_mutation_in_shards_control_set_included():
     assert total["needs"] == ["mutants", "control"]
     (step,) = [s for s in total["steps"] if "mutation_check.py" in (s.get("run") or "")]
     assert step["run"] == (f"python3 scripts/mutation_check.py --total mutants-results --shards {MUTANT_SHARDS} "
-                           f'--control-shards {CONTROL_SHARDS} --examples 500 --rounds 2 --min-caught "$MIN_CAUGHT"')
-    monday = _load(ROOT / ".github" / "workflows" / "mutants.yml")
-    (mstep,) = [s for s in monday["jobs"]["mutants-total"]["steps"] if "mutation_check.py" in (s.get("run") or "")]
-    default = re.fullmatch(r"\$\{\{ inputs\.min_caught \|\| '(\d+)' \}\}", mstep["env"]["MIN_CAUGHT"]).group(1)
-    assert default == monday["on"]["workflow_dispatch"]["inputs"]["min_caught"]["default"]
-    assert step["env"] == {"MIN_CAUGHT": default}
+                           f'--control-shards {CONTROL_SHARDS} --examples 500 --rounds 2')
+    assert "env" not in step and "continue-on-error" not in step and "continue-on-error" not in total
     (down,) = [s for s in total["steps"] if str(s.get("uses") or "").startswith("actions/download-artifact@")]
     assert down["with"] == {"path": "mutants-results"}
 
@@ -1428,7 +1437,8 @@ MONDAY_INPUTS = {"EXAMPLES": "${{ inputs.examples || '1000' }}", "ROUNDS": "${{ 
 def test_the_monday_measure_runs_in_the_gate_s_shards_and_their_total():
     """Fourteen shards of the mutants and two of the control set, as release-gate.yml cuts them, then
     their total: each mutant of the tree measured once, at the dispatcher's budget, the count held
-    to `min_caught` — never more jobs than GitHub gives a public repository at once (20)."""
+    to no survivor outside the known ones (CI6e) — never more jobs than GitHub gives a public
+    repository at once (20)."""
     doc, gate = _load(MONDAY), _gate()["jobs"]
     jobs = doc["jobs"]
     assert doc["on"]["schedule"] == [{"cron": "41 4 * * 1"}] and doc["permissions"] == {"contents": "read"}
@@ -1451,9 +1461,9 @@ def test_the_monday_measure_runs_in_the_gate_s_shards_and_their_total():
     assert total["needs"] == ["mutants", "control"] and total["if"] == "${{ !cancelled() }}"
     (step,) = [s for s in total["steps"] if "mutation_check.py" in (s.get("run") or "")]
     assert step["run"] == (f"python3 scripts/mutation_check.py --total mutants-results --shards {MUTANT_SHARDS} "
-                           f'--control-shards {CONTROL_SHARDS} --examples "$EXAMPLES" --rounds "$ROUNDS" '
-                           '--min-caught "$MIN_CAUGHT"')
-    assert step["env"] == {**MONDAY_INPUTS, "MIN_CAUGHT": "${{ inputs.min_caught || '14' }}"}
+                           f'--control-shards {CONTROL_SHARDS} --examples "$EXAMPLES" --rounds "$ROUNDS"')
+    assert step["env"] == MONDAY_INPUTS and "continue-on-error" not in step
+    assert set(doc["on"]["workflow_dispatch"]["inputs"]) == {"examples", "rounds"}     # min_caught gone (CI6e)
     (down,) = [s for s in total["steps"] if str(s.get("uses") or "").startswith("actions/download-artifact@")]
     assert down["with"] == {"path": "mutants-results"}
     width = sum(len(j.get("strategy", {}).get("matrix", {}).get("shard", [None])) for j in jobs.values())
@@ -1814,3 +1824,257 @@ def test_the_gesture_on_the_rule_of_main_is_written():
     ops = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
     section = ops.split("## La CI, plus rapide (CI5", 1)[1].split("\n## ", 1)[0]
     assert f"« {MACOS} »" in section and "Require status checks to pass" in section
+
+
+# ── CI8 (#566): the CI's downloads retried, never a test ──────────────────────────────────────────
+# Jonathan, 05/11: no job of the CI is re-run on its own (the sessions' App reads Actions only), and
+# one 504 on a provider's download held a release back an hour. A download is tried three times,
+# 10 then 30 s apart, each attempt said (scripts/retry.sh); a test, the mutation, the invariants
+# never: a flaky test is never masked. Read from the files; retry.sh run against a fake command and
+# a fake `sleep` — no network, no wait.
+RETRY = "bash scripts/retry.sh "
+CHROMA_STEP = "ChromaDB's embedding model (fetched when the cache misses, retried)"
+# A download, as the workflows write it: a lock's install (never the local `--no-deps -e .`),
+# HashiCorp's key and apt repository, a module's locked providers, publish.yml's pinned binaries,
+# ChromaDB's model.
+DOWNLOADS = re.compile(
+    r"""\bpip"? install\b(?!.*--no-deps)|\bapt-get (?:update|install)\b|\bcurl\b.*apt\.releases\.hashicorp\.com"""
+    r"|\bterraform\b.*\binit\b|published_image\.py install-|scripts/chroma_model\.py")
+# What measures — never retried, never in a step that is: a step that downloads then tests is cut.
+MEASURES = re.compile(
+    r"\bpytest\b|mutation_check\.py|component_check\.py|image_check\.py|pip_audit_issues\.py|\bruff\b"
+    r"|\bterraform\b.*\b(?:test|validate)\b|jit-terraform/run\.sh|profiles-check"
+    r"|published_image\.py (?:verify|resolve)")
+# Every step retried, by workflow, job and name: the list grows only with a download.
+_INSTALL, _TF = "Install", "Install Terraform (HashiCorp's apt repository, pinned)"
+_INITS = tuple(f"Terraform init — {m} (the locked providers, retried)"
+               for m in ("Celebrimbor", "Glorfindel's host", "Orodruin"))
+RETRIED = {
+    *(("ci.yml", "test", s) for s in (_INSTALL, CHROMA_STEP)),
+    ("ci.yml", "audit", "Install pip-audit"),
+    ("ci.yml", "test-macos", _INSTALL),
+    *(("ci.yml", "terraform-test", s) for s in (_TF, *_INITS)),
+    *(("release-gate.yml", job, s) for job in ("invariants", "mutants", "control") for s in (_INSTALL, CHROMA_STEP)),
+    ("release-gate.yml", "macos", _INSTALL),
+    *(("release-gate.yml", "terraform", s) for s in (_TF, *_INITS)),
+    *(("mutants.yml", job, s) for job in ("mutants", "control") for s in (_INSTALL, CHROMA_STEP)),
+    *(("components.yml", "component", s) for s in (_INSTALL, CHROMA_STEP)),
+    ("invariants.yml", "invariants", _INSTALL),
+    ("pip-audit.yml", "audit", "Install pip-audit"),
+    ("publish.yml", "publish", "syft"), ("publish.yml", "publish", "cosign"),
+    ("canary-azurerm.yml", "canary", "Install Terraform (HashiCorp's apt repository)"),
+}
+
+
+def _lines(run: str) -> list[str]:
+    """A step's script, a command per line (a line ending with a backslash goes on with the next),
+    its comments aside."""
+    joined = run.replace("\\\n", " ").splitlines()
+    return [ln.strip() for ln in joined if ln.strip() and not ln.strip().startswith("#")]
+
+
+def _job_steps():
+    """(workflow, job, step) of every step of every workflow."""
+    for path in WORKFLOWS:
+        for job_name, job in (_load(path).get("jobs") or {}).items():
+            for step in job.get("steps") or []:
+                yield path.name, job_name, step
+
+
+def _retried() -> set[tuple[str, str, str]]:
+    return {(wf, job, step.get("name") or step.get("uses")) for wf, job, step in _job_steps()
+            if "scripts/retry.sh" in str(step.get("run") or "")}
+
+
+def test_ci8_the_steps_retried_are_these_and_only_these():
+    """The list, said: each step that downloads, in each workflow that runs one — Images aside, whose
+    build is an action (docker/build-push-action), never wrapped."""
+    assert _retried() == RETRIED
+    assert RETRY_SH.is_file() and (ROOT / "scripts" / "chroma_model.py").is_file()
+
+
+def test_ci8_no_test_mutation_nor_invariants_is_ever_retried():
+    """A step that measures holds no retry, whatever else it runs; a retried line is a download, and
+    nothing but; retry.sh opens its line, and no value of an expression is in its step (SEC4)."""
+    for wf, job, step in _job_steps():
+        run = str(step.get("run") or "")
+        lines = _lines(run)
+        where = (wf, job, step.get("name"))
+        if any(MEASURES.search(ln) for ln in lines):
+            assert "retry.sh" not in run, where
+        for ln in lines:
+            if "retry.sh" not in ln:
+                continue
+            assert ln.startswith(RETRY), (where, ln)
+            wrapped = ln[len(RETRY):]
+            assert DOWNLOADS.search(wrapped) and not MEASURES.search(wrapped), (where, ln)
+            assert "retry.sh" not in wrapped and "&&" not in wrapped and "|" not in wrapped, (where, ln)
+        if "retry.sh" in run:
+            assert "${{" not in run, where
+
+
+def test_ci8_every_download_is_retried():
+    """Each line that downloads is retried; each job that restores ChromaDB's model fetches it in its
+    own retried step, after the cache and the install, before the first step that measures — never
+    by its tests, unretried."""
+    for wf, job, step in _job_steps():
+        for ln in _lines(str(step.get("run") or "")):
+            if DOWNLOADS.search(ln):
+                assert ln.startswith(RETRY), (wf, job, step.get("name"), ln)
+            # A transient error on an index is a W: and exit 0 by default: retry.sh would see no
+            # failure, and apt-get install then fail three times (review of CI8).
+            if "apt-get update" in ln:
+                assert "-o APT::Update::Error-Mode=any" in ln, (wf, job, ln)
+    for path in WORKFLOWS:
+        for job_name, job in (_load(path).get("jobs") or {}).items():
+            steps = job.get("steps") or []
+            caches = [i for i, s in enumerate(steps) if (s.get("with") or {}).get("path") == CHROMA_CACHE["path"]]
+            models = [i for i, s in enumerate(steps) if s.get("name") == CHROMA_STEP]
+            if not caches:
+                assert not models, (path.name, job_name)
+                continue
+            assert len(models) == 1, (path.name, job_name)
+            model = steps[models[0]]
+            assert model["run"] == RETRY + "python scripts/chroma_model.py", (path.name, job_name)
+            assert model.get("if") == steps[caches[0]].get("if"), (path.name, job_name)
+            installs = [i for i, s in enumerate(steps) if "-r requirements/dev.txt" in str(s.get("run") or "")]
+            measures = [i for i, s in enumerate(steps) if MEASURES.search(str(s.get("run") or ""))]
+            assert caches[0] < models[0] and installs[0] < models[0] < measures[0], (path.name, job_name)
+
+
+@pytest.mark.parametrize("line, download, measure", [
+    ("python -m pip install --require-hashes -r requirements/dev.txt", True, False),
+    ('"$RUNNER_TEMP/audit/bin/pip" install --require-hashes -r requirements/audit.txt', True, False),
+    ("python -m pip install --no-deps --no-build-isolation -e .", False, False),     # local, nothing fetched
+    ("sudo apt-get update -qq", True, False),
+    ('sudo apt-get install -y -qq "terraform=${TERRAFORM_VERSION}"', True, False),
+    ('curl -fsSL -o "$RUNNER_TEMP/hashicorp.asc" https://apt.releases.hashicorp.com/gpg', True, False),
+    ("terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color", True, False),
+    ("terraform -chdir=infra/terraform test -no-color", False, True),
+    ("terraform -chdir=infra/orodruin validate -no-color", False, True),
+    ('python3 scripts/published_image.py install-syft "$RUNNER_TEMP/syft"', True, False),
+    ('python3 scripts/published_image.py verify "$IMAGE" --commit "$COMMIT"', False, True),
+    ("python scripts/chroma_model.py", True, False),
+    ("python -m pytest tests/ -q -o faulthandler_timeout=480", False, True),
+    ('python scripts/mutation_check.py --examples "$EXAMPLES" --rounds "$ROUNDS"', False, True),
+    ("python scripts/component_check.py glorfindel --imports", False, True),
+    ("ruff check .", False, True),
+])
+def test_ci8_what_counts_as_a_download_and_as_a_measure(line, download, measure):
+    assert (bool(DOWNLOADS.search(line)), bool(MEASURES.search(line))) == (download, measure)
+
+
+# retry.sh itself, run as the CI runs it: `bash scripts/retry.sh <command> [argument…]`.
+RETRY_SH = ROOT / "scripts" / "retry.sh"
+
+
+def _retry_sh(tmp_path: Path, codes: str | None, *args: str):
+    """retry.sh on a fake command whose successive exit codes are `codes` (then 0) — None: no command
+    at all —, with a fake `sleep` that only writes down its seconds: what it said, its exit code, the
+    command's runs (each with its arguments) and the waits."""
+    import os
+    import subprocess
+    bin_ = tmp_path / "bin"
+    bin_.mkdir(exist_ok=True)
+    count, calls, slept = tmp_path / "count", tmp_path / "calls", tmp_path / "slept"
+    _fake(bin_ / "sleep", f'echo "$1" >> "{slept}"\n')
+    _fake(bin_ / "flaky", f'n=$(cat "{count}" 2>/dev/null || echo 0)\necho $((n + 1)) > "{count}"\n'
+                          f'printf "[%s]" "$@" >> "{calls}"\necho >> "{calls}"\n'
+                          'codes=($CODES)\nexit "${codes[$n]:-0}"\n')
+    env = {"PATH": f"{bin_}:{os.environ.get('PATH', '')}", "HOME": str(tmp_path), "CODES": codes or ""}
+    argv = ["bash", str(RETRY_SH), *((str(bin_ / "flaky"), *args) if codes is not None else ())]
+    res = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=30, cwd=tmp_path)
+    read = lambda p: p.read_text().splitlines() if p.exists() else []  # noqa: E731
+    return res, read(calls), read(slept)
+
+
+def test_ci8_a_download_that_fails_twice_passes_at_its_third_attempt(tmp_path):
+    res, calls, slept = _retry_sh(tmp_path, "3 4 0", "a b", "c")
+    assert res.returncode == 0, res
+    assert calls == ["[a b][c]"] * 3                          # the arguments untouched, each time
+    assert slept == ["10", "30"]                              # the waits grow
+    out = res.stdout
+    assert all(f"attempt {n}/3" in out for n in (1, 2, 3)) and "passed at attempt 3/3" in out
+    assert out.count("::warning::") == 2 and "(exit 3)" in out and "(exit 4)" in out and "::error::" not in out
+
+
+def test_ci8_three_failures_exit_with_the_last_failures_code(tmp_path):
+    res, calls, slept = _retry_sh(tmp_path, "3 4 5")
+    assert res.returncode == 5, res
+    assert len(calls) == 3 and slept == ["10", "30"]          # no wait after the last attempt
+    assert "::error::" in res.stdout and "failed 3 times; exit 5" in res.stdout
+
+
+def test_ci8_a_download_that_passes_at_once_is_run_once_and_waits_for_nothing(tmp_path):
+    res, calls, slept = _retry_sh(tmp_path, "0")
+    assert res.returncode == 0 and len(calls) == 1 and slept == []
+    assert "::warning::" not in res.stdout and "passed at" not in res.stdout
+
+
+@pytest.mark.parametrize("code", [130, 143])
+def test_ci8_a_command_stopped_by_a_signal_is_never_run_again(tmp_path, code):
+    """A cancelled job, or one at its bound: SIGINT or SIGTERM, never a second attempt."""
+    res, calls, slept = _retry_sh(tmp_path, f"{code} 0")
+    assert res.returncode == code and len(calls) == 1 and slept == []
+
+
+_CATCHES = r'''import pathlib, signal, sys, time
+def stop(*_):
+    print("caught, exit 1", flush=True)
+    sys.exit(1)
+signal.signal(signal.SIGINT, stop)
+signal.signal(signal.SIGTERM, stop)
+with open(sys.argv[1], "a") as runs:
+    runs.write("run\n")
+pathlib.Path(sys.argv[2]).touch()
+time.sleep(30)
+'''
+
+
+@pytest.mark.parametrize("signame, code", [("SIGINT", 130), ("SIGTERM", 143)])
+def test_ci8_a_signal_is_a_stop_even_when_the_command_catches_it_and_exits_1(tmp_path, signame, code):
+    """pip and Terraform catch SIGINT and exit 1 (review of CI8): the job's cancel, sent to the
+    process group while the command runs, stops retry.sh — one attempt, no wait, its own exit code."""
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    slept, runs, started = tmp_path / "slept", tmp_path / "runs", tmp_path / "started"
+    _fake(bin_ / "sleep", f'echo "$1" >> "{slept}"\n')
+    prog = tmp_path / "catches.py"
+    prog.write_text(_CATCHES)
+    env = {"PATH": f"{bin_}:{os.environ.get('PATH', '')}", "HOME": str(tmp_path)}
+    proc = subprocess.Popen(["bash", str(RETRY_SH), sys.executable, str(prog), str(runs), str(started)],
+                            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            cwd=tmp_path, start_new_session=True)
+    try:
+        deadline = time.monotonic() + 20
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert started.exists(), "the command never started"
+        os.killpg(proc.pid, getattr(signal, signame))
+        out, _ = proc.communicate(timeout=20)
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+    assert "caught, exit 1" in out                            # the command did catch it, and exited 1
+    assert proc.returncode == code, out
+    assert runs.read_text().splitlines() == ["run"] and not slept.exists(), out
+    assert f"stopped by {signame}" in out and "attempt 2/3" not in out
+
+
+def test_ci8_the_command_said_in_a_workflow_message_cannot_end_it(tmp_path):
+    """A `%` or a line break of the command, escaped as GitHub reads its messages: the warning stays
+    one line, its text the command's; the command itself gets its arguments untouched."""
+    res, calls, slept = _retry_sh(tmp_path, "3 0", "50%", "x\ny")
+    assert res.returncode == 0 and calls[0] == "[50%][x"           # the fake writes the newline as it is
+    (warning,) = [ln for ln in res.stdout.splitlines() if ln.startswith("::warning::")]
+    assert "50%25 x%0Ay" in warning and "failed (exit 3)" in warning
+
+
+def test_ci8_without_a_command_it_says_how_and_fails(tmp_path):
+    res, calls, slept = _retry_sh(tmp_path, None)
+    assert res.returncode == 2 and "usage" in res.stderr and calls == [] and slept == []

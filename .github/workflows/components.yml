@@ -59,8 +59,14 @@ jobs:
       # second install.
       - name: Install
         run: |
-          python -m pip install --require-hashes -r requirements/dev.txt
+          bash scripts/retry.sh python -m pip install --require-hashes -r requirements/dev.txt
           python -m pip install --no-deps --no-build-isolation -e .
+
+      # CI8 (#566): ChromaDB's embedding model, fetched before Glorfindel's tests in a step of its
+      # own — its download alone retried, never the tests. The cache restored, nothing leaves.
+      - name: ChromaDB's embedding model (fetched when the cache misses, retried)
+        if: matrix.component == 'glorfindel'
+        run: bash scripts/retry.sh python scripts/chroma_model.py
 
       - name: Every module imports alone
         run: python scripts/component_check.py ${{ matrix.component }} --imports

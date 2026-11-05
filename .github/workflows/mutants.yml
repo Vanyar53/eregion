@@ -1,8 +1,9 @@
 name: Mutants
 
 # Measures the invariant tests: re-introduces, one at a time, bugs Glorfindel really
-# had (scripts/mutation_check.py). Red when fewer than `min_caught` are caught in every
-# round — the invariants lost strength. 15 of 17 at the push budget on 2026-10-12.
+# had (scripts/mutation_check.py). Red as soon as a counted mutant survives a round outside
+# the known survivors, each with its reason (CI6e, #553: `min_caught` before, 14 of 2 850 —
+# it held almost nothing).
 # In the release gate's shards (CI6d, #545): on one runner, the measure outlasted its 180 min
 # bound (02/11) — fourteen shards of the mutants, two of the control set, cut on the durations
 # the gate measured (scripts/mutants/durations.json), then their total, as release-gate.yml:
@@ -19,9 +20,6 @@ on:
       rounds:
         description: "Rounds per mutant (new seeds each)"
         default: "2"
-      min_caught:
-        description: "Fewest mutants caught in every round"
-        default: "14"
 
 permissions:
   contents: read
@@ -49,7 +47,7 @@ jobs:
 
       - name: Install
         run: |
-          python -m pip install --require-hashes -r requirements/dev.txt
+          bash scripts/retry.sh python -m pip install --require-hashes -r requirements/dev.txt
           python -m pip install --no-deps --no-build-isolation -e .
 
       # ChromaDB's embedding model, as the gate and ci.yml restore it (CI6b).
@@ -57,6 +55,11 @@ jobs:
         with:
           path: ~/.cache/chroma
           key: chroma-onnx-v1
+
+      # CI8 (#566): the model fetched here, retried, when the cache misses — the harness then finds
+      # it ready (CI6b). The mutation itself is never retried.
+      - name: ChromaDB's embedding model (fetched when the cache misses, retried)
+        run: bash scripts/retry.sh python scripts/chroma_model.py
 
       # The inputs go through the environment, never into the script's text (SEC6,
       # tests/unit/test_workflows.py): a value is a value, not shell.
@@ -97,13 +100,17 @@ jobs:
 
       - name: Install
         run: |
-          python -m pip install --require-hashes -r requirements/dev.txt
+          bash scripts/retry.sh python -m pip install --require-hashes -r requirements/dev.txt
           python -m pip install --no-deps --no-build-isolation -e .
 
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25   # v5.1.0
         with:
           path: ~/.cache/chroma
           key: chroma-onnx-v1
+
+      # CI8 (#566): as the mutants' — the model's download alone retried, never the measure.
+      - name: ChromaDB's embedding model (fetched when the cache misses, retried)
+        run: bash scripts/retry.sh python scripts/chroma_model.py
 
       - name: Re-introduce each bug of the control set's shard, run the invariants
         env:
@@ -121,9 +128,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The shards put together: each mutant of the tree measured once, at this budget, and at least
-  # `min_caught` caught in every round. It runs whatever came before, the run cancelled aside: a
-  # shard missing (red, or past its bound) is red here.
+  # The shards put together: each mutant of the tree measured once, at this budget, and none
+  # survived a round outside the known survivors (CI6e) — a known survivor caught is said, to take
+  # off the list. It runs whatever came before, the run cancelled aside: a shard missing (red, or
+  # past its bound) is red here.
   mutants-total:
     name: mutants (every shard, the count)
     needs: [mutants, control]
@@ -139,11 +147,10 @@ jobs:
         with:
           path: mutants-results
 
-      - name: Every mutant measured once, the count held
+      - name: Every mutant measured once, no survivor outside the known ones
         env:
-          MIN_CAUGHT: ${{ inputs.min_caught || '14' }}
           EXAMPLES: ${{ inputs.examples || '1000' }}
           ROUNDS: ${{ inputs.rounds || '2' }}
         run: >-
           python3 scripts/mutation_check.py --total mutants-results --shards 14 --control-shards 2
-          --examples "$EXAMPLES" --rounds "$ROUNDS" --min-caught "$MIN_CAUGHT"
+          --examples "$EXAMPLES" --rounds "$ROUNDS"

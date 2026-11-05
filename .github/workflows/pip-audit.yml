@@ -40,7 +40,7 @@ jobs:
       - name: Install pip-audit
         run: |
           python3 -m venv "$RUNNER_TEMP/audit"
-          "$RUNNER_TEMP/audit/bin/pip" install --require-hashes -r requirements/audit.txt
+          bash scripts/retry.sh "$RUNNER_TEMP/audit/bin/pip" install --require-hashes -r requirements/audit.txt
 
       - name: Audit the locks, one issue per advisory
         env:

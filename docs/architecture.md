@@ -346,13 +346,20 @@ Une clé seule n'ouvre rien : une marque posée dans Entra ne suffit pas, et les
 concorder. La garde refuse aussi : un tenant que le périmètre ne nomme pas (`EREGION_TENANT_ID`) ; un
 jeton du lecteur ou une application d'un autre tenant (`tid`, `appOwnerOrganizationId`) ; une
 application multi-tenant (elle atteint d'autres tenants) ; un principal qui n'est pas celui d'une
-application (`servicePrincipalType` : une identité managée, celle de Glorfindel ou d'Orodruin, n'est
-jamais une cible) ; le lecteur lui-même, l'opérateur, les identités protégées (Orodruin, les watches),
-et une application dont le principal possède l'une d'elles ; sans l'opérateur nommé
-(`EREGION_OPERATOR_OBJECT_ID`), toute identité. En `production`, la zone décide comme pour une VM :
-une technique non destructive seule. Une lecture qui échoue refuse. Celebrimbor crée et inscrit une
-identité de test du banc (`infra/terraform/entra_identity.tf`, désactivée par défaut) ; Orodruin la
-lit avec `Application.Read.All` et rien d'autre dans Graph (`infra/orodruin`, `graph_read_enabled`).
+application. **Jamais une cible**, la liste partagée d'`eregion_core/never_target.py` (que lira aussi
+l'exécuteur d'IR1) : l'identité de Glorfindel, celle d'Orodruin, celle d'Annatar, les opérateurs, les
+applications de Microsoft et de tout autre tenant, le principal d'une ressource (une identité managée,
+une API qui expose des rôles ou que d'autres appellent), une application dont le principal possède
+l'une d'elles ; sans opérateur nommé (`EREGION_OPERATOR_OBJECT_ID`), ou une liste mal écrite, toute
+identité. **Jamais une identité privilégiée** (décision du 05/11 : l'exécuteur d'IR1 deviendra
+propriétaire des identités inscrites, et être propriétaire d'une application, c'est pouvoir agir comme
+elle) : un rôle d'annuaire, actif ou éligible, à toute portée ; une appartenance à un groupe (un groupe
+peut porter un rôle) ; une permission d'application qui n'est pas une lecture. En `production`, la
+zone décide comme pour une VM : une technique non destructive seule. Une lecture qui échoue refuse.
+Celebrimbor crée et inscrit une identité de test du banc (`infra/terraform/entra_identity.tf`,
+désactivée par défaut) ; Orodruin la lit avec `Application.Read.All` et `RoleManagement.Read.Directory`,
+rien d'autre dans Graph (`infra/orodruin`, `graph_read_enabled`). Les utilisateurs de test viendront
+par une unité administrative (IDI1b) ; ici, une application seule.
 
 ### Le cycle d'une expérience
 

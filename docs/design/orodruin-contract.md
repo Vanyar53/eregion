@@ -32,7 +32,7 @@ Sept garanties. Chacune a un mécanisme, et une vérification qui ne demande **a
 |---|---|---|
 | Périmètre réseau | sortie limitée au banc, aux API de contrôle du cloud et à l'API du modèle | une connexion hors périmètre échoue |
 | Identité limitée | identité d'exécution qui lit le groupe du banc et n'écrit que sur chaque VM inscrite et chaque expérience (SEC5) ; ce qu'elle tient est une liste d'autorisations (SEC11) | lecture de ses attributions de rôle, à toutes les portées, et de ses droits effectifs sur le banc ; une écriture sur le groupe entier = manque ; un droit hors de la liste de sa portée = manque ; sans expérience dans le groupe (Chaos Studio non enregistré sur l'abonnement : `MissingSubscriptionRegistration` ou `NoRegisteredProviderFound`, quel que soit le statut — SEC7, à mesurer), les droits du chaos ne sont pas demandés |
-| Microsoft Graph (IDI1) | `Application.Read.All` seul, désactivé par défaut (`graph_read_enabled`) : la garde d'une identité d'Entra ID lit l'application et son principal | le jeton Graph de l'identité, relu sans appel à Graph : ses rôles d'application dans la liste, aucun rôle d'annuaire, pas un jeton d'utilisateur |
+| Microsoft Graph (IDI1) | `Application.Read.All` et `RoleManagement.Read.Directory`, rien d'autre, désactivés par défaut (`graph_read_enabled`) : la garde d'une identité d'Entra ID lit l'application, son principal, ses permissions et ses rôles d'annuaire | le jeton Graph de l'identité, relu sans appel à Graph : ses rôles d'application dans la liste, aucun rôle d'annuaire, pas un jeton d'utilisateur |
 | Cibles inscrites | l'inscription est revérifiée à chaque injection | refus sans inscription (O0, déjà en place) |
 | Plafond | limite de l'orchestrateur, ou quota | configuration effective lue |
 | Arrêt d'urgence | révoquer l'identité, tout arrêter | essai à blanc en CI |
@@ -593,22 +593,26 @@ trop — l'échec est fermé, et il se corrige dans la liste, après lecture de 
 ## IDI1 — la lecture de Microsoft Graph, et rien d'autre (#546, 05/11)
 
 Une technique d'identité (R2) vise une application d'Entra ID. Sa garde (`eregion_core/inscription.py`,
-`GraphEnrollment`) lit l'application, son principal de service et ce qu'il possède : il faut à
-l'identité d'Orodruin un rôle d'application de Microsoft Graph, `Application.Read.All`, en lecture
-seule. Terraform le pose, désactivé par défaut (`graph_read_enabled`, `azuread_app_role_assignment.graph_read`),
-sur le principal de Graph trouvé par son identifiant publié.
+`GraphEnrollment`) lit l'application, son principal de service, ce qu'il possède, qui tient un rôle
+sur lui, ses appartenances et ses permissions d'application — `Application.Read.All` — et, depuis la
+décision du 05/11 (une identité privilégiée n'est jamais inscrite), ses rôles d'annuaire actifs et
+éligibles — `RoleManagement.Read.Directory`, le moindre droit de `roleAssignments` (et, plus large que
+`RoleEligibilitySchedule.Read.Directory`, il couvre aussi `roleEligibilityScheduleInstances`). Deux
+rôles d'application de Microsoft Graph, en lecture seule. Terraform les pose, désactivés par défaut
+(`graph_read_enabled`, `azuread_app_role_assignment.graph_read`, un par rôle), sur le principal de
+Graph trouvé par son identifiant publié.
 
 Le contrat le relit à chaque démarrage, une garantie de plus (`graph`, `assess_graph`) : le jeton
 Graph de l'identité, demandé par IMDS, sans aucun appel à Graph ni droit pour le lire :
 
 | Dans le jeton | Tient | Sinon |
 |---|---|---|
-| `roles` (rôles d'application de Graph) | aucun, ou `Application.Read.All` tel que Graph l'écrit (`GRAPH_READ_ONLY`) | `graph_unlisted_right` : une écriture (`Application.ReadWrite.OwnedBy` compris), une lecture plus large (`Directory.Read.All`), toute autre permission |
+| `roles` (rôles d'application de Graph) | aucun, ou `Application.Read.All` et `RoleManagement.Read.Directory` tels que Graph les écrit (`GRAPH_READ_ONLY`) | `graph_unlisted_right` : une écriture (`Application.ReadWrite.OwnedBy`, `RoleManagement.ReadWrite.Directory` compris), une lecture plus large (`Directory.Read.All`, `RoleManagement.Read.All`), toute autre permission |
 | `wids` (rôles d'annuaire) | aucun, hors la valeur des principaux sans rôle (`APP_DEFAULT_WIDS`, hypothèse) | `graph_directory_role` |
 | `scp` | absent | `graph_unlisted_right` : le jeton d'un utilisateur (le poste d'un opérateur), pas l'identité d'Orodruin |
 
 Un jeton qu'on ne peut avoir → `graph_unreadable`. Chaque fois : `passive`, comme une attribution
-ARM hors du banc. Mutants M3860, M3861 (le contrat), M3862, M3863 (Terraform). Tests :
+ARM hors du banc. Mutants M3860, M3861, M3906 (le contrat), M3862, M3863 (Terraform). Tests :
 `tests/unit/test_orodruin.py`, `infra/orodruin/tests/graph_read.tftest.hcl`.
 
 La garde sait aussi, avant de lire, ce que Terraform lui donne (`terraform output`, dans

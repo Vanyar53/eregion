@@ -2694,7 +2694,7 @@ dans ce dépôt.
 
 | Où | Variable | Ressource | Droit pour l'apply |
 |---|---|---|---|
-| `infra/orodruin` | `graph_read_enabled = true` | `azuread_app_role_assignment.graph_read` : le rôle d'application `Application.Read.All` de Microsoft Graph à l'identité d'Orodruin | rôle d'Entra **Administrateur des rôles privilégiés** (ou Administrateur général) : un consentement d'administrateur |
+| `infra/orodruin` | `graph_read_enabled = true` | `azuread_app_role_assignment.graph_read`, un par rôle : les rôles d'application `Application.Read.All` et `RoleManagement.Read.Directory` de Microsoft Graph à l'identité d'Orodruin, en lecture seule | rôle d'Entra **Administrateur des rôles privilégiés** (ou Administrateur général) : un consentement d'administrateur |
 | `infra/terraform` | `entra_test_identity_enabled = true` | `azuread_application.bench_test` (`app-celebrimbor-test`, mono-tenant, tags du banc, sans secret), `azuread_service_principal.bench_test`, et le tag `eregion-identities` sur `rg-celebrimbor` | créer une application : **Développeur d'applications** (ou plus) ; écrire les tags du groupe du banc |
 
 - **Désactivées par défaut**, chacune dans un `terraform.tfvars` ignoré par git, jamais en `-var`
@@ -2703,8 +2703,8 @@ dans ce dépôt.
 - **Le provider `azuread`** arrive avec ce lot dans les deux modules (verrouillé, CI4) : le premier
   `make celebrimbor-plan` ou `make orodruin-plan` l'installe ; il prend ton `az login`, jamais un
   principal.
-- **Le contrat d'Orodruin** relit son jeton Graph à chaque démarrage : `Application.Read.All`, ou
-  rien ; tout autre droit dans Graph, ou un rôle d'annuaire, le rend `passive`
+- **Le contrat d'Orodruin** relit son jeton Graph à chaque démarrage : ces deux lectures, ou rien ;
+  tout autre droit dans Graph, ou un rôle d'annuaire, le rend `passive`
   (`docs/design/orodruin-contract.md`, « IDI1 »).
 - Contrats planifiés contre de faux providers : `infra/orodruin/tests/graph_read.tftest.hcl`,
   `infra/terraform/tests/entra_identity.tftest.hcl` (`terraform test`).
@@ -2722,8 +2722,9 @@ az rest --method GET --url "https://graph.microsoft.com/v1.0/me/memberOf/microso
 echo 'graph_read_enabled = true' >> infra/orodruin/terraform.tfvars   # ignoré par git
 make orodruin-plan                 # doit montrer : data.azuread_application_published_app_ids.well_known[0]
                                    # et data.azuread_service_principal.msgraph[0] lus ;
-                                   # + azuread_app_role_assignment.graph_read[0] (principal_object_id = l'identité
-                                   # d'Orodruin, output principal_id) ; Plan: 1 to add, 0 to change, 0 to destroy
+                                   # + azuread_app_role_assignment.graph_read["Application.Read.All"] et
+                                   #   ["RoleManagement.Read.Directory"] (principal_object_id = l'identité
+                                   # d'Orodruin, output principal_id) ; Plan: 2 to add, 0 to change, 0 to destroy
 make orodruin-lock                 # l'apply, sortie FERMÉE : son plan montré, relu, confirmé
 
 # 2. orodruin.env — ce que la garde sait avant de lire (sorties de Terraform, jamais dans le dépôt).
@@ -2763,10 +2764,15 @@ action, si les journaux d'ID1 sont activés.
 
 **Revenir en arrière** : `entra_test_identity_enabled = false`, puis `make celebrimbor-identity-plan`
 (`2 to destroy, 1 to change`) et `make celebrimbor-identity-up YES=1` ; `graph_read_enabled = false`,
-puis `make orodruin-plan` (`1 to destroy`) et `make orodruin-lock`. `make orodruin-kill` ne retire que
+puis `make orodruin-plan` (`2 to destroy`) et `make orodruin-lock`. `make orodruin-kill` ne retire que
 les attributions ARM d'Orodruin, pas son rôle dans Graph : le retirer ainsi, à part.
 
-**À mesurer au banc** : la valeur `wids` du jeton Graph d'une identité managée (le contrat la suppose,
+**Une identité privilégiée n'est jamais inscrite** (décision du 05/11) : un rôle d'annuaire actif ou
+éligible, une appartenance à un groupe, une permission d'application qui n'est pas une lecture — la
+garde le dit (`make orodruin-identity`). L'identité de test n'en a aucun ; ne lui en donner aucun.
+
+**À mesurer au banc** : la lecture des rôles éligibles (PIM) sur un tenant sans Entra ID P2 — si elle
+échoue, toute identité est refusée, et c'est dit (une décision de Jonathan, alors) ; la valeur `wids` du jeton Graph d'une identité managée (le contrat la suppose,
 `APP_DEFAULT_WIDS`) ; qu'`AzureActiveDirectory` couvre bien `graph.microsoft.com` depuis Orodruin (la
 documentation des service tags le dit) ; le délai du jeton en cache après l'attribution (jusqu'à 24 h :
 `make orodruin-check` peut dire l'ancien jeton) ; les tags d'une application lus par Graph tels que

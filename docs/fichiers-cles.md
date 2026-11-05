@@ -43,7 +43,7 @@ eregion_core/exercise_channel.py → O1 : les fenêtres d'Orodruin vers la watch
                                    run seul (blob runs/<run_id>.json, #193) ; sur H0, tout ce que la watch tire va
                                    dans son répertoire, runs/glorfindel/ (SEC18) — runs/glorfindel/.pulled-runs/<run_id>
                                    marque un rapport tiré du canal (jamais écrit par-dessus un run de H0).
-eregion_core/watch_channel.py   → #159 : le sens retour (conteneur watch) — heartbeat.json {at, since, windows} et
+eregion_core/watch_channel.py   → #159 : le sens retour (conteneur watch) — heartbeat.json {at, since, windows, covers (SEC21b)} et
                                    detections/<run_id>/<signal_id>.json, écrits par la watch hébergée (Publisher,
                                    thread watch-channel), lus par l'attente d'Annatar ; miss_unprovable → unknown.
 eregion_core/watch_gate.py      → V1 (#214) : avant chaque run d'Annatar et de Gothmog, avant tout appel au
@@ -309,7 +309,7 @@ annatar/
                         sur le groupe ET la VM + zone ; `scenario_destructive()` = le catalogue décide — la technique et sa source épinglée, inconnu = destructif, un scénario qui se dit non destructif contre lui refusé (SEC5) ; `annatar clean` gardé aussi, destructif, et derrière le garde V1) → setup → integrity check → attack
                         → emit attack_started (sans query — Glorfindel résout via detection_rules.yaml)
                         → thread daemon feedback: si detection_timeout → emit detection_missed
-                        → runs/<run_id>.json réécrit après l'attente : detection + detection_latency_s (#157), detection_refused (SEC21 : les détections du canal refusées)
+                        → runs/<run_id>.json réécrit après l'attente : detection + detection_latency_s (#157), detection_refused (SEC21 : les détections du canal refusées), detection_missing (SEC21b : couvertes par le battement, absentes)
   runner/detection.py → règle pure : quelle détection compte pour un run (TTP, resource_id sans la casse, vue ≥ attack_time)
                         et sa latence depuis attack_time — les deux chemins de l'attente, et le canal retour (#159)
   runner/parser.py    → Scenario dataclass simplifié (detection: timeout/prerequisites/hints)

@@ -37,6 +37,14 @@ class RunReport(run_report.RunReport):
             console.print(f"[bold]Refused on the return channel[/bold]: {total} (never counted, SEC21):")
             for why in refused[:20]:   # what the channel holds, never read as markup
                 console.print("  - " + str(why)[:400], markup=False, style="yellow")
+        missing = self.metrics.get("detection_missing")
+        if isinstance(missing, list) and missing:   # SEC21b: covered by the heartbeat, never read back
+            total = self.metrics.get("detection_missing_total")
+            total = total if isinstance(total, int) and not isinstance(total, bool) else len(missing)
+            console.print(f"[bold]Missing from the return channel[/bold]: {total} covered by the watch's "
+                          "heartbeat, never read back — never a miss (SEC21b):")
+            for name in missing[:20]:   # what the channel holds, never read as markup
+                console.print("  - " + str(name)[:400], markup=False, style="yellow")
         console.print("[dim]Detection and RTO metrics are owned by Glorfindel.[/dim]")
 
     @staticmethod

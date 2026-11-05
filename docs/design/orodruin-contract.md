@@ -230,8 +230,9 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
 
 - **Deux sortes de blobs.**
   - `heartbeat.json`, réécrit toutes les 60 s : `at`, `since` (démarrage de la watch),
-    `windows` (les `run_id` des fenêtres ouvertes ou en grâce que la watch connaît). Ce sont les
-    `run_id` d'Orodruin, rien du parc.
+    `windows` (les `run_id` des fenêtres ouvertes ou en grâce que la watch connaît) et `covers`
+    (SEC21b : pour chacune, les `signal_id` des détections livrées pour elle, 256 au plus). Ce sont
+    les `run_id` d'Orodruin et les noms de leurs blobs, rien du parc.
   - `detections/<run_id>/<signal_id>.json` : `ttp`, `resource_id`, `detected_at`, `rule`,
     `watch_run_id`. Un blob par couple (fenêtre, détection), seulement pour une VM à laquelle la
     watch a attribué la détection et qu'une fenêtre couvre à son heure. Jamais le reste du parc,
@@ -258,7 +259,7 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
   jamais compté, et dit (la console, le journal d'Orodruin, `metrics.detection_refused` du
   rapport) ; un run qui n'a vu que des détections refusées est `unknown`, jamais `missed`. Le
   battement qui prouve un `missed` n'est cru, lui aussi, que signé par la clé épinglée
-  (`watch_gate.miss_proof`) : non signé, d'une autre clé ou rejoué, le run est `unknown`. Depuis
+  (`watch_gate.miss_proof`) : non signé, d'une autre clé ou rejoué, le run est `unknown`. Et ce battement liste, pour chaque fenêtre, les détections livrées avant lui (`covers`, SEC21b) : le run les relit après lui, et une détection couverte absente, ou un battement sans `covers` (une watch d'avant), donne `unknown`, jamais `missed`. Depuis
   WC1, d'autres identités que H0 peuvent écrire `watch` : seule la clé épinglée fait un « vu ». `missed` exige un battement de cœur écrit **après la fin de l'attente**, par une watch
   **démarrée avant l'attaque**, qui **connaît la fenêtre du run**, et une liste lue sans erreur
   (`miss_unprovable`). Tout le reste donne `unknown` : canal absent, injoignable ou refusé,

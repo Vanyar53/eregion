@@ -257,7 +257,7 @@ def test_the_heartbeat_is_signed_as_before_and_still_believed(pinned, monkeypatc
     """SEC19's heartbeat keeps its fields, its domain, its counter: the gate believes it."""
     c = _published()
     beat = json.loads(c.body(wc.HEARTBEAT))
-    assert set(beat) == {"at", "since", "windows", "perimeter", "seq", "key", "sig"}
+    assert set(beat) == {"at", "since", "windows", "perimeter", "seq", "key", "sig", "covers"}   # SEC21b
     assert watch_key.verify_beat(beat, WATCH.public) == ""
     monkeypatch.setenv(wc.CHANNEL_ENV, URL)
     monkeypatch.setattr(gate, "READERS", {"channel": gate.channel_beat, "local": gate.local_beat,
@@ -303,7 +303,8 @@ def channel(monkeypatch, pinned):
     monkeypatch.setattr(wc, "read_named",
                         lambda run_id, **_: REAL_READ_NAMED(run_id, channel=URL, credential=CRED, get=c.get))
     monkeypatch.setattr(wc, "read_heartbeat", lambda **_: {
-        "at": _iso(clock.now), "since": _iso(clock.now - 86400), "windows": [RUN]})
+        "at": _iso(clock.now), "since": _iso(clock.now - 86400), "windows": [RUN],
+        "covers": {RUN: []}})   # SEC21b: nothing delivered for the run
     monkeypatch.setattr(gate, "channel_beat", lambda: gate.Beat(gate.CHANNEL, datetime.fromtimestamp(clock.now, timezone.utc)))
     return SimpleNamespace(container=c, clock=clock)
 
@@ -482,7 +483,7 @@ def proving(channel, monkeypatch):
         def read(**_):
             now = datetime.fromtimestamp(channel.clock.now, timezone.utc)
             body = {"at": now.isoformat(), "since": _iso(channel.clock.now - 86400), "windows": [RUN],
-                    "perimeter": ""}
+                    "perimeter": "", "covers": {RUN: []}}
             body = watch_key.sign_beat(body, signer, now) if signer is not None else body
             return {**body, **over}
         monkeypatch.setattr(wc, "read_heartbeat", read)

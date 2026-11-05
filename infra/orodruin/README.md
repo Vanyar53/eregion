@@ -46,10 +46,13 @@ Contrat (garanties, vérifications, kill, mutants) :
   compte une détection que vérifiée avec `EREGION_WATCH_KEY` d'`orodruin.env`, la clé déjà épinglée
   pour le battement — aucune épingle de plus. Une détection refusée (non signée, d'une autre clé,
   altérée, recopiée) est dite dans la sortie du run, dans `runs/orodruin/audit.jsonl`
-  (`detection_refused`) et dans le rapport ; le run est `unknown`. **Le passage** : la release
+  (`detection_refused`) et dans le rapport ; le run est `unknown`. Le battement liste aussi ce
+  qu'il couvre (SEC21b) : une détection couverte absente du canal est dite de même
+  (`detection_missing`), et le run est `unknown`, jamais `missed`. **Le passage** : la release
   publiée, le CD de H0 la déploie d'abord ; puis Orodruin (OI3, ou `make orodruin-push REF=<tag>`).
-  Dans l'autre ordre, les runs d'Orodruin restent `unknown` (« unsigned … update Glorfindel ») tant
-  que la watch n'est pas à jour (`docs/design/watch-key.md`, « Les détections signées »).
+  Dans l'autre ordre, les runs d'Orodruin restent `unknown` (« unsigned … update Glorfindel », ou
+  « the heartbeat does not say which detections it covers ») tant que la watch n'est pas à jour
+  (`docs/design/watch-key.md`, « Les détections signées », « Ce que le battement couvre »).
 - **Qui écrit le canal retour** (WC1, #523) : par défaut la watch de H0 seule, comme avant. Sans H0,
   la watch d'un poste ou d'une équipe : `WATCH_PRINCIPALS=<id>[,<id>…]` (la variable
   `watch_principal_ids`), voir ci-dessous.

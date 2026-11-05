@@ -31,9 +31,14 @@ provider "azapi" {
   subscription_id = var.subscription_id != "" ? var.subscription_id : null
 }
 
-# Le az login de l'opérateur, sur son tenant courant (celui de l'abonnement du banc) : jamais un
-# principal. Ne sert qu'à entra_identity.tf.
-provider "azuread" {}
+# Le az login de l'opérateur, jamais un principal, lié au tenant de l'abonnement du banc : un az
+# login posé sur un autre tenant n'écrit pas hors du banc, il échoue (relecture d'IDI1). Ne sert qu'à
+# entra_identity.tf. La lecture de l'abonnement, sans count, ne change rien au plan : une lecture.
+data "azurerm_subscription" "bench" {}
+
+provider "azuread" {
+  tenant_id = data.azurerm_subscription.bench.tenant_id
+}
 
 # Baseline resource group — porte le nom canonique sur le workspace "default",
 # suffixé "-<instance>" sur tout autre workspace (stack éphémère).

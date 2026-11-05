@@ -419,9 +419,11 @@ BENCH_RG_ENV = "EREGION_BENCH_RG"
 # other tenants). Who is never a target: eregion_core/never_target.py.
 SINGLE_TENANT = "AzureADMyOrg"
 _GUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-# An application permission an enrolled identity may hold: a read, as Graph names one (« X.Read »,
-# « X.Read.All »), never a write — IR1's executor will own what is enrolled, and owning an
-# application is being able to act as it. Anything else, or a role whose name is not read, refuses.
+# The application permissions an enrolled identity may hold: none, until a technique of R2 needs
+# one (relecture of IDI1) — IR1's executor will own what is enrolled, and owning an application is
+# being able to act as it, with all it may read. A permission admitted later is listed here by its
+# name, and must still be a read as Graph names one (« X.Read », « X.Read.All »), never a write.
+ADMITTED_APP_PERMISSIONS: tuple[str, ...] = ()
 _READ_ONLY_ROLE = re.compile(r"[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*\.Read(?:\.All)?")
 
 
@@ -478,20 +480,27 @@ def privilege_refusal(identity: dict) -> str:
     """Why this identity is privileged — never enrolled — or "". ``identity``: ``directory_roles``
     (its directory role assignments, active and eligible, at any scope), ``member_of`` (the groups
     and roles it is a member of, transitively: a group can carry a role), ``app_roles_held`` (the
-    application permissions it holds, each with the ``value`` its resource names it by)."""
-    roles = identity.get("directory_roles")
-    if roles is None or identity.get("member_of") is None or identity.get("app_roles_held") is None:
-        return "its roles and permissions are not read: a privileged identity is never enrolled"
+    application permissions it holds, each with the ``value`` its resource names it by), ``owned``
+    (what its principal owns: owning a group with a role, or a principal with one, is holding it),
+    ``assigned_to`` (who holds a role on it). Each must have been read: absent, it refuses."""
+    keys = ("directory_roles", "member_of", "app_roles_held", "owned", "assigned_to")
+    if any(not isinstance(identity.get(k), list) for k in keys):
+        return "its roles, permissions and ownerships are not all read: a privileged identity is never enrolled"
+    roles = identity["directory_roles"]
     if roles:
         return (f"it holds {len(roles)} directory role(s), active or eligible: a privileged identity is "
                 "never enrolled (IR1 will own what is enrolled)")
     if identity["member_of"]:
         return "it is a member of a group or a directory role (a group can carry a role): never enrolled"
+    if identity["owned"]:
+        return (f"its principal owns {len(identity['owned'])} object(s) (an owner acts as what it owns): "
+                "never enrolled")
     for held in identity["app_roles_held"]:
         value = str(held.get("value") or "")
-        if not _READ_ONLY_ROLE.fullmatch(value) or "write" in value.lower():
-            return (f"it holds the application permission '{value or held.get('appRoleId')}', not a read: "
-                    "a privileged identity is never enrolled")
+        if value not in ADMITTED_APP_PERMISSIONS or not _READ_ONLY_ROLE.fullmatch(value) \
+                or "write" in value.lower():
+            return (f"it holds the application permission '{value or held.get('appRoleId')}', not one "
+                    "admitted (none is, until a technique of R2 needs one): never enrolled")
     return ""
 
 
@@ -542,7 +551,7 @@ def identity_enrollment(identity: dict, rg_tags: dict | None, *, scope: Identity
     if why:
         return GuardResult(False, why)
     if TARGET_TAG not in tags:
-        return GuardResult(False, f"the application missing tag '{TARGET_TAG}={scope.bench}'")
+        return GuardResult(False, f"the application does not carry the tag '{TARGET_TAG}={scope.bench}'")
     if tags[TARGET_TAG] != scope.bench:
         return GuardResult(False, f"the application is enrolled for bench '{tags[TARGET_TAG]}', "
                                   f"not '{scope.bench}'")

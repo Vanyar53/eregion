@@ -253,18 +253,24 @@ def _jwt(claims):
 
 
 class _Credential:
+    """A distinct token per scope: Graph's carries the reader's claims, ARM's another audience."""
+
     def __init__(self):
         self.asked = []
 
     def get_token(self, scope):
         self.asked.append(scope)
-        return SimpleNamespace(token=_jwt(TOKEN))
+        return SimpleNamespace(token=_jwt({**TOKEN, "aud": scope.rsplit("/", 1)[0]}))
+
+
+GRAPH_BEARER = "Bearer " + _jwt({**TOKEN, "aud": "https://graph.microsoft.com"})
+ARM_BEARER = "Bearer " + _jwt({**TOKEN, "aud": "https://management.azure.com"})
 
 
 class FakeGraph:
     """Microsoft Graph and ARM as the reader asks them: a dict of URL → body (or status)."""
 
-    def __init__(self, identity=None, rg=None, *, fail=None, owned_pages=None):
+    def __init__(self, identity=None, rg=None, *, fail=None, owned_pages=None, eligible=None):
         identity = identity or _identity()
         self.calls = []
         self.fail = fail or {}
@@ -278,7 +284,7 @@ class FakeGraph:
             f"{g}/servicePrincipals/{SP}/appRoleAssignments": {"value": [
                 {"resourceId": h["resourceId"], "appRoleId": h["appRoleId"]} for h in identity["app_roles_held"]]},
             f"{g}/roleManagement/directory/roleAssignments": {"value": identity["directory_roles"]},
-            f"{g}/roleManagement/directory/roleEligibilityScheduleInstances": {"value": []},
+            f"{g}/roleManagement/directory/roleEligibilityScheduleInstances": {"value": eligible or []},
             f"https://management.azure.com/subscriptions/{SUB}/resourceGroups/rg-celebrimbor":
                 {"tags": RG if rg is None else rg},
         }
@@ -302,8 +308,10 @@ def test_the_reader_judges_what_graph_and_arm_say():
     assert v.allowed and v.zone == "bench"
     urls = [u for u, _, _ in graph.calls]
     assert urls[0].endswith(f"/applications/{APP}") and urls[-1].endswith("/resourceGroups/rg-celebrimbor")
-    # Each token goes to its own API only.
+    # Each token goes to its own API only: Graph's to Graph, ARM's to ARM (M3944).
     assert all(u.startswith("https://graph.microsoft.com/v1.0/") for u in urls[:-1])
+    assert {a for u, a, _ in graph.calls[:-1]} == {GRAPH_BEARER}
+    assert graph.calls[-1][1] == ARM_BEARER
 
 
 def test_the_reader_refuses_what_the_guard_refuses():
@@ -415,18 +423,55 @@ def test_an_application_permission_that_is_not_a_read_is_never_enrolled(value):
     assert not v.allowed and "application permission" in v.reason
 
 
-@pytest.mark.parametrize("value", ["User.Read.All", "Application.Read.All", "AuditLog.Read.All", "Files.Read"])
-def test_an_application_permission_that_reads_passes(value):
+@pytest.mark.parametrize("value", ["User.Read.All", "Application.Read.All", "AuditLog.Read.All", "Files.Read",
+                                   "Mail.Read"])
+def test_no_application_permission_is_admitted_until_r2_needs_one(value):
+    """Relecture of IDI1: even a read (Mail.Read, Files.Read.All) — its owner would read it all —
+    refused while the admitted list is empty (M3942)."""
+    from eregion_core import inscription
+    assert inscription.ADMITTED_APP_PERMISSIONS == ()
     held = [{"resourceId": GRAPH_SP, "appRoleId": "00000000-0000-0000-0000-0000000000d1", "value": value}]
-    assert _verdict(_identity(app_roles_held=held)).allowed
+    v = _verdict(_identity(app_roles_held=held))
+    assert not v.allowed and "not one admitted" in v.reason
 
 
-def test_privileges_not_read_refuse():
-    for key in ("directory_roles", "member_of", "app_roles_held"):
-        identity = _identity()
+def test_an_admitted_permission_must_still_be_a_read(monkeypatch):
+    from eregion_core import inscription
+    monkeypatch.setattr(inscription, "ADMITTED_APP_PERMISSIONS", ("User.Read.All", "Mail.ReadWrite"))
+    read = [{"resourceId": GRAPH_SP, "appRoleId": "00000000-0000-0000-0000-0000000000d1", "value": "User.Read.All"}]
+    write = [{"resourceId": GRAPH_SP, "appRoleId": "00000000-0000-0000-0000-0000000000d2", "value": "Mail.ReadWrite"}]
+    assert _verdict(_identity(app_roles_held=read)).allowed
+    assert not _verdict(_identity(app_roles_held=write)).allowed
+
+
+@pytest.mark.parametrize("key", ["directory_roles", "member_of", "app_roles_held", "owned", "assigned_to"])
+@pytest.mark.parametrize("how", ["absent", "None"])
+def test_privileges_not_read_refuse(key, how):
+    """Each of the five must have been read: a key absent, or None, refuses — in the privilege
+    check and in the shared list alike (M3908, M3909)."""
+    identity = _identity()
+    if how == "absent":
         identity.pop(key)
-        assert privilege_refusal(identity), key
-        assert not _verdict(identity).allowed, key
+    else:
+        identity[key] = None
+    assert privilege_refusal(identity), key
+    assert not _verdict(identity).allowed, key
+    if key in ("owned", "assigned_to"):
+        assert NEVER.why(identity, tenant=TENANT, token=TOKEN), key
+
+
+def test_an_identity_that_owns_anything_is_never_enrolled():
+    """Owning a group with a role, or a principal with one, is holding it — any owned object refuses,
+    protected or not (relecture of IDI1, M3907)."""
+    v = _verdict(_identity(owned=["00000000-0000-0000-0000-0000000000e8"]))
+    assert not v.allowed and "owns 1 object" in v.reason
+
+
+def test_an_eligible_role_read_from_graph_refuses():
+    """PIM: an identity one activation away from a role — read from Graph, refused (M3901)."""
+    graph = FakeGraph(eligible=[{**ROLE, "memberType": "Direct"}])
+    v = _reader(graph).check(APP, kind="technique", destructive=False)
+    assert not v.allowed and "directory role" in v.reason
 
 
 # ── The shared list of identities never targeted (eregion_core/never_target.py) ──────────
@@ -493,7 +538,8 @@ def test_the_reader_names_a_permission_by_its_resource_and_refuses_a_write():
     assert not v.allowed and "Application.ReadWrite.All" in v.reason
     graph.routes[f"{g}/servicePrincipals/{SP}/appRoleAssignments"] = {"value": [
         {"resourceId": GRAPH_SP, "appRoleId": "00000000-0000-0000-0000-0000000000d1"}]}
-    assert _reader(graph).check(APP, kind="technique", destructive=False).allowed
+    v = _reader(graph).check(APP, kind="technique", destructive=False)
+    assert not v.allowed and "Application.Read.All" in v.reason      # a read, not admitted
     # A role its resource does not list: not named, refused.
     graph.routes[f"{g}/servicePrincipals/{SP}/appRoleAssignments"] = {"value": [
         {"resourceId": GRAPH_SP, "appRoleId": "00000000-0000-0000-0000-0000000000d9"}]}

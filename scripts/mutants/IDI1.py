@@ -4,7 +4,9 @@ tenant, an application's principal, never a protected identity, its zone decidin
 refusing (eregion_core/inscription.py). Orodruin holds Application.Read.All in Microsoft Graph and
 nothing else, its contract reading its Graph token (eregion_core/orodruin.py, infra/orodruin).
 M3810–M3819 (the guard), M3860–M3864 (the contract, Terraform, make); M3900–M3906 (05/11: a
-privileged identity never enrolled, the shared list of eregion_core/never_target.py).
+privileged identity never enrolled, the shared list of eregion_core/never_target.py); M3907–M3909,
+M3940–M3944 (the review: what it owns, the Graph guarantee declared, no app permission admitted,
+Celebrimbor's tenant, each token to its own API).
 
 The guard's are caught by tests/unit/test_identity_inscription.py, on a fake Graph; the contract's
 and Orodruin's Terraform by tests/unit/test_orodruin.py (their plan: infra/orodruin/tests/
@@ -15,6 +17,8 @@ NT = "eregion_core/never_target.py"
 ORO = "eregion_core/orodruin.py"
 ORO_TF = "infra/orodruin/main.tf"
 ORO_VARS = "infra/orodruin/variables.tf"
+CEL_TF = "infra/terraform/main.tf"
+_BENCH = "tests/unit/test_bench_identity.py"
 MAKE = "Makefile"
 _GUARD = "tests/unit/test_identity_inscription.py"
 _CONTRACT = "tests/unit/test_orodruin.py -k graph"
@@ -61,8 +65,10 @@ MUTANTS = [
     ("M3901", "the eligible roles (PIM) never read: an identity one activation away from a role is enrolled (IDI1)", INS,
      '        roles += self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleEligibilityScheduleInstances", g, flt)\n',
      ""),
-    ("M3902", "an identity holding a write application permission in Graph is enrolled (IDI1)", INS,
-     '        if not _READ_ONLY_ROLE.fullmatch(value) or "write" in value.lower():\n', "        if False:\n"),
+    ("M3902", "an admitted application permission that writes passes: the read motif no longer checked (IDI1)", INS,
+     '        if value not in ADMITTED_APP_PERMISSIONS or not _READ_ONLY_ROLE.fullmatch(value) \\\n'
+     '                or "write" in value.lower():\n',
+     "        if value not in ADMITTED_APP_PERMISSIONS:\n"),
     ("M3903", "a member of a group is enrolled: the group's role reaches whoever owns the identity (IDI1)", INS,
      '    if identity["member_of"]:\n', "    if False:\n"),
     ("M3904", "the principal of a resource (an API others call) is a target (IDI1)", NT,
@@ -74,6 +80,30 @@ MUTANTS = [
      'GRAPH_READ_ONLY = frozenset({"Application.Read.All", "RoleManagement.Read.Directory"})',
      'GRAPH_READ_ONLY = frozenset({"Application.Read.All", "RoleManagement.Read.Directory", '
      '"RoleManagement.ReadWrite.Directory"})'),
+    # The review of 86159da8.
+    ("M3907", "an identity whose principal owns a group or a principal with a role is enrolled (IDI1)", INS,
+     '    if identity["owned"]:\n        return (f"its principal owns',
+     '    if False:\n        return (f"its principal owns'),
+    ("M3908", "what the principal owns, and who holds a role on it, unread: the privilege check passes (IDI1)", INS,
+     '    keys = ("directory_roles", "member_of", "app_roles_held", "owned", "assigned_to")\n',
+     '    keys = ("directory_roles", "member_of", "app_roles_held")\n'),
+    ("M3909", "the shared list judges an identity whose ownerships were never read (IDI1, IR1a)", NT,
+     "        if missing:\n            return f\"{' and '.join(missing)} not read",
+     "        if False:\n            return f\"{' and '.join(missing)} not read"),
+    ("M3940", "an undeclared Graph role arms: an Orodruin granted a Graph right by nobody's choice (IDI1)", ORO,
+     '    if not declared and claims.get("roles"):\n', "    if False:\n"),
+    ("M3941", "an undeclared wids outside the hypothesis is passive: every Orodruin falls at the release (IDI1)", ORO,
+     "        what = _miss if declared else _note\n", "        what = _miss\n"),
+    ("M3942", "application permissions that read are admitted before any technique of R2 needs one (IDI1)", INS,
+     "ADMITTED_APP_PERMISSIONS: tuple[str, ...] = ()\n",
+     'ADMITTED_APP_PERMISSIONS: tuple[str, ...] = ("User.Read.All", "Mail.Read", "Files.Read", '
+     '"Application.Read.All", "AuditLog.Read.All")\n'),
+    ("M3943", "Celebrimbor's azuread on the az login's tenant: another tenant's login writes outside the bench (IDI1)",
+     CEL_TF, 'provider "azuread" {\n  tenant_id = data.azurerm_subscription.bench.tenant_id\n}\n',
+     'provider "azuread" {}\n'),
+    ("M3944", "the bench group read with the Graph token: a token sent to an API it is not for (IDI1)", INS,
+     '        group = self._read(f"{ARM}/subscriptions/{sub}/resourceGroups/{rg}", arm, {"api-version": _RG_API})\n',
+     '        group = self._read(f"{ARM}/subscriptions/{sub}/resourceGroups/{rg}", g, {"api-version": _RG_API})\n'),
 ]
 TESTS = {
     **{f"M{n}": _GUARD for n in range(3810, 3820)},
@@ -81,4 +111,7 @@ TESTS = {
     "M3864": _MAKE,
     **{f"M{n}": _GUARD for n in range(3900, 3906)},
     "M3906": _CONTRACT,
+    **{mid: _GUARD for mid in ("M3907", "M3908", "M3909", "M3942", "M3944")},
+    **{mid: _CONTRACT for mid in ("M3940", "M3941")},
+    "M3943": _BENCH,
 }

@@ -107,6 +107,10 @@ class NeverTarget:
         why = self.refusal()
         if why:
             return why
+        # What it owns and who holds a role on it: read, or nothing is known of it.
+        missing = [k for k in ("owned", "assigned_to") if not isinstance(identity.get(k), list)]
+        if missing:
+            return f"{' and '.join(missing)} not read: an identity whose ties are unknown is never a target"
         app = identity.get("application") or {}
         sp = identity.get("service_principal") or {}
         never = set(self.ids)
@@ -120,6 +124,6 @@ class NeverTarget:
             return "an application registered in another tenant (Microsoft's, or any other) is never a target"
         if sp.get("appRoles") or sp.get("oauth2PermissionScopes") or identity.get("assigned_to"):
             return "the principal of a resource (an API that exposes roles or scopes, or that others hold roles on) is never a target"
-        if never & {guid(o) for o in identity.get("owned") or []}:
+        if never & {guid(o) for o in identity["owned"]}:
             return "the application's principal owns a protected identity"
         return ""

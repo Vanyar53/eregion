@@ -39,6 +39,15 @@ class Scenario:
     raw: dict
     engine: str = DEFAULT_ENGINE   # local-script (today's scripts) or atomic (R1)
     engine_ref: str | None = None  # the engine's id for this experiment (atomic test ref)
+    # VM3 (#548): overrides for the engine's input arguments. For `atomic`, they fill the test's
+    # `input_arguments` over its upstream defaults (annatar/engines/atomic.py), so a vendored
+    # test runs on an enrolled target without an outbound dependency (a ping to a loopback
+    # address) and restores its initial state (a log overwrite confined to a disposable path).
+    # The vendored file is never edited. What holds them: here, a mapping only (validate); the
+    # adapter refuses a key the test does not declare and a value outside [A-Za-z0-9._/:-];
+    # the catalog decides — engine_args other than its entry's make the run unknown, so
+    # destructive, never in production (catalog_destructive, SEC5 V-19).
+    engine_args: dict = field(default_factory=dict)
 
 
 class ScenarioParser:
@@ -64,6 +73,7 @@ class ScenarioParser:
             raw=data,
             engine=data.get("engine", DEFAULT_ENGINE),
             engine_ref=data.get("engine_ref"),
+            engine_args=data.get("engine_args") or {},
         )
 
     def validate(self, path: str) -> ValidationResult:
@@ -99,6 +109,10 @@ class ScenarioParser:
         for field_name in required:
             if field_name not in data:
                 errors.append(f"Missing required field: '{field_name}'")
+
+        if "engine_args" in data and not isinstance(data["engine_args"], dict):
+            errors.append("engine_args must be a mapping of the test's input arguments "
+                          f"(name: value), not {type(data['engine_args']).__name__}")
 
         if "target" in data and not isinstance(data["target"], dict):
             errors.append("target must be a mapping (type, resource_group, …)")

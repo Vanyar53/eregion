@@ -50,6 +50,14 @@ _PLACEHOLDER = re.compile(r"#\{([a-zA-Z0-9_]+)\}")
 _NO_ATOMICS_FOLDER = "PathToAtomicsFolder"
 # A PIN line: "#   <sha256>  <path relative to the atomics directory>".
 _PIN_LINE = re.compile(r"^#\s+([0-9a-f]{64})\s+(\S+)\s*$")
+# What an override (engine_args, VM3) may hold: a word, a number, an address or a path —
+# nothing a shell would read as anything else.
+_ARG_VALUE = re.compile(r"^[A-Za-z0-9._/:-]+$")
+# The scenario's own revert (E1 `revert`, VM3): the one action an atomic run knows — remove
+# the files the test leaves behind its upstream cleanup, in a temporary directory only.
+REVERT_ACTIONS = frozenset({"remove_files"})
+_REVERT_DIRS = ("/tmp/", "/var/tmp/")
+_REVERT_KEYS = frozenset({"name", "action", "paths"})
 
 
 class AtomicError(ValueError):
@@ -124,12 +132,34 @@ def _find_test(doc: dict, guid: str) -> dict:
     raise AtomicError(f"no atomic test with guid {guid!r}; this technique has {known}")
 
 
-def _resolve_args(test: dict, overrides: dict | None) -> dict:
-    """Input-argument defaults, overridden by anything the caller passed."""
-    args = {}
-    for name, spec in (test.get("input_arguments") or {}).items():
-        args[name] = (spec or {}).get("default")
-    for name, value in (overrides or {}).items():
+def _resolve_args(test: dict, overrides) -> dict:
+    """Input-argument defaults, overridden by what the caller passed (``engine_args``, VM3).
+
+    An override reaches a shell command as written, so it is held (fail closed): a mapping
+    only, each key one of the test's own ``input_arguments``, each value a string or a number
+    of ``_ARG_VALUE``'s characters (no space, no quote, no ``;``, ``$``, ``|``, ``&``…). Whether
+    the values are the catalog's is the catalog's question (``catalog_destructive``)."""
+    declared = test.get("input_arguments") or {}
+    args = {name: (spec or {}).get("default") for name, spec in declared.items()}
+    if overrides is None:
+        return args
+    if not isinstance(overrides, dict):
+        raise AtomicError(
+            f"engine_args must be a mapping of the test's input arguments, not "
+            f"{type(overrides).__name__}"
+        )
+    for name, value in overrides.items():
+        if name not in declared:
+            raise AtomicError(
+                f"engine_args {name!r} is not an input argument of this test "
+                f"({sorted(declared)}) — refused"
+            )
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)) \
+                or not _ARG_VALUE.fullmatch(str(value)):
+            raise AtomicError(
+                f"engine_args {name!r}: {str(value)[:80]!r} is not a plain value "
+                f"({_ARG_VALUE.pattern}) — refused, never sent to a shell"
+            )
         args[name] = value
     return args
 
@@ -159,6 +189,55 @@ def _finalize(executor_name: str, text: str, guid: str, what: str) -> str:
             "vendored, the upstream atomics tree is not on the VM, so the path does not exist"
         )
     return f"#!/bin/{executor_name}\n{text}"
+
+
+def revert_commands(revert, resolved: ResolvedAtomic) -> list[tuple[str, str]]:
+    """The scenario's ``revert`` (E1), as the commands the runner sends AFTER the atomic's own
+    cleanup — ``[(name, command)]``, ``[]`` when there is none (VM3, #548).
+
+    An upstream cleanup may restore the state and still leave its own files: T1053.003's keeps
+    root's crontab in ``/tmp/notevil`` and the evil one in ``#{tmp_cron}``. The vendored test is
+    never edited; the scenario says what to remove, and only that (fail closed): a list of
+    steps, each ``{name, action: remove_files, paths: [...]}`` and nothing else; each path, its
+    ``#{var}`` filled with the test's arguments, an absolute plain path (``_ARG_VALUE``, no
+    ``..``) inside ``/tmp/`` or ``/var/tmp/``. The command is ``rm -f --``: a file or a link,
+    never a directory, never what a link points to. Whether this revert is the catalog's is the
+    catalog's question (``catalog_destructive``), as for ``engine_args``."""
+    if revert is None:
+        return []
+    if not isinstance(revert, list):
+        raise AtomicError(f"revert must be a list of steps, not {type(revert).__name__}")
+    commands = []
+    for i, step in enumerate(revert):
+        if not isinstance(step, dict):
+            raise AtomicError(f"revert step {i}: a mapping (name, action, paths), not "
+                              f"{type(step).__name__}")
+        extra = sorted(set(map(str, step)) - _REVERT_KEYS)
+        if extra:
+            raise AtomicError(f"revert step {i}: {extra} — only name, action and paths")
+        name = step.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise AtomicError(f"revert step {i}: needs a name")
+        if step.get("action") not in REVERT_ACTIONS:
+            raise AtomicError(f"revert {name!r}: action {step.get('action')!r} is not one of "
+                              f"{sorted(REVERT_ACTIONS)} — refused")
+        paths = step.get("paths")
+        if not isinstance(paths, list) or not paths:
+            raise AtomicError(f"revert {name!r}: paths must be a non-empty list")
+        filled = []
+        for raw in paths:
+            if not isinstance(raw, str):
+                raise AtomicError(f"revert {name!r}: a path is text, not {type(raw).__name__}")
+            path = resolved.substitute(raw)
+            if not _ARG_VALUE.fullmatch(path) or ".." in path.split("/") \
+                    or not path.startswith(_REVERT_DIRS) or path in _REVERT_DIRS:
+                raise AtomicError(
+                    f"revert {name!r}: {path[:80]!r} is not a plain file path inside "
+                    f"{' or '.join(_REVERT_DIRS)} — refused, never sent to a shell"
+                )
+            filled.append(path)
+        commands.append((name, "#!/bin/sh\nrm -f -- " + " ".join(filled)))
+    return commands
 
 
 def resolve_ref(engine_ref: str, args: dict | None = None,

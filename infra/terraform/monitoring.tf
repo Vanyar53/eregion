@@ -43,7 +43,8 @@ resource "azurerm_monitor_data_collection_rule" "celebrimbor" {
       streams = ["Microsoft-Syslog"]
       # AUD1 : local6, où audisp-syslog écrit les lignes d'auditd — seulement avec auditd_enabled
       # (auditd.tf) ; sinon, la liste de toujours.
-      facility_names = concat(["auth", "authpriv", "syslog", "daemon"], var.auditd_enabled ? [local.auditd_facility] : [])
+      # VM3 (#548) : cron, où crontab écrit « REPLACE » (T1053.003) — seulement avec cron_logs_enabled.
+      facility_names = concat(["auth", "authpriv", "syslog", "daemon"], var.auditd_enabled ? [local.auditd_facility] : [], var.cron_logs_enabled ? ["cron"] : [])
       log_levels     = ["Warning", "Error", "Critical", "Alert", "Emergency", "Notice", "Info"]
       name           = "syslog-collection"
     }

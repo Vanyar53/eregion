@@ -46,6 +46,20 @@ from glorfindel import expected_sudo
 # shipped `auditd-sensitive-root-command`, or a client's rule on the same technique (whose
 # rows, if not of this form, stay cards: unreadable).
 TTP = "T1059.004"
+# The rules of this technique the human-root reading does NOT read — an explicit list, by name,
+# and the only way out (VM3, #548): every other T1059.004 rule, a client's under any name
+# included, is read (settle, fold, the rule window), and what is not of the human-root form
+# stays a card, unreadable (fail closed). `t1059-004-shell-from-world-writable` reads auditd's
+# execve of a shell running a script from a world-writable path — a Run Command exec, auid
+# unset, which this reading would turn into unreadable cards; it bounds its own records (its
+# query) and its rows are told apart by their event (`AuditEvent`, `_row_identity`). A client
+# rule that replaces it under its name (P1) is exempt as it is.
+EXEMPT_RULES = frozenset({"t1059-004-shell-from-world-writable"})
+
+
+def reads(rule_name: str, ttp: str) -> bool:
+    """Whether the poller reads this rule's rows as a human login's execs as root."""
+    return ttp == TTP and rule_name not in EXEMPT_RULES
 
 # The keys of the two audit rules (infra/terraform/scripts/auditd.sh).
 KEYS = ("user_emulation", "root_command")

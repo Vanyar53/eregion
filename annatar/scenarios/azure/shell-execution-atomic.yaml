@@ -1,0 +1,67 @@
+# VM3 (#548) — Command and Scripting Interpreter: Unix Shell (T1059.004), via a PINNED atomic.
+#
+# The attack is the atomic « Create and Execute Bash Shell Script » (guid 7e7ac3ed…): it writes
+# a small script under a world-writable directory and runs it through sh. The adapter runs the
+# test's own command and cleanup_command verbatim; `engine_args` fill two of its input arguments
+# so the run stays faithful to the Orodruin contract:
+#   - host: 127.0.0.1 — the upstream default pings 8.8.8.8 (an outbound dependency); a loopback
+#     address keeps the behaviour (a shell executing a script) with no egress;
+#   - script_path: a disposable /tmp path the cleanup removes, so the initial state is restored.
+# The vendored YAML is never edited — only values the test's input_arguments allow.
+#
+# Blue side: auditd logs the execve of the shell with the script argument under /tmp
+# (t1059-004-shell-from-world-writable), read in Syslog facility local6 — collected only with
+# auditd_enabled (infra/terraform/auditd.tf). The shipped auditd-sensitive-root-command rule
+# (also T1059.004) reads a HUMAN login's root commands; a Run Command injection runs with auid
+# unset, which that rule's query filters out — this is a separate rule, exempt by name from the
+# human-root reading every other T1059.004 rule keeps (glorfindel/auditd.py, EXEMPT_RULES).
+# engine_args must be the catalog entry's: others make the run unknown, so destructive.
+schema_version: "1"
+kind: technique
+engine: atomic
+engine_ref: T1059.004/7e7ac3ed-f795-4fa5-b711-09d6fbe9b873
+engine_args:
+  host: 127.0.0.1
+  script_path: /tmp/eregion-t1059-art.sh
+name: shell-execution-atomic
+description: "T1059.004 — Unix Shell, via a pinned Atomic Red Team test (create and run a shell script)"
+mitre: T1059.004
+version: "1.0.0"
+destructive: false
+
+target:
+  type: azure_vm
+  resource_group: rg-celebrimbor
+  vm_name: vm-celebrimbor-gondolin
+
+# Clean start — the script absent — before the attack; the script removed after the cleanup.
+# `#{script_path}` is filled from engine_args.
+steady_state:
+  probes:
+    - name: script-absent
+      verify: "test -f #{script_path} && echo PRESENT || echo ABSENT"
+      expect: ABSENT
+
+detection:
+  timeout: "600s"
+  prerequisites:
+    - name: auditd_local6_dcr
+      table: Syslog
+      why: >
+        auditd must be enabled on the bench (infra/terraform/auditd.tf) with the shell_exec
+        rule (infra/terraform/scripts/auditd.sh), so execve of a shell is sent to Syslog
+        facility local6 — off by default.
+      verify: "Syslog | where Facility == 'local6' | where TimeGenerated > ago(1h) | limit 1"
+  hints:
+    log_source: Syslog
+    attack_commands_summary: >
+      Atomic Red Team T1059.004 (Linux, guid 7e7ac3ed…): write a script to /tmp, chmod +x, then
+      `sh /tmp/eregion-t1059-art.sh` (the script echoes a line and pings 127.0.0.1). auditd's
+      shell_exec rule logs the execve: SYSCALL + EXECVE, argv[0] a shell, a /tmp script argument.
+    expected_indicators:
+      - "Syslog Facility: 'local6'"
+      - "auditd EXECVE: a shell (sh/bash/dash) running a script under /tmp"
+      - "key=\"shell_exec\""
+    failure_candidates:
+      - "Syslog | where Facility == 'local6' | where SyslogMessage has 'shell_exec' | where TimeGenerated > ago(10m)"
+      - "the shipped auditd-sensitive-root-command rule filters auid unset — a Run Command exec is not a human login"

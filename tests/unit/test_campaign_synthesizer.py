@@ -97,7 +97,7 @@ def test_non_syslog_window_uses_latency_plus_margin(tmp_path, catalog):
 
 
 def test_planned_technique_refused(tmp_path, catalog):
-    entry = catalog["T1070.002"]  # status: planned
+    entry = catalog["T1530"]  # status: planned (VM3 turned the VM ones implemented)
     res = synthesize(
         entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
     )

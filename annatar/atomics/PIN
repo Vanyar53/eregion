@@ -1,8 +1,9 @@
 # Atomic Red Team — pinned, vendored subset (R1)
 #
 # Source    : https://github.com/redcanaryco/atomic-red-team
-# Commit    : 9f6a1eab36d561272cf9f34c61dd80263db3ce8e   (path atomics/T1136.001, 2026-02-18)
-# Retrieved : 2026-10-20
+# Commit    : 9f6a1eab36d561272cf9f34c61dd80263db3ce8e   (2026-02-18)
+#   T1136.001  retrieved 2026-10-20
+#   T1053.003, T1059.004, T1070.002  retrieved 2026-11-05 (VM3, #548) — same commit
 # License   : MIT — see LICENSE.atomic-red-team (kept with the files, as the license requires)
 #
 # The files under this directory are copied VERBATIM from upstream at the commit above.
@@ -13,6 +14,9 @@
 #
 # SHA256 (sha256sum of each vendored file, relative to this directory):
 #   1a6cd567e53bb42eb7564bd46bdf2299d3c805f2faa25a397a64886494ae5f3f  T1136.001/T1136.001.yaml
+#   4830ac00380213b101a686458ddebdbf92757f5b68b285aab09cac909cac63ab  T1053.003/T1053.003.yaml
+#   27b52dd93ed8b71af08d45a1c06561dece3ad4463b457cea9ff071c0605a784e  T1059.004/T1059.004.yaml
+#   a5d509454bd92a337e2b53aac929126f9a3af49f1e29b59f6f02c7f1596cf88c  T1070.002/T1070.002.yaml
 #   65af6027045d23175366eab50e460ab3ee7790e591cb84cc32c78ac63a4c90e1  LICENSE.atomic-red-team
 #
 # Why vendored (not fetched at run time): Orodruin has no Internet egress
@@ -29,3 +33,9 @@
 # Vendored techniques (engine_ref = "<technique>/<auto_generated_guid>"):
 #   T1136.001  Create Account: Local Account
 #     40d8eabd-e394-46f6-8785-b9bfa1d011d2  Create a user account on a Linux system
+#   T1053.003  Scheduled Task/Job: Cron
+#     435057fb-74b1-410e-9403-d81baf194f75  Cron - Replace crontab with referenced file
+#   T1059.004  Command and Scripting Interpreter: Unix Shell
+#     7e7ac3ed-f795-4fa5-b711-09d6fbe9b873  Create and Execute Bash Shell Script
+#   T1070.002  Indicator Removal: Clear Linux or Mac System Logs
+#     d304b2dc-90b4-4465-a650-16ddd503f7b5  Overwrite Linux Log

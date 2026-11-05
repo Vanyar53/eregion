@@ -71,7 +71,8 @@ def test_on_an_extension_per_bench_vm_never_the_custom_data():
 def test_local6_in_the_dcr_only_when_on():
     text = (TF / "monitoring.tf").read_text()
     assert ('facility_names = concat(["auth", "authpriv", "syslog", "daemon"], '
-            "var.auditd_enabled ? [local.auditd_facility] : [])") in text
+            "var.auditd_enabled ? [local.auditd_facility] : [], "
+            'var.cron_logs_enabled ? ["cron"] : [])') in text
     assert 'auditd_facility = "local6"' in (TF / "auditd.tf").read_text()
 
 

@@ -2203,10 +2203,11 @@ def test_ci10b_components_run_in_one_job_on_a_pull_request_each_component_still_
     runs = [s for s in one["steps"] if "component_check.py" in (s.get("run") or "")]
     assert [s["run"] for s in runs] == want
     for s in runs:
-        assert s["if"] == "${{ !cancelled() && steps.model.outcome == 'success' }}", s
         assert s["name"].split(" — ")[0] == s["run"].split()[2], s           # each step names its component
+    (install,) = [s for s in one["steps"] if s.get("name") == _INSTALL]
     (model,) = [s for s in one["steps"] if s.get("name") == CHROMA_STEP]
-    assert model["id"] == "model" and one["steps"].index(model) < one["steps"].index(runs[0])
+    assert install["id"] == "install" and model["id"] == "model"
+    assert one["steps"].index(install) < one["steps"].index(model) < one["steps"].index(runs[0])
     (profiles,) = [s for s in one["steps"] if "profiles-check" in (s.get("run") or "")]
     assert profiles["run"] == "make profiles-check" and profiles["if"] == "${{ !cancelled() }}"
     assert [s["run"] for s in jobs["profiles"]["steps"] if s.get("run")] == ["make profiles-check"]
@@ -2215,3 +2216,36 @@ def test_ci10b_components_run_in_one_job_on_a_pull_request_each_component_still_
         assert isinstance(job.get("timeout-minutes"), int) and 0 < job["timeout-minutes"] <= 30, name
     # Its check names are none of main's required ones, whatever the event (CI5, H1c).
     assert not _check_names(doc) & set(_required())
+
+
+def _reads_the_model(component: str) -> bool:
+    """Whether a component reads ChromaDB's model: its matrix job restores the model's cache for it."""
+    (cache,) = [s for s in _load(COMPONENTS_WF)["jobs"]["component"]["steps"]
+                if (s.get("with") or {}).get("path") == CHROMA_CACHE["path"]]
+    cond = str(cache.get("if") or "")
+    m = re.fullmatch(r"matrix\.component == '(\w+)'", cond)
+    assert m, cond
+    return component == m.group(1)
+
+
+def test_ci10b_a_component_that_reads_no_model_never_waits_for_its_download():
+    """Review of CI10b: in the pull request's job, a component whose tests read no ChromaDB model
+    (core, Annatar, Gothmog: the matrix restores the model for Glorfindel alone) runs on the install
+    alone — a model that fails to download never skips it, nor hides its red. Glorfindel's steps wait
+    for the model, as its matrix job does."""
+    steps = _load(COMPONENTS_WF)["jobs"]["components"]["steps"]
+    runs = [s for s in steps if "component_check.py" in (s.get("run") or "")]
+    readers = {c for c in _components() if _reads_the_model(c)}
+    assert readers == {"glorfindel"}
+    for s in runs:
+        needs = "model" if s["run"].split()[2] in readers else "install"
+        assert s["if"] == f"${{{{ !cancelled() && steps.{needs}.outcome == 'success' }}}}", s
+
+
+def test_ci10b_the_pull_request_s_components_job_pins_its_actions_as_the_gate_does():
+    """Review of CI10b: the new job's actions pinned by commit, each one the release gate already
+    pins — no action added. The matrix kept its tags (a debt said, for a SEC lot)."""
+    job = _load(COMPONENTS_WF)["jobs"]["components"]
+    actions = [s["uses"] for s in job["steps"] if s.get("uses")]
+    assert actions and all(PINNED.match(a) for a in actions), actions
+    assert set(actions) <= set(_actions(_gate())), set(actions) - set(_actions(_gate()))

@@ -93,7 +93,7 @@ jobs:
           GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
         # CI10b (#581, L8): in four processes (pytest-xdist, from the dev lock), test by test
         # (`--dist load`): the same tests at the same budget, on both Pythons, each process a
-        # share of the suite — measured: docs/operations.md, « La CI, plus rapide ».
+        # share of the suite — measured: docs/operations.md, « La CI au bon endroit ».
         # As on macOS: a test still running after 8 min writes every thread's stack to the log —
         # a hang says where it waits before the job's bound.
         run: python -m pytest tests/ -q -n 4 --dist load -o faulthandler_timeout=480

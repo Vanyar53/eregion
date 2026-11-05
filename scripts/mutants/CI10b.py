@@ -13,6 +13,7 @@ MONDAY = ".github/workflows/mutants.yml"
 _WF = "tests/unit/test_workflows.py::"
 _REL = "tests/unit/test_release.py::"
 _IF = "        if: ${{ !cancelled() && steps.model.outcome == 'success' }}\n"
+_IF_INSTALL = "        if: ${{ !cancelled() && steps.install.outcome == 'success' }}\n"
 
 MUTANTS = [
     ("M4190", "mutant_anchors.py no longer in ci.yml: a mutant made stale by another merge seen at the next "
@@ -26,7 +27,7 @@ MUTANTS = [
      '    "pytest-xdist>=3.6",     # the suite in 4 processes in the CI (CI10b, #581: `-n 4 --dist load`)\n', ""),
     ("M4193", "Gothmog's tests no longer run alone on a pull request: its imports checked, its tests never "
               "(CI10b, L11)", COMPONENTS,
-     "      - name: gothmog — its tests pass alone (0 Azure call, 0 LLM call)\n" + _IF
+     "      - name: gothmog — its tests pass alone (0 Azure call, 0 LLM call)\n" + _IF_INSTALL
      + "        run: python scripts/component_check.py gothmog\n", ""),
     ("M4194", "Glorfindel's tests skipped when core's failed: one red hides every component after it "
               "(CI10b, L11)", COMPONENTS,
@@ -52,12 +53,34 @@ MUTANTS = [
      '    if r.get("status") != "completed" and not green:\n',
      '    if r.get("status") != "completed":\n'),
 ]
+# After the review (05/11): a component that reads no model never waits for its download (M4235); the
+# pull request's job pins its actions as the gate does (M4236); a run still going whose jobs cannot be
+# read says why, never « en cours » (M4237).
+MUTANTS += [
+    ("M4235", "core's tests wait for ChromaDB's model again: a model that fails to download skips a "
+              "component that never reads it (CI10b, review)", COMPONENTS,
+     "      - name: core — its tests pass alone (0 Azure call, 0 LLM call)\n" + _IF_INSTALL,
+     "      - name: core — its tests pass alone (0 Azure call, 0 LLM call)\n" + _IF),
+    ("M4236", "the pull request's components job takes setup-python by its tag: a tag moved runs another "
+              "commit (CI10b, review)", COMPONENTS,
+     "      # Pinned by commit, the release gate's own (no action added): the matrix above keeps its tags.\n"
+     "      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1   # v6.3.0\n",
+     "      # Pinned by commit, the release gate's own (no action added): the matrix above keeps its tags.\n"
+     "      - uses: actions/setup-python@v6\n"),
+    ("M4237", "a run still going whose jobs cannot be read said « en cours »: the error that refuses it "
+              "hidden (CI10b, review)", "scripts/release.py",
+     "        return False, said if said.startswith(UNREAD) else (",
+     "        return False, ("),
+]
 TESTS = {
+    "M4235": f"{_WF}test_ci10b_a_component_that_reads_no_model_never_waits_for_its_download",
+    "M4236": f"{_WF}test_ci10b_the_pull_request_s_components_job_pins_its_actions_as_the_gate_does",
+    "M4237": f"{_REL}test_a_run_still_going_whose_jobs_cannot_be_read_says_why",
     "M4190": f"{_WF}test_ci10b_every_mutant_is_anchored_on_each_pull_request_and_each_push",
     "M4191": f"{_WF}test_ci10b_the_suite_runs_in_four_processes_from_the_dev_lock",
     "M4192": f"{_WF}test_ci10b_the_suite_runs_in_four_processes_from_the_dev_lock",
     "M4193": f"{_WF}test_ci10b_components_run_in_one_job_on_a_pull_request_each_component_still_alone",
-    "M4194": f"{_WF}test_ci10b_components_run_in_one_job_on_a_pull_request_each_component_still_alone",
+    "M4194": f"{_WF}test_ci10b_a_component_that_reads_no_model_never_waits_for_its_download",
     "M4195": f"{_WF}test_the_gate_runs_the_whole_mutation_in_shards_control_set_included",
     "M4196": f"{_WF}test_the_gate_runs_every_test_with_2000_invariant_sequences_on_linux",
     "M4197": f"{_WF}test_the_last_job_waits_for_every_job_that_blocks_never_macos",

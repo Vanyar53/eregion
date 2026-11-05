@@ -1163,12 +1163,14 @@ def test_failures_of_reads_failures_and_errors_fastest_first(tmp_path):
     xml = tmp_path / "r.xml"
     _junit(xml, [("tests.unit.test_cd", "test_slow", 3.0, "failure"),
                  ("tests.unit.test_cd", "test_ok", 0.1, ""),
-                 ("tests.unit.test_cd", "test_setup[a b]", 0.1, "error"),          # a space: left out
+                 ("tests.unit.test_cd", "test_setup[a b]", 0.1, "error"),          # a space: its test whole
+                 ("tests.unit.test_cd", "test_setup[c d]", 0.3, "failure"),        # once, at its fastest
+                 ("tests.unit.test_cd", "test_named with space", 0.01, "failure"),  # nothing to run: out
                  ("tests.unit.test_cd.TestKind", "test_in_class", 0.5, "error"),
                  ("tests.unit.test_cd", "test_fast[x-1]", 0.2, "failure"),
                  ("tests.unit.test_other", "test_elsewhere", 0.01, "failure")])
     assert mc.failures_of(xml, "tests/unit/test_cd.py") == [
-        (0.2, "tests/unit/test_cd.py::test_fast[x-1]"), (0.5, "tests/unit/test_cd.py::TestKind::test_in_class"),
+        (0.1, "tests/unit/test_cd.py::test_setup"), (0.2, "tests/unit/test_cd.py::test_fast[x-1]"), (0.5, "tests/unit/test_cd.py::TestKind::test_in_class"),
         (3.0, "tests/unit/test_cd.py::test_slow")]
 
 

@@ -11394,9 +11394,10 @@ def total(where: Path, shards: int, control_shards: int, examples: int, rounds: 
 
 def failures_of(xml: Path, file: str) -> list[tuple[float, str]]:
     """(seconds, node) of each test of `file` that failed or erred in this junit report, the
-    fastest first. A node with a space in it is left out: a target is split on spaces."""
+    fastest first. A target is split on spaces: a parameter's id with a space in it gives its
+    test whole, every parameter of it (M1010's, a JSON document); a name with one, nothing."""
     module = file.removesuffix(".py").replace("/", ".")
-    out = []
+    out: dict[str, float] = {}
     for case in ET.parse(xml).getroot().iter("testcase"):
         cls, name = case.get("classname") or "", case.get("name") or ""
         if not name or not any(c.tag in ("failure", "error") for c in case):
@@ -11404,9 +11405,11 @@ def failures_of(xml: Path, file: str) -> list[tuple[float, str]]:
         if cls != module and not cls.startswith(module + "."):
             continue
         node = "::".join([file, *[p for p in cls[len(module):].split(".") if p], name])
+        if any(ch.isspace() for ch in node):
+            node = node.split("[", 1)[0]
         if not any(ch.isspace() for ch in node):
-            out.append((float(case.get("time") or 0), node))
-    return sorted(out)
+            out[node] = min(out.get(node, math.inf), float(case.get("time") or 0))
+    return sorted((s, node) for node, s in out.items())
 
 
 def narrow(file: str, todo: list, examples: int, rounds: int, jobs: int, path: Path | None = None,

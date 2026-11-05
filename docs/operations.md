@@ -1727,8 +1727,9 @@ Elle lance la commande telle quelle (ses arguments intacts, ni `eval` ni shell e
 commande échoue, elle attend 10 s et recommence, puis 30 s et une dernière fois : trois tentatives en
 tout. Chaque tentative est dite dans le journal, et chaque échec en avertissement du run
 (`::warning::`, visible dans son résumé) : un retry n'est jamais muet. Après le troisième échec, une
-erreur, et le code de sortie de ce dernier échec. Une commande arrêtée par SIGINT ou SIGTERM (un job
-annulé, sa borne) n'est jamais relancée. Aucune valeur d'un `${{ }}` n'entre dans une étape retentée
+erreur, et le code de sortie de ce dernier échec. Un SIGINT ou un SIGTERM (un job annulé, sa borne)
+arrête la boucle : la commande n'est jamais relancée, même si elle attrape le signal et sort avec 1
+comme pip et Terraform (la boucle le piège, et sort avec 130 ou 143). Aucune valeur d'un `${{ }}` n'entre dans une étape retentée
 (SEC4) : ce qui varie passe par `env:`.
 
 **Ce qui est retenté** : la commande de téléchargement, seule, de chaque étape réseau.
@@ -1738,7 +1739,12 @@ annulé, sa borne) n'est jamais relancée. Aucune valeur d'un `${{ }}` n'entre d
   ne télécharge rien.
 - Terraform depuis le dépôt apt de HashiCorp (`ci.yml`, la porte, le canari) : la clé (`curl`), puis
   `apt-get update` et `apt-get install`. La vérification de l'empreinte de la clé reste hors de la
-  boucle, et un échec l'arrête toujours.
+  boucle, et un échec l'arrête toujours. `apt-get update` prend `-o APT::Update::Error-Mode=any` :
+  par défaut, une erreur passagère sur un index n'est qu'un `W:` et la commande sort avec 0, le retry
+  ne jouerait pas et `apt-get install` échouerait trois fois (« version not found »). L'option est
+  celle de `apt-get update --error-on=any` (page de manuel d'apt-get, « Fail the update command if
+  any error occured, even a transient one »), lue sur apt 2.8.3 d'Ubuntu 24.04 ; sur le runner, son
+  effet sur une vraie erreur passagère reste à voir.
 - `terraform init` de chaque module, qui télécharge ses providers verrouillés, dans une étape à part
   (« Terraform init — … (the locked providers, retried) ») : le `test` et le `validate` qui suivent ne
   sont jamais retentés. Un paquet qui ne correspond pas au verrou échoue trois fois (environ 40 s de

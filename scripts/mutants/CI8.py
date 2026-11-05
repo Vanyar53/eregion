@@ -1,6 +1,8 @@
 """CI8 (#566): the CI's downloads retried, never a test — retry.sh exits with its last failure's code
 after three attempts (M4015, M4016); a mutation step retried, a provider's download left unretried,
 ChromaDB's model fetched by the tests again, each seen by tests/unit/test_workflows.py (M4017–M4019).
+After its review: a signal is a stop even when the command catches it and exits 1 (M4027, M4028);
+apt-get update fails on a transient error instead of a W: and 0 (M4029).
 """
 RETRY = "scripts/retry.sh"
 _WF = "tests/unit/test_workflows.py::"
@@ -28,7 +30,22 @@ MUTANTS = [
      "        if: matrix.component == 'glorfindel'\n"
      "        run: bash scripts/retry.sh python scripts/chroma_model.py\n", ""),
 ]
+_SIG = f"{_WF}test_ci8_a_signal_is_a_stop_even_when_the_command_catches_it_and_exits_1"
+MUTANTS += [
+    ("M4027", "SIGINT caught by pip or Terraform, exit 1: retry.sh tries a cancelled job's command again "
+              "(CI8, review)", RETRY,
+     "trap 'echo \"::error::retry.sh: stopped by SIGINT: never run again\"; exit 130' INT\n", ""),
+    ("M4028", "SIGTERM caught by the command, exit 1: retry.sh tries again past the job's bound (CI8, review)",
+     RETRY, "trap 'echo \"::error::retry.sh: stopped by SIGTERM: never run again\"; exit 143' TERM\n", ""),
+    ("M4029", "apt-get update says a transient error as a W: and exits 0: never retried, the install fails "
+              "three times (CI8, review)", ".github/workflows/ci.yml",
+     "          bash scripts/retry.sh sudo apt-get update -qq -o APT::Update::Error-Mode=any\n",
+     "          bash scripts/retry.sh sudo apt-get update -qq\n"),
+]
 TESTS = {
+    "M4027": f"{_SIG}[SIGINT-130]",
+    "M4028": f"{_SIG}[SIGTERM-143]",
+    "M4029": f"{_WF}test_ci8_every_download_is_retried",
     "M4015": f"{_WF}test_ci8_three_failures_exit_with_the_last_failures_code",
     "M4016": f"{_WF}test_ci8_a_download_that_fails_twice_passes_at_its_third_attempt "
              f"{_WF}test_ci8_three_failures_exit_with_the_last_failures_code",

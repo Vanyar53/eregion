@@ -1540,6 +1540,11 @@ team-start: team-check build-glorfindel
 	mkdir -p -m 700 "$(TEAM_DIR)/.eregion/watch-key" "$(TEAM_DIR)/.eregion/bot" "$(TEAM_DIR)/.eregion/watch-queue"
 	@if python3 -m eregion_core.runs_layout pending "$(TEAM_DIR)/runs"; then $(TEAM_COMPOSE) --profile bot stop watch war-room bot 2>/dev/null || true; fi
 	python3 -m eregion_core.runs_layout migrate "$(TEAM_DIR)/runs"
+	@# FS1b: the watch's receipts of the action queue, the one subdirectory the bot mounts — made
+	@# as the operator before compose (left to docker, root's: the watch could not write its receipts).
+	@for d in "$(TEAM_DIR)/runs/glorfindel" "$(TEAM_DIR)/runs/glorfindel/queue"; do test ! -L "$$d" \
+	  || { echo "✗ $$d est un lien : rien n'est monté (FS1b)" >&2; exit 1; }; done
+	mkdir -p "$(TEAM_DIR)/runs/glorfindel/queue"
 	$(TEAM_COMPOSE)$(if $(BOT), --profile bot) up -d watch war-room$(if $(BOT), bot)
 	@echo "  Console de $(TEAM) → http://localhost:$$(sed -n 's/^EREGION_CONSOLE_PORT=//p' "$(TEAM_DIR)/team.env" | tail -1)"
 

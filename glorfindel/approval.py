@@ -82,14 +82,23 @@ def approval_refusal(esc: dict, vm_name: str, *, dated: str | None = None,
     if age_h > max_age_h:
         return (f"Carte vieille de {age_h:.1f} h : l'état de la VM a pu changer (restore, levée). "
                 "Acquitter et laisser la détection se reproduire, ou agir depuis la CLI.")
+    from glorfindel import jobs as _jobs
     try:
-        from glorfindel import jobs as _jobs
-        rec = json.loads((_jobs._RECOVERY_DIR / f"{vm_name}.json").read_text())
-        if datetime.fromisoformat(rec["last_restore_at"]) > seen_dt:
-            return ("Un restore a eu lieu après cette carte : l'exécuter agirait sur une VM "
-                    "restaurée. Acquitter la carte.")
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
+        text = (_jobs._RECOVERY_DIR / f"{vm_name}.json").read_text()
+    except FileNotFoundError:
+        return None                     # no restore of this VM recorded
+    except OSError as exc:
+        return f"Restore illisible ({type(exc).__name__}) : agir depuis la CLI."
+    # A record there but unreadable never reads as « no restore » (FS1b review): a list, a date
+    # without its zone, a field missing — the approval is refused, as it never ran before (a 500).
+    try:
+        restored = datetime.fromisoformat(json.loads(text)["last_restore_at"])
+        after = restored > seen_dt
+    except Exception as exc:
+        return f"Restore illisible ({type(exc).__name__}) : agir depuis la CLI."
+    if after:
+        return ("Un restore a eu lieu après cette carte : l'exécuter agirait sur une VM "
+                "restaurée. Acquitter la carte.")
     return None
 
 

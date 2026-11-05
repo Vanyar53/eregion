@@ -808,6 +808,23 @@ console et le bot). Chaque point du §7 « Pour FS1b » est tenu :
   un arrêt entre la réclamation et l'exécution, les gardes rejouées, la console et le bot, les
   montages) ; mutants M3975–M4014 (`scripts/mutants/FS1b.py`).
 
+**Pour FS1c** (relecture de FS1b) :
+- **Le bot écrit encore `runs/console`** (`manual_actions.jsonl`, la CLI qu'il lance) : un bot
+  compromis peut remplacer ou noyer les demandes de la console — rien ne s'exécute, mais la carte
+  critique désigne la console à tort. Les gestes du bot dans `runs/bot/`, ou la file de la console
+  dans un répertoire que le bot ne monte pas.
+- **L'attente de `_queued` dans la console** : un sémaphore, ou un exécuteur à elle, pour qu'une
+  rafale de clics n'occupe pas tous les fils du serveur pendant 600 s.
+- **Un reçu présent mais non signé par la clé épinglée** se distingue d'« aucun reçu »
+  (`read_receipt` rend `None` dans les deux cas) : le dire, plutôt que « la watch n'a pas pris la
+  demande ».
+- **Le texte de `proposal_consumed` après un échec** : dire que l'exécution précédente a échoué et
+  qu'il faut une nouvelle détection, ou la CLI.
+- **Le `signal_id` de la carte `verification_failed` née de la file** (`approve-<carte>` aujourd'hui,
+  celui de la console) : lui donner celui de la demande.
+- **Les tests sans drapeau** des routes release, revert, unblock, promote et snapshot (celle
+  d'approbation l'a déjà).
+
 **Ce qui reste** : FS1c (la file par défaut, les routes asynchrones, les boutons selon le statut, la
 mesure au banc), FS1d (les identités lectrices), FS1e (le retrait de l'appel direct, le modèle de
 menace au « tenu », §3.3), FS1f (les écritures locales), FS1g (l'exécuteur de restore). La machine à

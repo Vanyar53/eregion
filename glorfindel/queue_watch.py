@@ -499,6 +499,17 @@ class QueueWatch:
         cutoff = at - RECEIPT_KEEP_S
         self._judged = {k: v for k, v in self._judged.items() if v > cutoff}
 
+    def one_pass(self) -> None:
+        """One pass of the thread: ``poll``, whatever it raises said — the thread never dies in
+        silence."""
+        try:
+            self.poll()
+        except Exception as exc:
+            try:
+                self.say(f"file d'actions : passage en erreur — {type(exc).__name__}: {exc}")
+            except Exception:
+                pass
+
     def start(self) -> threading.Thread:
         """The queue picked up every POLL_S, in a thread of its own — never the watch's loop."""
         self.recover()
@@ -506,7 +517,7 @@ class QueueWatch:
 
         def _loop():
             while True:
-                self.poll()
+                self.one_pass()
                 time.sleep(POLL_S)
         t = threading.Thread(target=_loop, daemon=True, name="action-queue")
         t.start()

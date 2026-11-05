@@ -138,3 +138,25 @@ TESTS = {f"M{n}": _WATCH for n in range(3975, 4015)}
 TESTS.update({"M3995": f"{_WATCH} {_QUEUE}", "M3996": _WATCH, "M4005": f"{_QUEUE} {_WATCH}",
               "M4008": _PROPOSAL, "M4009": f"{_PROPOSAL} {_QUEUE}", "M4010": _QUEUE, "M4011": f"{_PROPOSAL} {_QUEUE}",
               "M4012": _QUEUE, "M4013": _QUEUE, "M4014": _MOUNTS})
+# After the Opus 5.5 review of 0c2370b0: a restore record there but unreadable, the queue's thread
+# that never dies in silence, a team's receipts' directory. M4030–M4034.
+_AP = "glorfindel/approval.py"
+MUTANTS += [
+    ("M4030", "a restore record there but unreadable (a list, a date without its zone) read as no restore: "
+              "the approval runs on a restored VM (FS1b review)", _AP,
+     '    except Exception as exc:\n        return f"Restore illisible ({type(exc).__name__}) : agir depuis la CLI."\n'
+     "    if after:\n",
+     "    except Exception:\n        return None\n    if after:\n"),
+    ("M4031", "a restore record that cannot be read read as no restore (FS1b review)", _AP,
+     '    except OSError as exc:\n        return f"Restore illisible',
+     '    except OSError as exc:\n        return None or f"Restore illisible'),
+    ("M4032", "a pass of the queue's thread that raises goes unsaid (FS1b review)", QW,
+     "                self.say(f\"file d'actions : passage en erreur — {type(exc).__name__}: {exc}\")\n",
+     "                pass\n"),
+    ("M4033", "a team's runs/glorfindel/queue left to docker, made as root: no receipt written (FS1b review)",
+     "Makefile", '\tmkdir -p "$(TEAM_DIR)/runs/glorfindel/queue"\n', ""),
+    ("M4034", "a team's runs/glorfindel/queue that is a link mounted (FS1b review)", "Makefile",
+     '"$(TEAM_DIR)/runs/glorfindel/queue"; do test ! -L "$$d" \\\n',
+     '"$(TEAM_DIR)/runs/glorfindel/queue"; do true \\\n'),
+]
+TESTS.update({f"M{n}": _WATCH for n in range(4030, 4035)})

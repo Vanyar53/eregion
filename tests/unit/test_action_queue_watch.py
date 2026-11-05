@@ -380,6 +380,34 @@ def test_a_restore_after_the_card_refuses_its_approval(world):
     assert "restore" in _receipt(world, doc)["reason"]
 
 
+@pytest.mark.parametrize("record", ['["a list"]', '{"last_restore_at": "2026-11-05T09:00:00"}', "{not json",
+                                    '{"other": 1}', '{"last_restore_at": 3}'])
+def test_a_restore_record_there_but_unreadable_refuses_the_approval(world, record):
+    """FS1b review: a restore record present but unreadable never reads as « no restore » — the
+    approval is refused, for the console's direct click as for the watch's queue."""
+    from eregion_console import api
+    from glorfindel import jobs
+    card = _card()
+    jobs._RECOVERY_DIR.mkdir(parents=True, exist_ok=True)
+    (jobs._RECOVERY_DIR / "web.json").write_text(record)
+    assert "Restore illisible" in (api._approval_refusal(card, "web") or "")
+    doc = _ask(world, "isolate_vm", card=card)
+    _untouched(world, doc, "guard")
+    assert "Restore illisible" in _receipt(world, doc)["reason"]
+
+
+def test_a_restore_record_that_cannot_be_read_refuses_the_approval(world):
+    from glorfindel import jobs
+    (jobs._RECOVERY_DIR / "web.json").mkdir(parents=True)          # read_text: IsADirectoryError
+    assert "Restore illisible" in (approval.approval_refusal(_card(), "web") or "")
+
+
+def test_no_restore_record_is_no_restore(world):
+    from glorfindel import jobs
+    assert not (jobs._RECOVERY_DIR / "web.json").exists()
+    assert approval.approval_refusal(_card(), "web") is None
+
+
 @pytest.mark.parametrize("ip, scope", [("10.0.0.9", "vm"), ("168.63.129.16", "vm"), ("203.0.113.0/24", "vm"),
                                        ("*", "vm"), (ATTACKER, "everything"), (ATTACKER, "")])
 def test_an_address_and_a_reach_are_judged_before_any_call(world, ip, scope):
@@ -574,6 +602,13 @@ def test_the_bot_asks_through_its_card_only(world):
     _untouched(world, _ask(world, "reset", service="bot"), "proposal_missing")
 
 
+def test_the_queues_thread_never_dies_in_silence(world, monkeypatch):
+    """A pass that raises is said, and the thread goes on to the next."""
+    monkeypatch.setattr(world["q"], "poll", lambda now=None: (_ for _ in ()).throw(RuntimeError("disk gone")))
+    world["q"].one_pass()
+    assert any("passage en erreur" in s and "disk gone" in s for s in world["said"])
+
+
 def test_a_crash_in_the_execution_says_failed_and_never_raises(world, monkeypatch):
     monkeypatch.setattr(world["conn"], "isolate_vm", lambda rid: (_ for _ in ()).throw(RuntimeError("boom")))
     doc = _ask(world, "isolate_vm", card=_card())
@@ -759,3 +794,7 @@ def test_the_bots_and_the_registers_directories_are_made_before_compose_mounts_t
     start = deploy.split("\nstart() {", 1)[1].split("\n}", 1)[0]
     assert start.index("mkdir -p runs/glorfindel/queue") < start.index("docker compose --profile bot up")
     assert "mkdir -p runs/glorfindel/queue" in make.split("RUNS_DIRS =", 1)[1].split("\n#", 1)[0]
+    team = make.split("\nteam-start:", 1)[1].split("\n\n", 1)[0]
+    made = team.index('mkdir -p "$(TEAM_DIR)/runs/glorfindel/queue"')
+    assert team.index('test ! -L "$$d"') < made < team.index("up -d watch war-room")
+    assert '"$(TEAM_DIR)/.eregion/bot" "$(TEAM_DIR)/.eregion/watch-queue"' in team

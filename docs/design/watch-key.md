@@ -1,4 +1,4 @@
-# La clé de la watch (SEC19, N-03 ; SEC21, SEC21b) — et ce que FS1 en reprendra
+# La clé de la watch (SEC19, N-03 ; SEC21, SEC21b) — et ce que FS1 en reprend
 
 La garde « jamais sans Glorfindel » (V1) lit un battement. Avant SEC19, ce battement était
 **lié** (SEC5 : le condensé de l'abonnement que la watch lit) mais pas **authentifié** : qui
@@ -273,3 +273,22 @@ FS1 ajoute son domaine à `watch_key.py`, signe par `Signer.sign(domain, body)` 
 clé épinglée ; il ne tire pas de seconde clé. Changer de clé (une clé lisible par d'autres, une VM
 reconstruite) se fait une fois pour les deux usages : la retirer, laisser la watch en tirer une
 autre, épingler la nouvelle chez les injecteurs.
+
+**Fait dans FS1a (#551, 05/11).**
+- **Le domaine** : `watch_key.DOMAIN_QUEUE = "eregion.action-queue/1"`. La watch y signe la
+  proposition qu'elle joint à chaque carte retenant une action qu'un humain peut lancer
+  (`eregion_core/action_queue.py`, `sign_proposal` : sa clé, son compteur `next_seq`, `kind`
+  signé). Une proposition ne se lit jamais comme un battement, une détection, une demande ou un
+  reçu (`tests/unit/test_action_queue.py`, `tests/unit/test_action_proposal.py`).
+- **Un seul code de tirage, deux usages.** `load_or_create(directory, name=…)` tire et charge aussi
+  la clé de chaque service de la file (la console, le bot : `action_queue.load_service_key`, le
+  fichier `queue_ed25519` dans `~/.eregion/console/` et `~/.eregion/bot/`), avec les mêmes règles :
+  32 octets, 0600, tirée à part puis publiée par un lien, jamais lue à travers un lien, ni d'un
+  autre propriétaire, ni lisible par d'autres, jamais sous `~/.glorfindel` ni `runs/`. Les messages
+  sont ceux du détenteur (`_HOLDERS`) : ceux de la watch n'ont pas changé, ceux d'un service
+  donnent son geste (`EREGION_QUEUE_KEYS`). Le balayage des copies qu'un crash a laissées couvre les
+  deux noms. Ces clés sont d'autres signataires : la watch ne tire toujours qu'une clé, la sienne.
+- **Rien d'autre ne change pour la watch** : sa clé, sa place, ce qu'elle signe et ce que vérifient
+  les injecteurs. Une signature connue, calculée avec le code d'avant FS1a, le prouve octet pour
+  octet (`test_the_watch_signs_its_heartbeat_as_before_the_draw_was_shared`), avec les tests et les
+  mutants de SEC19 et de SEC21, inchangés.

@@ -1,9 +1,9 @@
 # La file d'actions signée (FS1, #413) — conception
 
-> **Statut : conception, 04/11, sans code.** Ce document prépare FS1, le dernier prérequis de
-> sûreté avant toute VM hors du banc (ROADMAP, « Critères de la 1.0 »). Cinq décisions restent à
-> Jonathan (§6). Tant qu'elles ne sont pas prises, chaque option recommandée est écrite comme une
-> proposition.
+> **Statut : conception, 04/11 ; décisions de Jonathan le 04/11 (fin du document). FS1a fait le
+> 05/11 (#551, §7) : le format et sa vérification, sans changement de comportement.** Ce document
+> prépare FS1, le dernier prérequis de sûreté avant toute VM hors du banc (ROADMAP, « Critères de
+> la 1.0 »).
 >
 > **Règle de lecture.** Ce qui est lu dans le code est une affirmation, avec son fichier et sa
 > ligne (au commit `8710dba7`). Ce qui est dit d'Azure vient de la documentation : c'est une
@@ -546,7 +546,7 @@ En jours de travail effectif, à ±50 %, comme la ROADMAP.
 
 | Lot | Contenu | Sessions | Estimation |
 |---|---|---|---|
-| **FS1a** | Le format et sa vérification : `eregion_core/action_queue.py` (forme, domaines, signature, fraîcheur, nonce, les refus), la clé de service tirée (factorisée avec `watch_key`), la proposition signée sur les cartes par la watch. Tests et mutants. Aucun changement de comportement. | Glorfindel | 2–3 j |
+| **FS1a** ✅ 05/11 | Le format et sa vérification : `eregion_core/action_queue.py` (forme, domaines, signature, fraîcheur, nonce, les refus), la clé de service tirée (factorisée avec `watch_key`), la proposition signée sur les cartes par la watch. Tests et mutants. Aucun changement de comportement. | Glorfindel | 2–3 j |
 | **FS1b** | La watch relève la file : le fil, le registre, le rattachement, les gardes rejouées (sorties de la console en code partagé), l'exécution sous `_vm_lock`, les reçus et le statut signés, les cartes critiques. La console et le bot déposent, derrière `EREGION_ACTION_QUEUE=1`. Le nouvel écrivain `runs/bot/`, les montages. | Glorfindel, Console, bot | 4–5 j |
 | **FS1c** | La file par défaut. Les routes d'approbation deviennent asynchrones (`GET /api/queue/<id>`, la page suit le reçu), le bot dit le reçu, les boutons grisés selon le statut de la watch. La mesure au banc avec Jonathan. | Console, bot, Tests | 2–3 j |
 | **FS1d** | Les identités lectrices : le compose, `docs/operations.md` « Identités Azure », le Terraform de H0 selon le Q3, les rôles de la console et du bot, `GLORFINDEL_OWN_CALLERS`, la préparation (`check_permissions`) qui dit une console qui écrit encore. Les gestes de Jonathan. | H0 (Infra), Glorfindel | 2–3 j + gestes |
@@ -661,3 +661,53 @@ acquittements), et l'état que la console écrit encore ?**
 
 Les lots, dans l'ordre : FS1a, FS1b, FS1c, FS1d, FS1e, FS1f, FS1g (17 à 24 jours estimés).
 
+## 7. FS1a, fait (05/11, #551)
+
+Le format et sa vérification sont dans le code. **Personne ne lit encore la file pour agir** : la
+console et le bot gardent l'appel direct, aucune file n'est relevée, aucune demande n'est déposée.
+
+- **`eregion_core/action_queue.py`** : la demande (§2.3, `REQUEST_FIELDS`, 4 Ko au plus,
+  `new_request`), la proposition (§2.4, `PROPOSAL_FIELDS`, `sign_proposal`, `digest`), les deux
+  domaines (`eregion.action-request/1` pour ce que signe un service, `eregion.action-queue/1` pour
+  ce que signe la watch : proposition, puis reçu et statut, séparés par `kind`, signé), la liste
+  fermée des verbes (`VERBS`, `SERVICE_VERBS` : la console tous, le bot `reset` seul ; ouverte à
+  l'extension par ces seules constantes) et celle des refus (`REFUSALS`, chacun avec sa raison ;
+  `CRITICAL`, les refus qui feront une carte critique).
+- **La vérification** (§2.8, étapes 1 à 9), `verify_request`, sans réseau ni appel au cloud :
+  lire borné (`read_request`, le lecteur commun : jamais un lien, jamais bloquant), la forme exacte
+  (un champ en double refusé aussi), la signature, la clé épinglée pour ce répertoire, la signature
+  qui tient, le service, le temps (`not_yet_valid` au-delà de 30 s d'avance, `too_long` au-delà de
+  120 s de vie, `expired` à partir de `expires_at`), le nonce (le registre écrit avant toute
+  exécution ; illisible ou qu'on ne peut écrire, il refuse : `SeenFile`, sous
+  `~/.eregion/watch-queue/seen.json`), le verbe et le débit (`Rate`, 30 par minute et par service).
+  Une demande signée par la clé épinglée d'un autre service est `wrong_service`, pas
+  `unknown_key`. Le rattachement à la carte (étape 10) : `proposal_refusal`.
+- **Les clés des services** : `load_service_key` tire et charge la clé de la console
+  (`~/.eregion/console/queue_ed25519`) et celle du bot (`~/.eregion/bot/queue_ed25519`) par le code
+  même de la watch (`watch_key.load_or_create`, sous un autre nom de fichier) : un seul code de
+  tirage, deux usages. La clé de la watch, sa place, ses messages et ce qu'elle signe ne changent
+  pas (`tests/unit/test_action_queue.py`, une signature connue calculée avant FS1a). Personne ne
+  tire encore une clé de service : FS1b, au premier dépôt. L'épinglage : `EREGION_QUEUE_KEYS`
+  (`pinned_keys`), lu dans l'environnement de la watch seulement.
+- **La proposition sur les cartes** : la watch (`glorfindel watch`, sa clé de SEC19) joint sa
+  proposition signée à chaque carte qu'elle écrit et qui retient une action qu'un humain peut lancer
+  (`proposable` : un type approuvable en un clic avec son action, ou `verification_failed` pour son
+  reset), et la signe de nouveau quand la carte se rafraîchit. Une carte écrite par la console, le
+  bot ou la CLI n'en porte pas. Une clé indisponible ou une signature qui échoue n'empêche jamais
+  la carte d'être écrite.
+- **Tests** : `tests/unit/test_action_queue.py` (un test par refus, un par domaine, la fraîcheur
+  aux bornes, le rejeu, le registre, la clé factorisée), `tests/unit/test_action_proposal.py` (la
+  proposition sur les cartes, son contrôle). Mutants M3865–M3879 (`scripts/mutants/FS1a.py`).
+
+**Ce que FS1b doit savoir.**
+- **La proposition re-signée à chaque rafraîchissement** change de condensé : une demande déposée
+  juste avant qu'une détection qui dure ne rafraîchisse sa carte nommera l'ancienne et sera refusée
+  (`proposal_mismatch`). La re-signature date la carte de façon que la console ne peut pas forger
+  (l'âge de l'approbation se lira dans `issued_at`, signé, plutôt que dans `last_seen`). Le choix
+  reste à FS1b : accepter la proposition précédente d'une même carte, ou ne re-signer qu'au-delà
+  d'un âge.
+- **Les verbes sans carte** (`snapshot` d'une VM du périmètre, `release_isolation`, `reset`,
+  `unblock_ip`, `promote_block` sur ce que la watch tient) se rattachent à l'état de la watch :
+  `nothing_to_undo`, `guard` et `read_only` ont leur code ici, leur contrôle sera dans FS1b.
+- **Les propositions consommées** : `proposal_refusal` prend leur ensemble (`consumed`) ; leur
+  registre est à FS1b, à côté de `seen.json`.

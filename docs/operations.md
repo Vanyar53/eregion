@@ -58,7 +58,7 @@ make glorfindel-host-tunnel                  # tunnel + « Console → http://lo
                                              # EREGION_CONSOLE_TOKEN s'il n'est pas vide, sinon GLORFINDEL_WARROOM_TOKEN
                                              # (l'ancien nom reste valide, rien à renommer) ; -url : l'URL seule
 make glorfindel-host-status                  # tout tourne ? lit le jeton sur la VM sous l'un ou l'autre nom, sans l'afficher
-make glorfindel-host-push                    # host_env.py --check d'abord : refuse un host.env sans jeton de la console
+make glorfindel-host-push                    # host_env.py --check d'abord : refuse un host.env sans jeton de la console (et dit, sans refuser, une variable de never_target vide, NT1)
 make glorfindel-host-cd-install              # le CD de H0 (H1) : agent dans ~/.eregion-cd/, timer désactivé ; README, « Le CD de H0 »
 make glorfindel-host-cd-check                # à blanc : vérifie, construit à côté, préflight (config sous A3), sans basculer
 make glorfindel-host-cd-enable               # puis : toute release publiée se déploie (5 min), retour arrière si malade
@@ -403,6 +403,9 @@ DISCORD_CHANNEL_ID=...              # ID du channel (clic droit → Copy Channel
 DISCORD_PING_ROLE=...               # ID du rôle à pinger à l'ouverture d'un fil (optionnel)
 DISCORD_ALLOWED_USERS=111,222       # M-3 : ids des utilisateurs qui peuvent cliquer les boutons des cartes
 DISCORD_ALLOWED_ROLES=333           # M-3 : ids des rôles autorisés ; les deux vides → tous les boutons refusent (fermé par défaut), refus journalisé
+EREGION_OPERATOR_OBJECT_ID=...      # NT1 : never_target (eregion_core/never_target.py), à la watch seule (plan d'identité, IR1a) ; recopiée dans host.env ; source : terraform -chdir=infra/orodruin output -raw operator_object_id ; vide → liste illisible, tout verbe une étape de l'humain
+EREGION_PROTECTED_IDENTITIES=...    # NT1 : idem ; source : output protected_identities d'Orodruin, plus identity_executor_object_id de H0 (« L'exécuteur d'identité », geste 6)
+EREGION_IDENTITY_EXECUTOR_CLIENT_ID=...  # NT1 : idem ; source : terraform -chdir=infra/glorfindel-host output -raw identity_executor_client_id (vide : exécuteur non activé)
 # L'atelier dans Discord (N1, docs/atelier-discord.md) — à part de la défense : jamais sur H0, host_env.py ne les recopie pas
 EREGION_DISCORD_WEBHOOK_CI=...              # webhook de #ci (secret GitHub : notify.yml)
 EREGION_DISCORD_WEBHOOK_AGENTS=...          # webhook de #agents (poste de l'opérateur : hooks d'elrond)
@@ -945,9 +948,24 @@ Attribute Assignment Reader le rendent passif. Et `EREGION_OPERATOR_OBJECT_ID`, 
    (`identity_executor_object_id`) ajouté à `EREGION_PROTECTED_IDENTITIES`, pas seulement le client
    id : `never_target` compare l'un et l'autre. Puis transmettre l'object id à IDI1b (ses rôles
    bornés, `entra_identity_executor_object_id` de Celebrimbor) et à IDI1 (la propriété des
-   applications inscrites). **Limite** : le compose ne passe pas encore à la watch les variables de
-   `never_target` (ni celle-ci, ni `EREGION_OPERATOR_OBJECT_ID`) ; sans elles, sa liste est illisible
-   et tout verbe de son plan devient une étape de l'humain — fermé, mais à brancher (IR1c).
+   applications inscrites). **Côté watch** (NT1, #583) : le compose passe à la watch, et à elle
+   seule, les trois variables de `never_target` — `EREGION_OPERATOR_OBJECT_ID`,
+   `EREGION_PROTECTED_IDENTITIES`, `EREGION_IDENTITY_EXECUTOR_CLIENT_ID` ; ni la console ni le bot ne
+   lisent la liste. `host_env.py` les recopie de ton environnement dans `host.env`, comme le reste :
+   pose-les d'abord dans ton `.envrc`, depuis leurs sorties Terraform —
+
+   | Variable | Sa source |
+   |---|---|
+   | `EREGION_OPERATOR_OBJECT_ID` | `terraform -chdir=infra/orodruin output -raw operator_object_id` |
+   | `EREGION_PROTECTED_IDENTITIES` | `terraform -chdir=infra/orodruin output -raw protected_identities`, plus `terraform -chdir=infra/glorfindel-host output -raw identity_executor_object_id`, séparés par des virgules |
+   | `EREGION_IDENTITY_EXECUTOR_CLIENT_ID` | `terraform -chdir=infra/glorfindel-host output -raw identity_executor_client_id` (vide tant que l'exécuteur n'est pas activé) |
+
+   — ou, sur un `host.env` déjà écrit, ajoute les trois lignes à la main (son jeton ne change pas).
+   L'écriture de `host.env` et `host_env.py --check` (lancé par `make glorfindel-host-push`) disent
+   une variable vide, ou une entrée qui n'est pas un object id, avec sa source, jamais sa valeur ;
+   **ils ne refusent jamais** : sans la liste, ou mal écrite, elle est illisible et tout verbe d'un
+   plan devient une étape de l'humain — fermé, pas une panne. Puis `make glorfindel-host-push` et le
+   redémarrage de la watch.
 7. **Le certificat** (avec IR1c, qui monte le conteneur) : la clé tirée sur H0, dans un répertoire
    que seul l'exécuteur monte ; sa partie publique (PEM, `BEGIN CERTIFICATE`, jamais une clé : le
    plan la refuse) dans `identity_executor_certificate`, puis les gestes 3 et 4 (une création de

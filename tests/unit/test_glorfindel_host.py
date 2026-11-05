@@ -385,6 +385,7 @@ def test_a_local_model_without_the_analysis_key_is_said_not_refused(tmp_path, mo
     monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub")
     monkeypatch.setenv("GLORFINDEL_LLM_MODEL", "ollama/llama3.1")
     monkeypatch.setenv(_BASE, "http://ollama:11434")
+    _never_target_env(monkeypatch)                     # NT1: the list given, nothing else said
     host_env.main(str(tmp_path / "a.env"))
     err = capsys.readouterr().err
     assert "ANTHROPIC_API_KEY" in err and "rapports de campagne" in err
@@ -559,6 +560,141 @@ def test_the_generated_host_env_reaches_each_container_with_only_its_secrets():
     assert _interpolate(_compose_env()["watch"]["GLORFINDEL_DISCORD_BOT"], dotenv) == ""
 
 
+# ── NT1 (#583) : la liste never_target, à la watch seule ─────────────────────────────────────
+# The oracle is written here, never read from host_env.py nor docker-compose.yml: the three
+# variables of eregion_core/never_target.py that H0 lacked (IR1b), and each one's Terraform output.
+OPERATOR_OID = "00000000-0000-0000-0000-0000000000a1"
+ORODRUIN_OID, H0_OID = "00000000-0000-0000-0000-0000000000b1", "00000000-0000-0000-0000-0000000000b2"
+EXECUTOR_OID, EXECUTOR_APP = "00000000-0000-0000-0000-0000000000c1", "00000000-0000-0000-0000-0000000000c2"
+STRANGER = "00000000-0000-0000-0000-0000000000d1"
+NEVER_TARGET_ENV = {
+    "EREGION_OPERATOR_OBJECT_ID": OPERATOR_OID,
+    "EREGION_PROTECTED_IDENTITIES": f"{ORODRUIN_OID},{H0_OID},{EXECUTOR_OID}",
+    "EREGION_IDENTITY_EXECUTOR_CLIENT_ID": EXECUTOR_APP,
+}
+NEVER_TARGET_SOURCES = {
+    "EREGION_OPERATOR_OBJECT_ID": "terraform -chdir=infra/orodruin output -raw operator_object_id",
+    "EREGION_PROTECTED_IDENTITIES": "terraform -chdir=infra/orodruin output -raw protected_identities",
+    "EREGION_IDENTITY_EXECUTOR_CLIENT_ID":
+        "terraform -chdir=infra/glorfindel-host output -raw identity_executor_client_id",
+}
+
+
+def _never_target_env(monkeypatch):
+    for k, v in NEVER_TARGET_ENV.items():
+        monkeypatch.setenv(k, v)
+
+
+def test_the_never_target_list_reaches_the_watch_alone():
+    """M4200–M4203: the watch receives each variable of the list, filled from its own name — and
+    no other service: neither the console nor the bot reads it, and the injectors have theirs on
+    Orodruin (orodruin.env)."""
+    env = _compose_env()
+    for name in NEVER_TARGET_ENV:
+        assert {s for s, e in env.items() if name in e} == {"watch"}, name
+        assert env["watch"][name] == f"${{{name}:-}}", name
+
+
+def test_host_env_carries_the_never_target_list_readable_to_the_watch():
+    """M4204, M4202: from the operator's environment to host.env, then to the watch as compose
+    renders it — the list is readable there (an operator named, no typo) and covers each id it was
+    given, the executor's application and principal both; a stranger stays a possible target. No
+    other container receives one of the ids."""
+    from eregion_core.never_target import NeverTarget
+
+    operator = {"AZURE_SUBSCRIPTION_ID": "sub", "ANTHROPIC_API_KEY": "fake-key", **NEVER_TARGET_ENV}
+    dotenv = host_env.host_env(operator)
+    assert {k: dotenv[k] for k in NEVER_TARGET_ENV} == NEVER_TARGET_ENV
+    rendered = {s: {k: _interpolate(v, dotenv) for k, v in e.items()} for s, e in _compose_env().items()}
+    never = NeverTarget.from_env(rendered["watch"])
+    assert never.refusal() == ""
+    assert all(never.covers(oid) for oid in (OPERATOR_OID, ORODRUIN_OID, H0_OID, EXECUTOR_OID, EXECUTOR_APP))
+    assert not never.covers(STRANGER)
+    for service in ("war-room", "bot", "annatar", "gothmog"):
+        values = " ".join(rendered[service].values())
+        assert not [oid for oid in (OPERATOR_OID, H0_OID, EXECUTOR_APP) if oid in values], service
+
+
+def test_host_env_says_a_missing_never_target_variable_and_still_writes(tmp_path, monkeypatch, capsys):
+    """M4206: written without the list, host.env is written all the same — each variable said
+    with its Terraform output; with it, nothing is said."""
+    for k in list(host_env.COPIED):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    assert host_env.main(str(tmp_path / "a.env")) == 0
+    err = capsys.readouterr().err
+    for name, source in NEVER_TARGET_SOURCES.items():
+        assert f"{name} vide" in err and source in err, name
+    assert "étape de l'humain" in err
+    _never_target_env(monkeypatch)
+    assert host_env.main(str(tmp_path / "b.env")) == 0
+    assert capsys.readouterr().err == ""
+    written = host_env.read_env(tmp_path / "b.env")
+    assert {k: written[k] for k in NEVER_TARGET_ENV} == NEVER_TARGET_ENV
+
+
+@pytest.mark.parametrize("lines, said", [
+    # None of them: each one said, with its source — the push goes on.
+    ("", set(NEVER_TARGET_ENV)),
+    ("".join(f"{k}={v}\n" for k, v in NEVER_TARGET_ENV.items()), set()),
+    # Quoted, as compose removes the quotes: read as the watch receives them.
+    ("".join(f'{k}="{v}"\n' for k, v in NEVER_TARGET_ENV.items()), set()),
+    # The executor not enabled: its client id empty, said alone.
+    (f"EREGION_OPERATOR_OBJECT_ID={OPERATOR_OID}\nEREGION_PROTECTED_IDENTITIES={H0_OID}\n"
+     "EREGION_IDENTITY_EXECUTOR_CLIENT_ID=\n", {"EREGION_IDENTITY_EXECUTOR_CLIENT_ID"}),
+    # A value that is only a comment, which compose keeps as « # … »: no id, said empty.
+    (f"EREGION_OPERATOR_OBJECT_ID=   # à remplir\nEREGION_PROTECTED_IDENTITIES={H0_OID}\n"
+     f"EREGION_IDENTITY_EXECUTOR_CLIENT_ID={EXECUTOR_APP}\n", {"EREGION_OPERATOR_OBJECT_ID"}),
+], ids=["none", "all", "quoted", "no-executor", "a-comment"])
+def test_check_says_a_missing_never_target_variable_without_refusing(tmp_path, capsys, lines, said):
+    """M4205, M4206, M4209: `--check` (make glorfindel-host-push) says each variable of the list
+    the watch would receive empty, with its Terraform output — and never refuses: an unreadable
+    list leaves every verb a human's step, closed, not a breakdown."""
+    path = tmp_path / "host.env"
+    path.write_text("EREGION_CONSOLE_TOKEN=fake-token\nANTHROPIC_API_KEY=fake-key\n" + lines, encoding="utf-8")
+    assert host_env.check(str(path)) == 0
+    err = capsys.readouterr().err
+    assert {name for name in NEVER_TARGET_ENV if f"{name} vide" in err} == said
+    assert err.count("⚠") == len(said)                     # nothing else said: no typo seen
+    for name in said:
+        assert NEVER_TARGET_SOURCES[name] in err, name
+    assert "fake-" not in err
+
+
+def test_check_says_an_entry_that_is_no_object_id_never_its_value(tmp_path, capsys):
+    """M4207, M4208: a typo in the list — read strictly by the watch, it refuses every identity —
+    is said as such, the variable named, never the value (a secret pasted in the wrong line)."""
+    path = tmp_path / "host.env"
+    path.write_text("EREGION_CONSOLE_TOKEN=fake-token\nANTHROPIC_API_KEY=fake-key\n"
+                    f"EREGION_OPERATOR_OBJECT_ID={OPERATOR_OID}\n"
+                    f"EREGION_PROTECTED_IDENTITIES={H0_OID},fake-pasted-secret\n"
+                    f"EREGION_IDENTITY_EXECUTOR_CLIENT_ID={EXECUTOR_APP}\n", encoding="utf-8")
+    assert host_env.check(str(path)) == 0
+    err = capsys.readouterr().err
+    assert "EREGION_PROTECTED_IDENTITIES porte 1 entrée(s) qui ne sont pas des object ids" in err
+    assert "illisible" in err and NEVER_TARGET_SOURCES["EREGION_PROTECTED_IDENTITIES"] in err
+    assert "fake-" not in err and H0_OID not in err
+    assert "EREGION_OPERATOR_OBJECT_ID" not in err and "EREGION_IDENTITY_EXECUTOR_CLIENT_ID" not in err
+
+
+def test_the_example_names_each_never_target_variable_and_its_source():
+    """host.env.example carries the three, empty, each one's Terraform output written above it."""
+    lines = (HOST / "host.env.example").read_text(encoding="utf-8").splitlines()
+    values = host_env.read_env(HOST / "host.env.example")
+    for name, source in NEVER_TARGET_SOURCES.items():
+        assert values.get(name) == "", name
+        at = lines.index(f"{name}=")
+        above = []                                   # the comment lines just above it
+        while at > 0 and lines[at - 1].startswith("#"):
+            at -= 1
+            above.insert(0, lines[at].lstrip("# "))
+        comment = " ".join(above)
+        assert source.rsplit(" ", 1)[1] in comment, name           # its Terraform output, named
+        if name == "EREGION_PROTECTED_IDENTITIES":
+            assert "identity_executor_object_id" in comment         # the executor's principal too
+
+
 @pytest.mark.parametrize("dotenv", [
     {"GLORFINDEL_WARROOM_TOKEN": "fake-h0-token"},                 # H0's host.env, before UI-1c
     {"EREGION_CONSOLE_TOKEN": "fake-h0-token"},                    # a new host's
@@ -583,6 +719,7 @@ def test_host_env_warns_when_nobody_may_press_the_buttons(tmp_path, monkeypatch,
     monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "bot")
+    _never_target_env(monkeypatch)                     # NT1: the list given, nothing else said
     host_env.main(str(tmp_path / "a.env"))
     assert "fermé par défaut" in capsys.readouterr().err
     monkeypatch.setenv("DISCORD_ALLOWED_USERS", "111")

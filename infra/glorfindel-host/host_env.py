@@ -32,6 +32,13 @@ provider's. `--check` (and `make glorfindel-host-model`, before it writes anythi
 host.env to the same rule, its model's variables read as the watch receives them. The analysis
 model (EREGION_ANALYSIS_MODEL) writes the campaign reports, never a decision: its missing key,
 or a local analysis model (it does not read GLORFINDEL_LLM_BASE_URL), is said, not refused.
+
+The never_target list (NT1, #583; eregion_core/never_target.py), which the watch reads to write
+an identity card's plan (IR1a): ids, no secret, copied from the operator's environment like the
+rest — each one's source a Terraform output, named in NEVER_TARGET, never read here. One empty,
+or an entry that is no object id, is said, by the writing and by `--check`, never refused: an
+unreadable list refuses every identity — each verb of a plan a human's step, closed, not a
+breakdown. What is said names the variable and its source, never a value.
 """
 from __future__ import annotations
 
@@ -46,12 +53,32 @@ from eregion_core.models import (  # noqa: E402
     BASE_URL, DEFAULT_ANALYSIS_MODEL, LOCAL_PROVIDERS, PROVIDER_ENV, UnknownProvider, missing_env,
     model_provider,
 )
+from eregion_core.never_target import ids  # noqa: E402
 
 # OL1: every provider's variables — docker-compose.yml (x-models) passes them all to the watch.
 # host.env carries only those of the configured models' providers (carried_keys), never another
 # provider's key: an operator's .envrc may hold several.
 MODEL_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "MISTRAL_API_KEY", "AZURE_API_KEY",
               "AZURE_API_BASE", "AZURE_API_VERSION")
+# NT1 (#583): the never_target list, to the watch alone (docker-compose.yml) — each variable, its
+# source (a Terraform output, read by the operator into .envrc), and what its absence leaves.
+_ORODRUIN_OUT = "terraform -chdir=infra/orodruin output -raw"
+_HOST_OUT = "terraform -chdir=infra/glorfindel-host output -raw"
+NEVER_TARGET = {
+    "EREGION_OPERATOR_OBJECT_ID": (
+        f"{_ORODRUIN_OUT} operator_object_id",
+        "la liste never_target de la watch est illisible : chaque verbe d'un plan d'identité (IR1a) "
+        "devient une étape de l'humain — fermé, pas une panne"),
+    "EREGION_PROTECTED_IDENTITIES": (
+        f"{_ORODRUIN_OUT} protected_identities, et l'object id de l'exécuteur ({_HOST_OUT} "
+        "identity_executor_object_id), séparés par des virgules",
+        "Orodruin et les watches ne sont pas dans la liste never_target de la watch : un plan "
+        "d'identité pourrait les viser"),
+    "EREGION_IDENTITY_EXECUTOR_CLIENT_ID": (
+        f"{_HOST_OUT} identity_executor_client_id",
+        "l'exécuteur d'identité n'est pas dans la liste never_target de la watch (vide tant qu'il "
+        "n'est pas activé, identity_executor_enabled : rien à faire alors)"),
+}
 COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID",
           "GLORFINDEL_LLM_MODEL", "GLORFINDEL_LLM_BASE_URL", *MODEL_KEYS,
           "GLORFINDEL_WEBHOOK_URL", "GLORFINDEL_BACKUP_VAULT",
@@ -60,7 +87,9 @@ COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID",
           "EREGION_EXERCISE_CHANNEL", "EREGION_WATCH_CHANNEL",
           # IA1: the analysis AI's model, never Glorfindel's — the hosted watch writes the
           # campaign reports with it (analysis/hosted_report.py).
-          "EREGION_ANALYSIS_MODEL")
+          "EREGION_ANALYSIS_MODEL",
+          # NT1: who is never a target, read by the watch (eregion_core/never_target.py).
+          *NEVER_TARGET)
 # The model's key is required by its provider (model_missing), never here.
 REQUIRED = ("AZURE_SUBSCRIPTION_ID",)
 MODEL = "GLORFINDEL_LLM_MODEL"
@@ -108,6 +137,23 @@ def analysis_warning(environ: dict) -> str:
     return (f"⚠ l'IA d'analyse ({ANALYSIS}, vide : {DEFAULT_ANALYSIS_MODEL}) lit "
             f"{', '.join(lacking)}, vide : les rapports de campagne échoueront. Pose la clé, ou "
             f"un autre modèle dans {ANALYSIS}.")
+
+
+def never_target_warnings(environ: dict) -> list[str]:
+    """What the watch's never_target list lacks, said — one line a variable, its source named,
+    never its value: an empty one, or one with an entry that is no object id (read strictly, as
+    eregion_core/never_target.py reads it: the whole list then refuses every identity). Never a
+    refusal: the absence leaves every verb of a plan a human's step, closed."""
+    said = []
+    for name, (source, left) in NEVER_TARGET.items():
+        got, bad = ids(environ.get(name, ""))
+        if bad:
+            said.append(f"⚠ {name} porte {len(bad)} entrée(s) qui ne sont pas des object ids : la liste "
+                        "never_target de la watch est illisible, chaque verbe d'un plan d'identité "
+                        f"devient une étape de l'humain. Sa source : {source}.")
+        elif not got:
+            said.append(f"⚠ {name} vide : {left}. Sa source : {source}.")
+    return said
 
 
 def carried_keys(environ: dict) -> set[str]:
@@ -189,6 +235,9 @@ def check(dst: str) -> int:
     if lacking:
         raise SystemExit(f"{dst}: {', '.join(lacking)} empty — the model's provider, {provider} "
                          f"({MODEL}), needs it: pushed, the watch could not decide.")
+    # NT1: the never_target list, as the watch receives it — said, never refused.
+    for warning in never_target_warnings({k: model_value(env.get(k, "")) for k in NEVER_TARGET}):
+        print(f"{dst}: {warning}", file=sys.stderr)
     if name == LEGACY_TOKEN:
         print(f"{dst}: console token under its former name, {LEGACY_TOKEN} — valid, nothing to rename")
     else:
@@ -206,6 +255,8 @@ def main(dst: str) -> int:
         print("⚠ DISCORD_ALLOWED_USERS / DISCORD_ALLOWED_ROLES vides : les boutons du bot refuseront "
               "tout clic (fermé par défaut). Ajoute ton id Discord à host.env.", file=sys.stderr)
     if warning := analysis_warning(env):
+        print(warning, file=sys.stderr)
+    for warning in never_target_warnings(env):
         print(warning, file=sys.stderr)
     path.touch(mode=0o600)
     path.write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")

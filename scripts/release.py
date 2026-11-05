@@ -626,8 +626,9 @@ def _into_main(root: Path, r: dict, read: dict) -> tuple[bool | None, str]:
 def gate(root: Path, sha: str) -> tuple[bool, str]:
     """(green, what to say): the gate's last run on a commit whose tree is the one of `sha`. The
     tree, not the commit: the version's pull request is squash-merged, its head is never main's
-    commit — but its tree is, when nothing else merged in between. That run must be complete, and
-    green by its jobs, never its conclusion (_jobs, REL3): one running, its total red, cancelled,
+    commit — but its tree is, when nothing else merged in between. That run must be green by its
+    jobs, never its conclusion (_jobs, REL3) — complete, or still going for a job that informs alone
+    (CI10b: the total no longer waits for it): one running otherwise, its total red, cancelled,
     skipped or absent, or a job that blocks not green, refuses; a job that informs is said. A pull
     request's run counts into main only, read after the merge too (_into_main, CI6c); a read that
     fails refuses. Nothing lets a draft past it."""
@@ -668,10 +669,13 @@ def gate(root: Path, sha: str) -> tuple[bool, str]:
             said += (f" : la dernière, {_where(runs[0])}, a un autre arbre — quelque chose a fusionné après "
                      "elle")
         return False, f"{said} ; {GATE_AGAIN}"
-    if r.get("status") != "completed":
+    green, said = _jobs(root, r)
+    # CI10b (#581, L7): the total no longer waits for a job that informs — a run still going for
+    # macOS alone (the 0.5.6's had its runner 61 min in) is green once its total and every job that
+    # blocks are; anything else of a run still going is said as such, its jobs read or not.
+    if r.get("status") != "completed" and not green:
         return False, (f"la porte de release est en cours ({_plain(r.get('status'), 20)}), {_where(r)} : "
                        "attends-la, verte (30 à 60 minutes)")
-    green, said = _jobs(root, r)
     if not green:
         return False, said
     return True, f"la porte de release est verte sur l'arbre d'origin/main ({tree[:9]}), {_where(r)}{said}"

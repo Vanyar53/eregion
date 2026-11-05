@@ -1231,6 +1231,38 @@ def test_a_job_that_informs_red_cancelled_or_absent_never_holds_the_draft(repo, 
     assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "create"]]
 
 
+@pytest.mark.parametrize("macos", ["in_progress", "queued"])
+def test_a_run_still_going_for_macos_alone_is_green_once_every_job_that_blocks_is(repo, tmp_path, capsys, macos):
+    """CI10b (#581, L7): the total no longer waits for macOS — the 0.5.6's had its runner 61 min in,
+    the run went on 12 min after its last job that blocks. The run still in progress, its total and
+    every job that blocks green: the draft is made, macOS said running."""
+    jobs = [j for j in jobs_of() if j["name"] != MACOS_JOB] + [job(MACOS_JOB, status=macos)]
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, status="in_progress", jobs=jobs))
+    capsys.readouterr()
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    (line,) = [x for x in capsys.readouterr().out.splitlines() if x.startswith("  ✓ la porte de release est verte")]
+    assert line.endswith(f"; informe sans bloquer : « {MACOS_JOB} » en cours ({macos})")
+    assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "create"]]
+
+
+@pytest.mark.parametrize("which", ["total", "shard"])
+def test_a_run_still_going_for_a_job_that_blocks_refuses_as_running(repo, tmp_path, capsys, which):
+    """The run in progress and anything but a job that informs not done — its total, or a job that
+    blocks — refuses: the gate is still running, wait for it."""
+    if which == "total":
+        jobs = jobs_of(total="success", status="in_progress")
+    else:
+        jobs = [j for j in jobs_of() if j["name"] != SHARD_JOB] + [job(SHARD_JOB, status="in_progress")]
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, status="in_progress", run_id=12, jobs=jobs))
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "la porte de release est en cours (in_progress), sur ",
+                  "(https://github.com/o/r/actions/runs/12) : attends-la, verte (30 à 60 minutes)")
+
+
 def test_every_job_green_says_nothing_more_whatever_the_run_s_conclusion(repo, tmp_path, capsys):
     _gate_with(repo, capsys, jobs_of(), run_conclusion="failure")
     assert rel.main(["release-draft", "0.4.4"]) == 0

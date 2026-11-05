@@ -562,3 +562,90 @@ def test_the_default_of_the_flag_stays_off():
     compose = (ROOT / "docker-compose.yml").read_text()
     assert "EREGION_ACTION_QUEUE: ${EREGION_ACTION_QUEUE:-}" in compose
     assert "\nEREGION_ACTION_QUEUE=\n" in (ROOT / "infra" / "glorfindel-host" / "host.env.example").read_text()
+
+
+# ── FS1c review: one slot per gesture, taken at its entry, held to its end ─────────────
+
+@pytest.mark.parametrize("action, setup", [("isolate_vm", ""), ("block_suspicious_ip", ""),
+                                           ("release_isolation", "isolate")])
+def test_a_gesture_accepted_runs_to_its_end_whatever_fills_the_slots_meanwhile(world, monkeypatch, action, setup):
+    """Without the flag (H0 at the next release): an approval acts, then settles the card, then
+    checks — the other slots all taken between two steps, its check and its note happen all the
+    same; never « busy » after the isolation was made."""
+    pytest.importorskip("fastapi")
+    api, client = _console(world, monkeypatch)
+    monkeypatch.delenv(aq.FLAG_ENV, raising=False)
+    if setup == "isolate":
+        world["conn"].isolate_vm(WEB)
+    ran: list = []
+    _no_subprocess(api, monkeypatch, ran)
+    conn = world["conn"]          # the route's own connector, on the in-memory Azure — never Azure
+    monkeypatch.setattr(AzureConnector, "__init__", lambda self, *a, **k: self.__dict__.update(conn.__dict__))
+    taken: list = []
+    real = escalations.resolve
+
+    def resolve_and_fill(*a, **k):     # the other gestures arrive between two steps of this one
+        while api._GESTURE_SLOTS.acquire(blocking=False):
+            taken.append(1)
+        return real(*a, **k)
+    monkeypatch.setattr(escalations, "resolve", resolve_and_fill)
+    card = _card(action, ip=ATTACKER if action == "block_suspicious_ip" else "")
+    try:
+        r = client.post(f"/api/action/approve/{card['id']}", json={}, params={"scope": "vm"})
+    finally:
+        for _ in taken:
+            api._GESTURE_SLOTS.release()
+    assert r.status_code == 200 and not r.json().get("busy"), r.text
+    assert len(taken) == api.GESTURES_IN_FLIGHT - 1, "the route held its own slot"
+    assert "verification" in r.json(), r.json()
+    assert [x["action"] for x in _lines(world)] == [action], "checked and noted"
+
+
+def test_a_gesture_refused_at_its_entry_does_nothing(world, monkeypatch):
+    pytest.importorskip("fastapi")
+    api, client = _console(world, monkeypatch)
+    monkeypatch.delenv(aq.FLAG_ENV, raising=False)
+    monkeypatch.setattr(AzureConnector, "isolate_vm", lambda self, rid: pytest.fail("acted while refused"))
+    card = _card()
+    _full(api, monkeypatch)
+    assert client.post(f"/api/action/approve/{card['id']}", json={}).status_code == 503
+    assert card["id"] in {e["id"] for e in escalations.pending()} and _lines(world) == []
+
+
+# ── FS1c review: the bot's Revert by the queue, noted in its own directory ─────────────
+
+def test_the_bots_revert_by_the_queue_is_noted_in_runs_bot_once(world, monkeypatch):
+    pytest.importorskip("discord")
+    from analysis import containment
+    from glorfindel import bot
+    monkeypatch.setenv(aq.FLAG_ENV, "1")
+    monkeypatch.delenv(runs_layout.WRITER_ENV, raising=False)
+    world["q"].pins = {"console": CONSOLE.public, "bot": aq.load_service_key("bot").public}
+    world["conn"].isolate_vm(WEB)
+    card = _card("isolate_vm", "verification_failed")
+    user = type("U", (), {"id": 111, "display_name": "an operator"})()
+    with _Picker(world["q"]):
+        code, _ = asyncio.run(bot._queue_revert(card, user, _Thread(), poll_s=0.02))
+    assert code == 0
+    noted = _lines(world, "bot")
+    assert [(x["action"], x["outcome"]["via"], x["outcome"]["approved_escalation"]) for x in noted] == [
+        ("reset", "queue", card["id"])], noted
+    assert aq._ID.fullmatch(noted[0]["outcome"]["request"]), "tied to its receipt"
+    assert _lines(world, "console") == [], "never the console's directory"
+    assert [x[0] for x in containment.read_liftings(world["root"] / "annatar")] == [WEB]
+
+
+def test_the_bots_revert_already_withdrawn_is_not_noted_again(world, monkeypatch):
+    pytest.importorskip("discord")
+    bot, _ = _scripted(monkeypatch, ["done"])
+    monkeypatch.setattr(aq, "withdraw", lambda *a, **k: False)
+    code, _ = asyncio.run(bot._queue_revert({"id": "c1"}, None, _Thread(), poll_s=0))
+    assert code == 0 and _lines(world, "bot") == []
+
+
+def test_a_refused_revert_of_the_bot_is_noted_nowhere(world, monkeypatch):
+    pytest.importorskip("discord")
+    bot, _ = _scripted(monkeypatch, ["refused"])
+    monkeypatch.setattr(aq, "withdraw", lambda *a, **k: True)
+    code, _ = asyncio.run(bot._queue_revert({"id": "c1"}, None, _Thread(), poll_s=0))
+    assert code == 1 and _lines(world, "bot") == []

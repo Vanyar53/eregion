@@ -49,7 +49,7 @@ MUTANTS = [
     ("M4051", "the console's gestures never bounded: a burst of clicks takes the server's threads (FS1c)", API,
      "    if not _GESTURE_SLOTS.acquire(blocking=False):\n        raise GesturesBusy()\n", ""),
     ("M4052", "a gesture's slot never given back: the console refuses every gesture after four (FS1c)", API,
-     "    finally:\n        _GESTURE_SLOTS.release()\n", "    finally:\n        pass\n"),
+     "        _HOLDING.reset(token)\n        _GESTURE_SLOTS.release()\n", "        _HOLDING.reset(token)\n"),
     ("M4053", "the deposit off the gestures' executor: past the slots, a request written all the same (FS1c)",
      API, "    asked = await _gesture(action_requests.deposit, verb, resource_id,",
      "    asked = await asyncio.to_thread(action_requests.deposit, verb, resource_id,"),
@@ -86,7 +86,7 @@ MUTANTS = [
     ("M4065", "the CLI the bot runs writes the console's directory again (FS1c)", BOTF,
      "        env={**os.environ, runs_layout.WRITER_ENV: runs_layout.BOT},\n", ""),
     ("M4066", "the bot's hand noted in runs/console: a bot that writes the console's directory (FS1c)",
-     "glorfindel/cli.py", "    if runs_layout.hand() != runs_layout.CONSOLE:      # FS1c", "    if False:      # FS1c"),
+     "glorfindel/cli.py", "    if hand != runs_layout.CONSOLE:      # FS1c", "    if False:      # FS1c"),
     ("M4067", "the bot mounts runs/console again: it can replace or drown the console's requests (FS1c)",
      "docker-compose.yml",
      "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro\n      # FS1b : son propre répertoire",
@@ -101,3 +101,36 @@ MUTANTS = [
 ]
 TESTS = {f"M{n}": _ASYNC for n in range(4040, 4070)}
 TESTS["M4067"] = f"{_MOUNTS} {_ASYNC}"
+
+# After the Opus 5.5 review of e157dbf7: one slot per gesture, held from its entry to its end; the
+# bot's Revert by the queue noted in its own directory, once. M4155–M4164.
+MUTANTS += [
+    ("M4155", "an approval asks a slot at each step: isolated, then « busy » before its check and its note "
+              "(FS1c review)", API,
+     '@app.post("/api/action/approve/{esc_id}")\n@_one_slot\n', '@app.post("/api/action/approve/{esc_id}")\n'),
+    ("M4156", "a gesture that holds its slot asks a second one: refused midway (FS1c review)", API,
+     "    if _HOLDING.get():\n        yield\n        return\n", ""),
+    ("M4157", "the slot of a gesture never marked held: each step asks its own (FS1c review)", API,
+     "    token = _HOLDING.set(True)\n", "    token = _HOLDING.set(False)\n"),
+    ("M4158", "a gesture refused at its entry acts all the same (FS1c review)", API,
+     "    async def held(*args, **kwargs):\n        async with _slot():\n            return await route(*args, **kwargs)\n",
+     "    async def held(*args, **kwargs):\n        return await route(*args, **kwargs)\n"),
+    ("M4159", "the bot's Revert by the queue noted nowhere: the feed and the containment never see it "
+              "(FS1c review)", BOTF,
+     '        _note_revert(followed["receipt"])\n', "        pass\n"),
+    ("M4160", "the bot's Revert noted though another read withdrew its request: noted twice (FS1c review)",
+     BOTF, '    if aq.withdraw("bot", rid) and "receipt" in followed:\n',
+     '    aq.withdraw("bot", rid)\n    if "receipt" in followed:\n'),
+    ("M4161", "the bot's Revert noted in the console's directory (FS1c review)", BOTF,
+     '"approved_escalation": receipt["card"]} if receipt.get("card") else {})}, hand=runs_layout.BOT)\n',
+     '"approved_escalation": receipt["card"]} if receipt.get("card") else {})})\n'),
+    ("M4162", "the CLI's note ignores the hand it is given (FS1c review)", "glorfindel/cli.py",
+     "    hand = hand or runs_layout.hand()\n", "    hand = runs_layout.hand()\n"),
+    ("M4163", "the bot's Revert noted before its end: « accepted » taken for its outcome (FS1c review)", BOTF,
+     '    if receipt.get("state") not in ("done", "failed"):\n        return\n    try:\n        from eregion_core import runs_layout\n',
+     '    try:\n        from eregion_core import runs_layout\n'),
+    ("M4164", "the bot's Revert noted without its request: the note never tied to its receipt (FS1c review)",
+     BOTF, '            "via": "queue", "request": str(receipt.get("request") or ""),\n',
+     '            "via": "queue",\n'),
+]
+TESTS.update({f"M{n}": _ASYNC for n in range(4155, 4165)})

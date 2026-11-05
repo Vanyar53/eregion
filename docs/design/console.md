@@ -426,6 +426,8 @@ plus (ci-dessous).
 - **L'attente bornée** : ce qui reste synchrone d'un geste — le dépôt, et l'appel direct jusqu'à
   FS1e — passe par un exécuteur à la console (`_gesture`, `GESTURES_IN_FLIGHT = 4`). Au-delà, refusé
   aussitôt (503, `busy`), jamais en file : une rafale de clics n'occupe plus les fils des autres routes.
+  Un geste prend **une** place, à l'entrée de sa route (`_one_slot`), et la garde jusqu'au bout :
+  refusé, rien n'est fait ; accepté, son action, sa vérification et sa note ont toujours lieu.
 - **Le drapeau reste faux par défaut** (la bascule, après la mesure au banc : `docs/operations.md`).
 - Code : `eregion_console/action_requests.py` (`deposit`, `follow`, `posture`, `answer`),
   `eregion_core/action_queue.py` (`deposit_request`, `follow`, `receipt_said`, `posture`) ; tests :

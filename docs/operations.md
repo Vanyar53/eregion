@@ -1348,7 +1348,17 @@ de sa demande, et la page suit son reçu (`GET /api/queue/<id>` : reçue, accept
 grisé dit pourquoi en survol : la watch arrêtée (son statut a plus de 60 s), en lecture seule, ou qui
 n'épingle pas la clé de la console. « signed by … the watch's key pinned here is … » : la clé de la
 watch tirée de nouveau — épingler la nouvelle (`EREGION_WATCH_KEY`, `make glorfindel-host-watch-key`).
-Plus de 4 gestes à la fois dans une console : le cinquième est refusé (503), à refaire.
+Plus de 4 gestes à la fois dans une console : le cinquième est refusé (503), à refaire — avec ou
+sans le drapeau. Un geste prend sa place à son entrée et la garde jusqu'au bout : refusé, rien n'est
+fait ; accepté, son action, sa vérification et sa note ont toujours lieu.
+
+**Limite connue** : avec le drapeau, un geste de la console n'est noté (`manual_actions.jsonl`, le
+fil, les levées) que lorsqu'une lecture le règle — la page qui suit son reçu, ou l'état d'une page
+ouverte. Si la console est arrêtée au moment du reçu final et qu'aucune page ne relit son état avant
+le balayage de ses demandes (une heure), le geste fait n'est pas noté ; son reçu signé, lui, reste 2 h
+dans `runs/glorfindel/queue/`. La piste, plus tard : une tâche de fond de la console qui règle ses
+demandes sans attendre une lecture. Le Revert du bot, lui, est noté par le bot à la fin de son suivi
+(`runs/bot/manual_actions.jsonl`) ; un bot redémarré pendant ce suivi ne le reprend pas.
 
 ### La mesure au banc (FS1c) — l'ordre des gestes de Jonathan
 

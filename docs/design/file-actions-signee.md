@@ -855,7 +855,9 @@ gestes de Jonathan).
 - **Le bot dit le reçu** (`glorfindel/bot.py`, `_queue_revert`) : déposé (un fil, brièvement), puis
   suivi sans fil tenu (`asyncio.sleep` entre deux lectures) — « déposée », « reçue », « acceptée »,
   puis ce que dit le reçu final, dans le fil de la VM ; jamais plus longtemps que la vie de la demande
-  et celle d'une exécution (`TAKE_S + RUN_S`), puis dit, la carte ouverte (SEC4c).
+  et celle d'une exécution (`TAKE_S + RUN_S`), puis dit, la carte ouverte (SEC4c). Fait ou échoué, il
+  est noté une fois dans `runs/bot/manual_actions.jsonl`, à partir du reçu, par la lecture qui retire
+  sa demande (relecture de FS1c).
 - **Les boutons selon le statut de la watch** (`action_queue.posture`) : avec le drapeau, `/api/state`
   porte `queue` (`on`, `ok`, `why`), lu dans le `status.json` que la watch signe — jamais dans
   l'environnement de la console. Grisés, avec la raison, quand le statut manque, n'est pas à croire
@@ -866,7 +868,11 @@ gestes de Jonathan).
 - **L'attente bornée** : ce qui reste synchrone d'un geste — le dépôt, et l'appel direct jusqu'à
   FS1e — passe par un exécuteur à la console (`_gesture`, `GESTURES_IN_FLIGHT = 4`, un sémaphore à
   sa taille). Au-delà, le geste est refusé aussitôt (503, `busy`), jamais mis en file derrière les
-  autres : une rafale de clics n'occupe plus les fils qui servent les autres routes.
+  autres : une rafale de clics n'occupe plus les fils qui servent les autres routes. **Une place par
+  geste** (relecture de FS1c) : prise une fois à l'entrée de la route (`_one_slot`, `_slot`) et
+  gardée jusqu'à la fin, réentrante pour les routes qu'elle appelle — refusé à l'entrée, rien n'est
+  fait ; accepté, il va jusqu'au bout (une approbation n'isole jamais pour se dire « busy » avant sa
+  vérification et sa note).
 - **Un reçu d'une autre clé** (la clé de la watch épinglée, `EREGION_WATCH_KEY`) se distingue d'une
   absence de reçu (`receipt_said`) : `untrusted`, avec les deux empreintes et le geste (épingler la
   nouvelle clé de la watch), jamais « la watch n'a pas pris la demande ». De même pour le statut.
@@ -898,7 +904,9 @@ gestes de Jonathan).
 geste noté une fois, une page fermée, un refus et un échec, `not_taken`, `unknown`, un reçu d'une
 autre clé, la posture et ses refus, la page, les créneaux, les routes sans drapeau, la carte née de
 la file, le bot qui dit le reçu, le bot hors de `runs/console`, `--draw`, `--check`, le défaut
-faux) ; mutants M4040–M4069 (`scripts/mutants/FS1c.py`).
+faux ; après la relecture : une place par geste, le Revert du bot noté) ; mutants M4040–M4069 et
+M4155–M4164 (`scripts/mutants/FS1c.py`). **Limite connue** : un geste de la console n'est noté que
+lorsqu'une lecture le règle (`docs/operations.md`) — une tâche de fond, plus tard.
 
 **Ce qui reste** : la mesure au banc avec Jonathan, puis le défaut (une ligne) ; FS1d (les
 identités lectrices), FS1e, FS1f, FS1g. La machine à invariants ne connaît pas encore l'action

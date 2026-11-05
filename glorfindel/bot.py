@@ -561,8 +561,26 @@ async def _queue_revert(esc: dict, user, channel, poll_s: float | None = None) -
             return 1, (f"file d'actions ({rid[:8]}) : toujours « {state} » après {aq.TAKE_S + aq.RUN_S:.0f} s — "
                        "son reçu le dira ; la carte reste ouverte")
         await asyncio.sleep(poll_s)
-    aq.withdraw("bot", rid)
+    # FS1c review: the Revert noted, from its receipt, by the read that withdrew its request — once.
+    if aq.withdraw("bot", rid) and "receipt" in followed:
+        _note_revert(followed["receipt"])
     return _receipt_text(rid, followed)
+
+
+def _note_revert(receipt: dict) -> None:
+    """The bot's Revert by the queue noted in runs/bot/manual_actions.jsonl (the bot's hand), from
+    its receipt — the feed, the overview and the containment analysis read it as the CLI's."""
+    if receipt.get("state") not in ("done", "failed"):
+        return
+    try:
+        from eregion_core import runs_layout
+        from glorfindel.cli import _record_manual_action
+        _record_manual_action("reset", str(receipt.get("resource_id") or ""), {
+            **(receipt.get("result") if isinstance(receipt.get("result"), dict) else {}),
+            "via": "queue", "request": str(receipt.get("request") or ""),
+            **({"approved_escalation": receipt["card"]} if receipt.get("card") else {})}, hand=runs_layout.BOT)
+    except Exception:
+        pass
 
 
 def _run_cli(cli_args: list[str]) -> tuple[int, str]:

@@ -1209,16 +1209,44 @@ async def _gestures_busy(_request, exc: GesturesBusy):
         "busy": True})
 
 
-async def _gesture(fn, *args, **kwargs):
-    """``fn(*args, **kwargs)`` in the gestures' own executor — or GesturesBusy when its slots are
-    all taken (FS1c)."""
+# Whether this gesture holds its slot already (a route's task, and the routes it calls).
+_HOLDING: contextvars.ContextVar[bool] = contextvars.ContextVar("eregion_console_gesture_slot", default=False)
+
+
+@contextlib.asynccontextmanager
+async def _slot():
+    """One slot for a whole gesture, taken once at its entry and held to its end (FS1c review):
+    refused at the entry, nothing is done; accepted, it runs to its end — never an isolation made,
+    then its check and its note refused « busy » midway. Re-entrant: a gesture that calls another
+    (an approval's release, its snapshot) keeps its own slot, never asks a second."""
+    if _HOLDING.get():
+        yield
+        return
     if not _GESTURE_SLOTS.acquire(blocking=False):
         raise GesturesBusy()
+    token = _HOLDING.set(True)
     try:
+        yield
+    finally:
+        _HOLDING.reset(token)
+        _GESTURE_SLOTS.release()
+
+
+def _one_slot(route):
+    """A write route whose whole gesture holds one slot (``_slot``), from its entry to its end."""
+    @_functools.wraps(route)
+    async def held(*args, **kwargs):
+        async with _slot():
+            return await route(*args, **kwargs)
+    return held
+
+
+async def _gesture(fn, *args, **kwargs):
+    """``fn(*args, **kwargs)`` in the gestures' own executor, under the gesture's slot — the one its
+    route holds, or one of its own; GesturesBusy when none is free (FS1c)."""
+    async with _slot():
         return await asyncio.get_running_loop().run_in_executor(
             _GESTURE_POOL, _functools.partial(fn, *args, **kwargs))
-    finally:
-        _GESTURE_SLOTS.release()
 
 
 async def _queued(verb: str, resource_id: str, *, ip: str = "", scope: str = "", card=None,
@@ -1241,6 +1269,7 @@ async def _queued(verb: str, resource_id: str, *, ip: str = "", scope: str = "",
 # it first (the page that follows it, or any page's state): the gesture is noted then, once.
 _SETTLED: "dict[str, dict]" = {}
 _SETTLED_KEEP = 256
+_SETTLED_LOCK = _threading.Lock()      # the routes' threads and the state's read it together
 
 
 def _note_queued(receipt: dict) -> None:
@@ -1290,8 +1319,10 @@ def _settle(request_id: str) -> dict:
     """Where the console's request stands (``action_requests.follow``) — once final, answered as
     its route answered, the request withdrawn and the gesture noted, by this read alone."""
     from eregion_console import action_requests
-    if request_id in _SETTLED:
-        return _SETTLED[request_id]
+    with _SETTLED_LOCK:
+        known = _SETTLED.get(request_id)
+    if known is not None:
+        return known
     followed = action_requests.follow(request_id, root=_RUNS)
     if not followed["final"]:
         return {"via": "queue", "request": followed["request"], "state": followed["state"], "pending": True}
@@ -1299,9 +1330,10 @@ def _settle(request_id: str) -> dict:
     if action_requests.withdraw(request_id, root=_RUNS) and "receipt" in followed:
         _note_queued(followed["receipt"])
     if followed["request"]:
-        _SETTLED[request_id] = out
-        while len(_SETTLED) > _SETTLED_KEEP:
-            _SETTLED.pop(next(iter(_SETTLED)))
+        with _SETTLED_LOCK:
+            _SETTLED[request_id] = out
+            while len(_SETTLED) > _SETTLED_KEEP:
+                _SETTLED.pop(next(iter(_SETTLED)))
     return out
 
 
@@ -1311,7 +1343,9 @@ def _settle_waiting() -> int:
     from eregion_console import action_requests
     n = 0
     for request_id in action_requests.waiting(root=_RUNS):
-        if request_id not in _SETTLED and not _settle(request_id).get("pending"):
+        with _SETTLED_LOCK:
+            known = request_id in _SETTLED
+        if not known and not _settle(request_id).get("pending"):
             n += 1
     return n
 
@@ -1339,6 +1373,7 @@ async def queue_request(request_id: str) -> dict:
 
 
 @app.post("/api/action/release/{vm_name}")
+@_one_slot
 async def action_release(vm_name: str) -> dict:
     """Release isolation only — use after restore when the VM is clean."""
     resource_id = _find_resource_id(vm_name)
@@ -1355,6 +1390,7 @@ async def action_release(vm_name: str) -> dict:
 
 
 @app.post("/api/action/revert/{vm_name}")
+@_one_slot
 async def action_revert(vm_name: str) -> dict:
     """Full reset — release isolation + unblock all IPs."""
     resource_id = _find_resource_id(vm_name)
@@ -1559,6 +1595,7 @@ def _approval_refusal(esc: dict, vm_name: str) -> str | None:
 
 
 @app.post("/api/action/approve/{esc_id}")
+@_one_slot
 async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
     """One-click approve for mode_hold escalations — executes the recommended action and acks.
 
@@ -1722,6 +1759,7 @@ def _promotion_said(result: dict) -> list[str]:
 
 
 @app.post("/api/action/block-promote/{vm_name}")
+@_one_slot
 async def action_block_promote(vm_name: str, ip: str = "") -> dict:
     """Extend ONE VM-scoped block to the whole subnet (all VMs) — the block of `ip`, the row's.
 
@@ -1757,6 +1795,7 @@ async def action_block_promote(vm_name: str, ip: str = "") -> dict:
 
 
 @app.post("/api/action/unblock/{vm_name}")
+@_one_slot
 async def action_unblock(vm_name: str, ip: str = "") -> dict:
     """Unblock ONE IP of this VM (CON-K): the VM's other blocks and its isolation stay. Through
     the CLI, as a release is (`glorfindel unblock`: the connector's unblock, the state, the manual
@@ -1783,6 +1822,7 @@ _UNBLOCK_NOT_FOUND = "No block rules found for"
 
 
 @app.post("/api/action/snapshot/{vm_name}")
+@_one_slot
 async def action_snapshot(vm_name: str) -> dict:
     """Trigger an on-demand Azure Backup snapshot via jobs.py (visible to CLI + War Room)."""
     resource_id = _find_resource_id(vm_name)

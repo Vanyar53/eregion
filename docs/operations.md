@@ -2756,17 +2756,17 @@ double »). Ce qui change dans le harnais :
   chargé, son gain total reste sous le bruit.
 
 **Le gain, dans le modèle du harnais** (`--plan`, durées des trois portes du 05/11 ramenées aux cibles
-et aux tours d'aujourd'hui ; un mutant resserré sans mesure pèse l'estimation, 13 s) :
+et aux tours d'aujourd'hui ; un mutant resserré sans mesure pèse l'estimation, 13 s ; avant : 3 141 mutants, après : 3 269, `origin/main` fusionné) :
 
 | | Avant CI10a | Après, sans `--skip-machine-baseline` | Après, avec (la porte) |
 |---|---|---|---|
-| `--plan 14`, la tranche la plus lourde | 39,6 min | 24,0 min | **17,3 min** |
-| `--plan 10` | 50,9 min | 33,3 min | 22,8 min |
-| Travail des tranches de mutants | ~34 h de runner (CI9) | 21,6 h | 15,2 h |
+| `--plan 14`, la tranche la plus lourde | 39,6 min | 24,4 min | **17,3 min** |
+| `--plan 10` | 50,9 min | 33,9 min | 23,4 min |
+| Travail des tranches de mutants | ~34 h de runner (CI9) | 22,0 h | 15,6 h |
 | `--control --plan 2` | ~31 min | 24,3 min | 23,3 min |
 
-Le seul pool (L4) gagne de 1 à 3 min par tranche dans le modèle : 19,5 → 17,3 min à 14 tranches,
-23,8 → 22,8 à 10. Le modèle est optimiste d'un facteur 1,2 à 1,3 (CI9 : 42,5 min prévues, 54
+Le seul pool (L4) gagne de 1 à 3 min par tranche dans le modèle : 19,9 → 17,3 min à 14 tranches,
+24,5 → 23,4 à 10. Le modèle est optimiste d'un facteur 1,2 à 1,3 (CI9 : 42,5 min prévues, 54
 mesurées pour la 0.5.6) : la tranche la plus lourde devrait mesurer de 21 à 23 min. Le job
 `invariants` (de 22 à 36 min) devient le chemin de la porte ; le scinder, comme ramener la porte à 10
 tranches, est l'affaire de CI10b.

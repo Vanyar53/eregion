@@ -109,3 +109,20 @@ variable "bench_workspace" {
   type        = string
   default     = "law-celebrimbor-amonsul"
 }
+
+variable "identity_executor_enabled" {
+  description = "IR1b (#572) : l'application de l'exécuteur d'identité dans Entra ID, son principal, Application.ReadWrite.OwnedBy et User.RevokeSessions.All de Microsoft Graph, Log Analytics Reader sur le workspace du banc (identity_executor.tf). Faux (défaut) : rien dans le tenant. Vrai : identity_executor.auto.tfvars (ignoré par git), appliqué par Jonathan, qui consent les permissions (docs/operations.md, « L'exécuteur d'identité »)."
+  type        = bool
+  default     = false
+}
+
+variable "identity_executor_certificate" {
+  description = "IR1b : la partie publique du certificat de l'exécuteur (PEM, « BEGIN CERTIFICATE »), sa clé tirée sur H0, jamais ici. Vide (défaut) : aucun identifiant, l'exécuteur ne peut pas se connecter. Jamais une clé privée : le plan la refuse."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.identity_executor_certificate == "" || (strcontains(var.identity_executor_certificate, "-----BEGIN CERTIFICATE-----") && !strcontains(upper(var.identity_executor_certificate), "PRIVATE KEY"))
+    error_message = "identity_executor_certificate : la partie publique d'un certificat (PEM, BEGIN CERTIFICATE), jamais une clé privée."
+  }
+}

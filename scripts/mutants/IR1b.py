@@ -7,7 +7,9 @@ M4070–M4083 measured by tests/unit/test_identity_contract.py (a fake Graph), M
 tests/unit/test_identity_executor_host.py (its plan: infra/glorfindel-host/tests/
 identity_executor.tftest.hcl, `terraform test`)."""
 IC = "glorfindel/providers/azure/identity_contract.py"
+HOST_TF = "infra/glorfindel-host/identity_executor.tf"
 _CONTRACT = "tests/unit/test_identity_contract.py"
+_HOST = "tests/unit/test_identity_executor_host.py"
 
 MUTANTS = [
     ("M4070", "a right that grants privileges admitted: the refused list read as the closed one (IR1b)", IC,
@@ -54,5 +56,9 @@ MUTANTS = [
     ("M4083", "a permission held on its token's word or its assignment's alone (IR1b)", IC,
      "    held = (token_held & assigned) | roles\n",
      "    held = token_held | assigned | roles\n"),
+    ("M4084", "the executor's application given a right that grants privileges (IR1b)", HOST_TF,
+     'toset(["Application.ReadWrite.OwnedBy", "User.RevokeSessions.All"])',
+     'toset(["Application.ReadWrite.OwnedBy", "User.RevokeSessions.All", "Application.ReadWrite.All"])'),
 ]
 TESTS = {f"M{n}": _CONTRACT for n in range(4070, 4084)}
+TESTS["M4084"] = _HOST

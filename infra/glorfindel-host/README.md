@@ -51,6 +51,15 @@ seul sur le banc, dans le mode de chaque VM.
     restore_neutralize` dit où elle est donnée. Une VM hors de la liste est restaurée quand même ;
     sa neutralisation est refusée, et dite sur la carte.
     Le test du module la tient (`tests/session_drain.tftest.hcl`).
+  - **L'application de l'exécuteur d'identité** (IR1b, #572), **désactivée par défaut** : son
+    principal à lui, jamais l'identité de la VM (celle de la watch), avec deux permissions
+    d'application de Microsoft Graph, `Application.ReadWrite.OwnedBy` et `User.RevokeSessions.All`,
+    et `Log Analytics Reader` sur le workspace du banc (`identity_executor.tf`). Rien dans le tenant
+    tant que `identity_executor_enabled` est faux (`identity_executor.auto.tfvars`, ignoré par git ;
+    `identity_executor.auto.tfvars.example`). Jonathan l'applique et consent les permissions :
+    `docs/operations.md`, « L'exécuteur d'identité ». Le conteneur qui s'en servira est celui
+    d'IR1c ; son contrat le relit au démarrage (`glorfindel identity-contract`). Le test du module :
+    `tests/identity_executor.tftest.hcl`.
   - **Un `make glorfindel-host-push` garde le mode de chaque VM** tel qu'il est sur H0
     (décision de Jonathan, 02/11 ; avant, SEC7 remettait toutes les VM en `human_only` à
     chaque push, et la posture se redonnait dans la console). Le push lit la config en place

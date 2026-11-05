@@ -1,0 +1,9 @@
+# IR1b (#572) : l'application de l'exécuteur d'identité — à copier en identity_executor.auto.tfvars
+# (ignoré par git), sur le poste de l'opérateur seulement, puis `make glorfindel-host-plan`, relu
+# (identity_executor.tf, docs/operations.md, « L'exécuteur d'identité »), puis `make glorfindel-host-up`
+# sans YES, sous un az login qui peut consentir des permissions d'application de Microsoft Graph.
+identity_executor_enabled = true
+
+# La partie publique du certificat, sa clé tirée sur H0 (IR1c) — jamais la clé ici. Vide : aucun
+# identifiant, l'exécuteur ne peut pas se connecter.
+identity_executor_certificate = ""

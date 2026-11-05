@@ -19,7 +19,8 @@ an empty [Unreleased] without a fragment, a fragment malformed, a branch or a ta
 origin/main (which must hold the version: its pyproject.toml and its CHANGELOG's [X.Y.Z]), with
 the notes given or else the CHANGELOG's section. Refused: a tag or a release vX.Y.Z that exists;
 and, with no way past it, the release gate (CI6, .github/workflows/release-gate.yml) not green on
-a commit whose tree is origin/main's — read by `gh api` (GET, the workflow's runs), said with
+a commit whose tree is origin/main's — read by `gh api` (GET, the workflow's runs; and a pull
+request's run's base by every pull request of its head, closed ones too, and their events, CI6c), said with
 its commit, its state and its link.
 The draft is put on #agents' board, pinged (scripts/agents_discord.py), its line and its ping
 deleted when the release is published (notify.yml); and its card goes to #releases, with a
@@ -71,6 +72,12 @@ GATE_STATES = {"failure": "rouge", "cancelled": "annulée", "timed_out": "arrêt
                "neutral": "neutre", "stale": "périmée"}
 SHA = re.compile(r"[0-9a-f]{40}")
 RUN_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/actions/runs/\d+")
+# CI6c (#541): a version's branch, checked before it goes into a path; one page of GitHub's lists,
+# never more (as many as a page holds refuses); the events that change a pull request's base.
+VERSION_BRANCH = re.compile(r"chore/release-[0-9A-Za-z.\-]+")
+PAGE = 100
+BASE_CHANGES = {"base_ref_changed", "automatic_base_change_succeeded", "automatic_base_change_failed",
+                "base_ref_deleted"}
 
 
 class Refused(Exception):
@@ -506,25 +513,111 @@ def _obj(x) -> dict:
 def _gate_run(r: dict) -> bool:
     """A run of the gate that ran its battery — its jobs' `if:`: a dispatch, or the version's pull
     request from this repository's own chore/release-… branch. Any other pull request that
-    touches pyproject.toml starts the workflow too, its jobs skipped: never a gate."""
+    touches pyproject.toml starts the workflow too, its jobs skipped: never a gate. A pull request's
+    run counts only into main, which its run alone no longer says once merged (_into_main)."""
     head, repo = _obj(r.get("head_repository")).get("full_name"), _obj(r.get("repository")).get("full_name")
     if not head or head != repo:
         return False
     if r.get("event") == "workflow_dispatch":
         return True
-    # A pull_request run runs its base's workflow: a chore/release-… pull request into another branch,
-    # its release-gate.yml changed there, could be green without the battery. Into main only.
-    bases = [_obj(_obj(pr).get("base")).get("ref") for pr in (r.get("pull_requests") or [])]
-    if not bases or any(b != "main" for b in bases):
-        return False
     return r.get("event") == "pull_request" and str(r.get("head_branch") or "").startswith("chore/release-")
+
+
+def _listed(p: subprocess.CompletedProcess, what: str) -> tuple[list | None, str]:
+    """A list GitHub gave — one page, all of it — or (None, why). A page of PAGE or more may not
+    hold them all: refused, never read as the whole."""
+    if p.returncode != 0:
+        return None, (f"gh api, code {p.returncode} : {_plain(p.stderr or p.stdout, 200)} — l'App la lit par son "
+                      "droit Pull requests en lecture")
+    try:
+        items = json.loads(p.stdout or "")
+    except ValueError:
+        items = None
+    if not isinstance(items, list) or not all(isinstance(x, dict) for x in items):
+        return None, f"la réponse de gh api n'est pas une liste de {what}"
+    if len(items) >= PAGE:
+        return None, f"{PAGE} {what} ou plus : la page lue peut ne pas tout montrer"
+    return items, ""
+
+
+def _into_main(root: Path, r: dict, read: dict) -> tuple[bool | None, str]:
+    """A pull_request run runs its base's workflow: a chore/release-… pull request into another branch,
+    its release-gate.yml changed there, could be green without the battery. Into main only.
+
+    Not by the run's own `pull_requests`: GitHub empties it once the pull request is merged, and
+    release-draft always comes after the merge (measured on the 0.5.5, 05/11: run 41997986094,
+    `pull_requests: []` — CI6c, #541). Nor by its commit's pulls (…/commits/{sha}/pulls): they leave out
+    a pull request closed unmerged (measured 05/11: #385's head gives `[]`) — one into another branch
+    from the same head and commit would go unseen. By every pull request of its head, closed ones too
+    (GET repos/{owner}/{repo}/pulls?head={owner}:<branch>&state=all, the App's Pull requests read;
+    measured 05/11: chore/release-0.5.5 gives #537, merged into main; chore/release-0.4.10, #405 and
+    #385). Which of them the run ran for, nothing says once closed: all must go into main of this
+    repository, one of them has the run's commit for head, and none ever changed its base
+    (GET repos/{owner}/{repo}/issues/{n}/events: a `base_ref_changed`, measured on #353 — a version's
+    pull request keeps the base it was opened on). Any the run still names, into main too.
+    (True, ""): the gate. (False, why): not the gate, passed over — no pull request with its commit,
+    or all of them elsewhere. (None, why): unreadable, ambiguous (one into main, another elsewhere),
+    or a base changed — the draft refused for it, an older run never deciding in its place. `read` keeps each answer: one read per head, per pull request."""
+    sha, repo, branch = str(r.get("head_sha") or ""), _obj(r.get("repository")).get("full_name"), r.get("head_branch")
+    if not SHA.fullmatch(sha):
+        return None, f"la PR de la porte de release ne se lit pas, {_where(r)} : son commit est illisible"
+    if not isinstance(branch, str) or not VERSION_BRANCH.fullmatch(branch):
+        return None, f"la PR de la porte de release ne se lit pas, {_where(r)} : sa branche est illisible"
+    if ("head", branch) not in read:
+        read["head", branch] = run(["gh", "api", "--method", "GET",
+                                    "repos/{owner}/{repo}/pulls?head={owner}:" + branch + "&state=all&per_page=100"],
+                                   root, check=False)
+    prs, why = _listed(read["head", branch], "PR")
+    if prs is None:
+        return None, f"la PR de la porte de release ne se lit pas, {_where(r)} : {why}"
+    if any(_obj(pr.get("head")).get("ref") != branch or _obj(_obj(pr.get("head")).get("repo")).get("full_name") != repo
+           for pr in prs):
+        return None, (f"la PR de la porte de release ne se lit pas, {_where(r)} : gh api rend une PR d'une autre "
+                      f"tête que {branch} de ce dépôt")
+    ours = [pr for pr in prs if _obj(pr.get("head")).get("sha") == sha]
+    if not ours:
+        return False, f"la dernière, {_where(r)}, n'a pas de PR de {branch} dont son commit est la tête"
+    bases = [_obj(pr.get("base")).get("ref") if _obj(_obj(pr.get("base")).get("repo")).get("full_name") == repo
+             else None for pr in prs]
+    bases += [_obj(_obj(pr).get("base")).get("ref") for pr in (r.get("pull_requests") or [])]
+    if not bases or any(b != "main" for b in bases):
+        other = next((b for b in bases if b != "main"), None)
+        other = _plain(other, 60) if isinstance(other, str) and other else "la branche d'un autre dépôt"
+        # One into main beside one elsewhere, or the run and its head's pulls disagreeing: which one
+        # the run ran for, nothing says — refused, never passed over for an older run (review of CI6c).
+        if "main" in bases:
+            return None, (f"la porte de release est ambiguë, {_where(r)} : {branch} a une PR vers main et une "
+                          f"vers {other} ; {GATE_AGAIN}")
+        return False, f"la dernière, {_where(r)}, a une PR de {branch} vers {other}, pas vers main"
+    for pr in prs:
+        n = pr.get("number")
+        if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+            return None, f"la PR de la porte de release ne se lit pas, {_where(r)} : une PR sans numéro"
+        number = str(n)
+        if ("events", number) not in read:
+            read["events", number] = run(["gh", "api", "--method", "GET",
+                                          "repos/{owner}/{repo}/issues/" + number + "/events?per_page=100"],
+                                         root, check=False)
+        events, why = _listed(read["events", number], "événements")
+        if events is None:
+            return None, f"l'historique de la PR #{number} de la porte de release ne se lit pas, {_where(r)} : {why}"
+        if not all(isinstance(e.get("event"), str) for e in events):
+            return None, (f"l'historique de la PR #{number} de la porte de release ne se lit pas, {_where(r)} : "
+                          "un événement sans nom")
+        changed = [e["event"] for e in events if isinstance(e.get("event"), str) and e.get("event") in BASE_CHANGES]
+        if changed:
+            return None, (f"la base de la PR #{number} de la porte de release a changé ({changed[0]}), {_where(r)} : "
+                          "une PR de version garde la base main où elle a été ouverte ; refusé")
+    return True, ""
 
 
 def gate(root: Path, sha: str) -> tuple[bool, str]:
     """(green, what to say): the gate's last run on a commit whose tree is the one of `sha`. The
     tree, not the commit: the version's pull request is squash-merged, its head is never main's
     commit — but its tree is, when nothing else merged in between. That run must be complete and
-    green; one running, red, cancelled or skipped refuses. Nothing lets a draft past it."""
+    green; one running, red, cancelled or skipped refuses. A pull request's run counts into main
+    only, read after the merge too (_into_main, CI6c); a read that fails refuses. Nothing lets a
+    draft past it."""
     tree = git(root, "rev-parse", f"{sha}^{{tree}}")
     p = run(["gh", "api", "--method", "GET", "repos/{owner}/{repo}/actions/workflows/release-gate.yml/runs?per_page=100"],
             root, check=False)
@@ -542,13 +635,26 @@ def gate(root: Path, sha: str) -> tuple[bool, str]:
                   key=lambda r: (str(r.get("run_started_at") or r.get("created_at") or ""),
                                  r.get("id") if isinstance(r.get("id"), int) else 0))
     same = [r for r in runs if _obj(r.get("head_commit")).get("tree_id") == tree]
-    if not same:
+    # The last on the tree that is a gate decides: a pull request's, into main (_into_main).
+    r, passed, read = None, [], {}
+    for one in same:
+        if one.get("event") == "pull_request":
+            into, why = _into_main(root, one, read)
+            if into is None:
+                return False, why
+            if not into:
+                passed.append(why)
+                continue
+        r = one
+        break
+    if r is None:
         said = f"aucune porte de release sur l'arbre d'origin/main ({tree[:9]}, commit {sha[:9]})"
-        if runs:
+        if passed:
+            said += f" : {passed[0]}"
+        elif runs:
             said += (f" : la dernière, {_where(runs[0])}, a un autre arbre — quelque chose a fusionné après "
                      "elle")
         return False, f"{said} ; {GATE_AGAIN}"
-    r = same[0]
     if r.get("status") != "completed":
         return False, (f"la porte de release est en cours ({_plain(r.get('status'), 20)}), {_where(r)} : "
                        "attends-la, verte (30 à 60 minutes)")

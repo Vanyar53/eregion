@@ -2144,8 +2144,11 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
   — son image plus ancienne que la release, il pousse celle-ci, vérifiée (OI3, « Les images publiées »).
 - **Aucun chemin ne publie** : rien ne fait d'un brouillon une release. `tests/unit/test_release.py`
   lit le code sur une liste blanche : cinq commandes `gh` seulement (`pr create`, `release list`,
-  `release create` avec `--draft`, `release edit` des seules notes, et un seul `gh api`, la lecture des
-  runs de la porte : `--method GET`, son chemin écrit en entier, CI6). Une commande ne
+  `release create` avec `--draft`, `release edit` des seules notes, et trois `gh api` en `--method GET`,
+  les lectures de la porte : ses runs, le chemin écrit en entier (CI6) ; les PR d'une tête,
+  `"repos/{owner}/{repo}/pulls?head={owner}:" + branch + "&state=all&per_page=100"`, et les événements
+  d'une PR, `"repos/{owner}/{repo}/issues/" + number + "/events?per_page=100"`, rien d'autre autour,
+  `branch` et `number` vérifiés avant, CI6c). Une commande ne
   part que par `run()`, avec une liste littérale qui commence par `git` ou `gh` ; ni shell, ni
   `os.system`. Aucun texte ne dit
   `draft`, sauf ce `--draft`. Une URL de `releases` n'est jamais appelée qu'en lecture. Publier déploie H0 (son CD, H1) : **Jonathan publie**, sur GitHub.
@@ -2227,6 +2230,52 @@ Sans run sur cet arbre, elle dit que quelque chose a fusionné après la porte, 
 `main`. Aucun moyen de passer outre : ni option, ni variable. `DRY_RUN=1` montre la vérification.
 L'App des sessions lit ces runs par son droit *Actions* en lecture (mesuré le 04/11 : une lecture réelle
 des runs de `mutants.yml` sous `eregion-agents[bot]`, l'arbre rendu identique à celui de `git`).
+
+**La base d'une PR, lue après la fusion** (CI6c, #541). Le 05/11, la porte était verte sur la PR de la
+0.5.5 (run 41997986094), sur l'arbre même d'`origin/main`, et `release-draft` l'a refusée : la base se
+lisait dans la liste `pull_requests` du run, et GitHub vide cette liste une fois la PR fusionnée
+(`pull_requests: []`). Or `release-draft` vient toujours après la fusion. Les PR du commit
+(`…/commits/{sha}/pulls`) ne suffisent pas : elles omettent une PR fermée sans fusion (mesuré le 05/11 : la
+tête de #385, `chore/release-0.4.10`, fermée sans fusion, rend `[]`). Une PR #A de la même tête et du
+même commit vers `develop`, son `release-gate.yml` changé là, fermée avant la fusion de #B vers `main`,
+y serait invisible, et son run compterait. La base se lit donc par **toutes les PR de la tête, fermées
+comprises** : `GET repos/{owner}/{repo}/pulls?head={owner}:<branche>&state=all&per_page=100`, mesuré le
+05/11 sous l'App (`chore/release-0.5.5` rend #537, fusionnée, base `main`, tête du même commit que le
+run ; `chore/release-0.4.10` rend #405 fusionnée et #385 fermée sans fusion). Cette lecture remplace celle
+des PR du commit : elle les contient toutes, et le lien au commit se fait par `head.sha`.
+- **La branche** du run doit s'écrire `chore/release-[0-9A-Za-z.-]+`, et son commit être 40 chiffres
+  hexadécimaux, avant d'entrer dans un chemin ou d'être comparés.
+- **Toutes les PR de la tête** viennent de cette branche de ce dépôt (sinon la réponse n'est pas celle de
+  la tête : refus) et vont vers `main` de ce dépôt. L'une a pour tête le commit du run. Celle que le run
+  nomme encore (une PR ouverte) va vers `main` aussi. On ne sait pas pour laquelle le run a tourné : une
+  seule PR vers une autre branche suffit pour que le run ne soit pas la porte.
+- **Aucune n'a changé de base** : les événements de chacune (`GET repos/{owner}/{repo}/issues/{n}/events?per_page=100`)
+  ne tiennent ni `base_ref_changed` (mesuré sur #353, une PR de lot dont la base a changé le 30/10, aujourd'hui vers `main`), ni
+  `automatic_base_change_succeeded`, `automatic_base_change_failed` ou `base_ref_deleted`. Une PR de
+  version garde la base où elle a été ouverte. Sinon, refus. Mesuré sur #537 : `review_requested`,
+  `referenced`, `merged`, `closed`.
+- **Une page, jamais plus** : 100 PR ou 100 événements ou plus refusent, la page lue peut ne pas tout
+  montrer.
+- **Écarté ou refusé.** Quand rien n'est ambigu, le run n'est pas la porte : il est **écarté**, et la
+  commande le dit. C'est le cas d'une réponse vide (aucune PR de la tête n'a ce commit pour tête), ou de
+  PR qui vont toutes ailleurs que vers `main`. Un run plus ancien sur le même arbre peut alors décider (un
+  dispatch sur `main`) ; sans lui, refus. D'autres cas **refusent** tout de suite, et la commande le dit :
+  - **l'ambiguïté** : une PR de la tête vers `main` et une autre ailleurs, ou le run et la liste en
+    désaccord. On ne sait pas pour laquelle le run a tourné ;
+  - une lecture qui échoue, une réponse qui n'est pas une liste, une page pleine ;
+  - un commit ou une branche illisible, une PR sans numéro ;
+  - un événement dont le nom n'est pas une chaîne, une base changée.
+
+  Un run ambigu ou illisible n'est jamais écarté pour laisser décider un plus ancien : il faut un
+  dispatch sur `main` plus récent que lui (`gh workflow run release-gate.yml --ref main`).
+- Une lecture par tête et une par PR, seulement pour les runs `pull_request` sur l'arbre d'`origin/main`.
+
+Ces lectures demandent le droit *Pull requests* en lecture (`X-Accepted-GitHub-Permissions:
+pull_requests=read` pour les PR d'une tête ; `issues=read; pull_requests=read`, l'un ou l'autre, pour les
+événements, mesuré le 05/11). L'App l'a déjà, puisqu'elle ouvre les PR (*Pull requests* en écriture) :
+les lectures réelles ci-dessus ont rendu 200 sous son jeton d'installation. Tests :
+`tests/unit/test_release.py`, sur des réponses simulées du faux `gh` ; mutants M3770–M3785
+(`scripts/mutants/CI6c.py`).
 
 **Sa durée : de 45 à 50 minutes estimées, au plus 60** (04/11 ; à remesurer sur le premier run réel).
 Ses parties tournent ensemble ; la plus longue fait la durée :

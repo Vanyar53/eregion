@@ -27,7 +27,8 @@ EREGION_AGENT_SESSION set (the sessions of the repository, SEC12), or a lot's wo
 EREGION_BANC_SESSION=1 and AZURE_CONFIG_DIR set to the reader's az/, which only the Banc session's
 own settings set (without the latter, a bare `az` in the session reads the operator's ~/.azure);
 `login`, `query` and `verify` refuse a session that inherited a credential from the shell that
-launched it (ARM_*, AZURE_*, GH_*, GITHUB_*, *SECRET*, *TOKEN*: the names said, never the values). A
+launched it (ARM_*, AZURE_*, GH_*, GITHUB_*, *SECRET*, *TOKEN*, and a non-empty GIT_ASKPASS,
+SSH_ASKPASS or VSCODE_GIT_*: the names said, never the values). A
 guard against a mistake,
 not against a session that means harm: every session runs as the same Unix user
 (docs/design/modele-de-menace.md, frontière 8).
@@ -296,6 +297,7 @@ def write_args(profile: dict[str, str]) -> list[str]:
 # credentials (CLAUDE_CODE_*, ANTHROPIC_*) are the session's, never a cloud's nor GitHub's.
 _KEPT = ("AZURE_CONFIG_DIR", "GH_CONFIG_DIR")
 _MODEL = ("CLAUDE_CODE_", "ANTHROPIC_")
+_ASKPASS = ("GIT_ASKPASS", "SSH_ASKPASS")
 
 
 def inherited_credentials(env: dict[str, str] | None = None) -> list[str]:
@@ -305,11 +307,15 @@ def inherited_credentials(env: dict[str, str] | None = None) -> list[str]:
     of the session would use them."""
     env = os.environ if env is None else env
     names = []
-    for name in env:
+    for name, value in env.items():
         if name in _KEPT or name.startswith(_MODEL):
             continue
         upper = name.upper()
         if upper.startswith(("ARM_", "AZURE_", "GH_", "GITHUB_")) or "SECRET" in upper or "TOKEN" in upper:
+            names.append(name)
+        # A terminal of VS Code: git calls its askpass before, and regardless of, GIT_TERMINAL_PROMPT,
+        # and VS Code answers with the operator's GitHub sign-in. Empty, git ignores it.
+        elif (upper in _ASKPASS or upper.startswith("VSCODE_GIT_")) and value:
             names.append(name)
     return sorted(names)
 

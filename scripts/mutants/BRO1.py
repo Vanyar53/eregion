@@ -3,7 +3,7 @@ its principal, a certificate whose private key never enters Terraform, Log Analy
 bench's workspace alone (infra/terraform/bench_reader.tf), and the script the session signs in and
 queries with (scripts/bench_reader.py): a code session refused, the Banc session's variable wanted,
 a short certificate whose end is posed, the operator's Azure identity never mixed in, the
-certificate never shown by a failed plan. M4420–M4424, M4495–M4499, measured by
+certificate never shown by a failed plan. M4420–M4424, M4495–M4499, M4507, measured by
 tests/unit/test_bench_reader.py (the Terraform plan itself: infra/terraform/tests/bench_reader.tftest.hcl).
 """
 SCRIPT = "scripts/bench_reader.py"
@@ -40,5 +40,10 @@ MUTANTS = [
     ("M4499", "the Banc session launched from a shell where .envrc was sourced: its inherited secrets, ARM_* "
      "and GH_TOKEN left for a terraform, an SDK or a gh of the session (BRO1)", SCRIPT,
      "    if leaked:\n", "    if False:\n"),
+    ("M4507", "the Banc session launched from a VS Code terminal: its askpass left to git, which asks it before "
+     "GIT_TERMINAL_PROMPT, and VS Code answers with the operator's GitHub sign-in (BRO1)", SCRIPT,
+     '        elif (upper in _ASKPASS or upper.startswith("VSCODE_GIT_")) and value:\n',
+     "        elif False:\n"),
 ]
-TESTS = {**{f"M{n}": _TESTS for n in range(4420, 4425)}, **{f"M{n}": _TESTS for n in range(4495, 4500)}}
+TESTS = {**{f"M{n}": _TESTS for n in range(4420, 4425)}, **{f"M{n}": _TESTS for n in range(4495, 4500)},
+         "M4507": _TESTS}

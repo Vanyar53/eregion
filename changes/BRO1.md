@@ -21,13 +21,15 @@
     a lot's worktree); the session's commands also want `EREGION_BANC_SESSION=1` and `AZURE_CONFIG_DIR`
     set to the reader's own, so that a bare `az` in the session never reads the maintainer's sign-in;
     `login`, `query` and `verify` refuse a session that inherited a credential from the shell that
-    launched it (`ARM_*`, `AZURE_*`, `GH_*`, `GITHUB_*`, `*SECRET*`, `*TOKEN*`; names said, never
-    values). `status` says a posed end already past.
+    launched it (`ARM_*`, `AZURE_*`, `GH_*`, `GITHUB_*`, `*SECRET*`, `*TOKEN*`, and a non-empty
+    `GIT_ASKPASS`, `SSH_ASKPASS` or `VSCODE_GIT_*`, through which a VS Code terminal's git would get
+    the maintainer's GitHub sign-in; names said, never values). `status` says a posed end already past.
   - The Banc session's own settings, documented for the maintainer to write (`AZURE_CONFIG_DIR`, an
-    empty `GH_CONFIG_DIR`, a `GIT_CONFIG_GLOBAL` without a credential helper, `GIT_TERMINAL_PROMPT=0`),
+    empty `GH_CONFIG_DIR`, a `GIT_CONFIG_GLOBAL` without a credential helper, `GIT_TERMINAL_PROMPT=0`,
+    empty `GIT_ASKPASS` and `SSH_ASKPASS`),
     and a launch from a fresh terminal where `.envrc` was never sourced, its environment's names
     checked first: otherwise, a session launched outside the repository holds the maintainer's
     credentials.
   - The rule in `docs/sessions.md`; a new boundary in `docs/design/modele-de-menace.md` (8).
   - Tests: `tests/unit/test_bench_reader.py`, `infra/terraform/tests/bench_reader.tftest.hcl`
-    (`terraform test`, mock providers); mutants M4420–M4424 and M4495–M4499 (`scripts/mutants/BRO1.py`).
+    (`terraform test`, mock providers); mutants M4420–M4424, M4495–M4499 and M4507 (`scripts/mutants/BRO1.py`).

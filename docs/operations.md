@@ -3867,7 +3867,9 @@ variables ci-dessous, elle a tes identifiants** (GitHub, Azure) tant qu'ils sont
 session les emploie : le script ne les retire que pour son propre `az`), et un `GH_TOKEN` ou
 `GITHUB_TOKEN` exporté passe outre `GH_CONFIG_DIR`. **Lance-la donc d'un terminal neuf, où `.envrc`
 n'a jamais été sourcé** (ni `direnv` actif sur `~/eregion-banc/`). Avec les variables ci-dessous et
-ce terminal neuf, elle n'a aucun de tes identifiants, hors ce qui reste ouvert (plus bas).
+ce terminal neuf, elle n'a aucun de tes identifiants, hors ce qui reste ouvert (plus bas : un nom
+qu'aucune vérification ne reconnaît, l'assistant de VS Code tant que ses variables ne sont pas
+vidées, une clé SSH chargée dans un agent).
 
 Le dossier contient un `.claude/settings.local.json` à lui. C'est **ton fichier** : une session ne
 l'écrit pas, ce dépôt non plus. Remplace `<toi>` par ton utilisateur (des chemins absolus : le bloc
@@ -3880,7 +3882,9 @@ l'écrit pas, ce dépôt non plus. Remplace `<toi>` par ton utilisateur (des che
     "AZURE_CONFIG_DIR": "/home/<toi>/.config/eregion-banc/az",
     "GH_CONFIG_DIR": "/home/<toi>/eregion-banc/.gh-vide",
     "GIT_CONFIG_GLOBAL": "/home/<toi>/eregion-banc/.gitconfig",
-    "GIT_TERMINAL_PROMPT": "0"
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_ASKPASS": "",
+    "SSH_ASKPASS": ""
   },
   "permissions": {
     "deny": ["Bash(git push*)", "Bash(gh *)"]
@@ -3897,27 +3901,40 @@ l'écrit pas, ce dépôt non plus. Remplace `<toi>` par ton utilisateur (des che
   (`printf '[user]\n\tname = Session Banc\n\temail = banc@invalid\n[credential]\n\thelper =\n' > ~/eregion-banc/.gitconfig`) ;
   ta config globale n'est plus lue, et le `helper =` vide efface un assistant venu de la config du
   système (`/etc/gitconfig`) ;
-- `GIT_TERMINAL_PROMPT=0` : `git` ne demande pas d'identifiant ; un `push` échoue au lieu d'attendre ;
+- `GIT_TERMINAL_PROMPT=0` : `git` ne demande rien **dans le terminal**. Il ne ferme pas un assistant
+  graphique : `git` appelle `GIT_ASKPASS` (ou `SSH_ASKPASS`) avant, et indépendamment de cette
+  variable ;
+- `GIT_ASKPASS` et `SSH_ASKPASS` vides : une session lancée d'un **terminal intégré de VS Code** en
+  hérite (avec `VSCODE_GIT_IPC_HANDLE`), et VS Code sert alors l'identifiant par ta connexion GitHub.
+  Vides, `git` les ignore ; un `push` en https échoue au lieu de passer ;
 - les `deny`, en option : `git push` et `gh` refusés avant même de partir. Une ceinture : la session
   n'a rien à pousser.
 
-**Au premier geste de la session**, vérifier les seuls noms (jamais les valeurs) :
+**Au premier geste de la session**, vérifier les seuls noms des variables non vides (jamais les
+valeurs) :
 
 ```bash
-env | cut -d= -f1 | grep -E '^(ARM_|AZURE_|GH_|GITHUB_)|SECRET|TOKEN'
+env | awk -F= '$2 != "" {print $1}' \
+  | grep -E '^(ARM_|AZURE_|GH_|GITHUB_|VSCODE_GIT)|SECRET|TOKEN|ASKPASS|KEY|PASSWORD|WEBHOOK' \
+  | grep -vE '^(CLAUDE_CODE_|ANTHROPIC_)'
                                        # AZURE_CONFIG_DIR et GH_CONFIG_DIR, rien d'autre
-                                       # (CLAUDE_CODE_OAUTH_TOKEN, si tu t'en sers : l'accès au modèle de la session)
+                                       # (CLAUDE_CODE_* et ANTHROPIC_* écartés : l'accès au modèle de la session)
 ```
 
-Le script fait la même vérification : `login`, `query` et `verify` refusent une session qui a hérité
-d'une variable `ARM_*`, `AZURE_*` (hors `AZURE_CONFIG_DIR`), `GH_*` (hors `GH_CONFIG_DIR`),
-`GITHUB_*`, ou dont le nom contient `SECRET` ou `TOKEN` (hors `CLAUDE_CODE_*` et `ANTHROPIC_*`,
-l'accès au modèle). Il en dit les noms, jamais les valeurs. `logout` reste permis : effacer les
+Le script fait la même vérification, sur une liste plus courte : `login`, `query` et `verify`
+refusent une session qui a hérité d'une variable `ARM_*`, `AZURE_*` (hors `AZURE_CONFIG_DIR`),
+`GH_*` (hors `GH_CONFIG_DIR`), `GITHUB_*`, dont le nom contient `SECRET` ou `TOKEN` (hors
+`CLAUDE_CODE_*` et `ANTHROPIC_*`, l'accès au modèle), ou d'un `GIT_ASKPASS`, `SSH_ASKPASS` ou
+`VSCODE_GIT_*` non vide. Il en dit les noms, jamais les valeurs. `logout` reste permis : effacer les
 jetons de la lecture ne coûte rien.
 
 Ce qui reste ouvert :
 - **un secret hérité du shell de lancement** sous un nom que ni le script ni la vérification ne
-  reconnaissent (un `PASSWORD`, une `*_KEY`) : d'où le terminal neuf, plutôt que la liste ;
+  reconnaissent : d'où le terminal neuf, plutôt que la liste ;
+- **l'assistant d'identifiants de VS Code** : une session lancée d'un terminal intégré de VS Code
+  hérite de son `GIT_ASKPASS` et de `VSCODE_GIT_IPC_HANDLE`. Les deux variables vides ci-dessus et
+  le refus du script le ferment ; si un doute reste, lance la session d'un terminal hors de VS Code.
+  Que VS Code serve l'identifiant **sans un clic** de ta part reste à mesurer ;
 - **une clé SSH chargée dans un agent** (`SSH_AUTH_SOCK`) sert encore à `git push` en SSH. Le retrait
   de tes identifiants du poste (`docs/sessions.md`, « Retirer tes identifiants du poste des
   sessions ») le ferme ; la règle `deny` ci-dessus, en attendant.
@@ -3926,8 +3943,8 @@ La session lit le dépôt (les règles, les docs) par `--add-dir`. Son premier m
 
 > Tu es la session Banc d'Eregion. Lis ~/eregion/CLAUDE.md, puis ~/eregion/docs/operations.md,
 > « L'identité de lecture du banc (BRO1) ». Ton premier geste : la vérification des noms de ton
-> environnement (« La remise à la session Banc ») ; autre chose qu'`AZURE_CONFIG_DIR` et
-> `GH_CONFIG_DIR`, tu t'arrêtes et tu le dis. Tu lis les détections et les rapports du banc par
+> environnement (« La remise à la session Banc »), `CLAUDE_CODE_*` et `ANTHROPIC_*` écartés ;
+> autre chose qu'`AZURE_CONFIG_DIR` et `GH_CONFIG_DIR`, tu t'arrêtes et tu le dis. Tu lis les détections et les rapports du banc par
 > `python3 ~/eregion/scripts/bench_reader.py` seul. Tu n'écris rien, nulle part ; une action sur le banc
 > ou sur H0 reste à Jonathan.
 

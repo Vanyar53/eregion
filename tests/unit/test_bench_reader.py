@@ -448,10 +448,25 @@ def test_a_credential_inherited_from_the_launching_shell_is_refused_before_any_c
     assert "the-operator-s-value" not in out
 
 
+@pytest.mark.parametrize("name,value", [
+    ("GIT_ASKPASS", "/home/u/.vscode-server/bin/x/extensions/git/dist/askpass.sh"),
+    ("SSH_ASKPASS", "/usr/lib/ssh/ssh-askpass"),
+    ("VSCODE_GIT_IPC_HANDLE", "/run/user/1000/vscode-git-0.sock"),
+    ("VSCODE_GIT_ASKPASS_MAIN", "/home/u/.vscode-server/bin/x/extensions/git/dist/askpass-main.js"),
+])
+def test_a_vs_code_askpass_inherited_is_refused_before_any_call(banc, name, value):
+    """Launched from a VS Code terminal: git calls the askpass before, and regardless of,
+    GIT_TERMINAL_PROMPT, and VS Code answers with the operator's GitHub sign-in."""
+    code, out, calls = banc("login", extra={name: value})
+    assert code == 1 and name in out and value not in out and calls == []
+
+
 def test_its_own_directories_and_the_model_s_credentials_are_not_inherited_ones(banc):
     assert br.inherited_credentials({"AZURE_CONFIG_DIR": "x", "GH_CONFIG_DIR": "y", "CLAUDE_CODE_OAUTH_TOKEN": "z",
-                                     "ANTHROPIC_API_KEY": "w", "GIT_TERMINAL_PROMPT": "0", "PATH": "/bin"}) == []
-    code, out, calls = banc("login", extra={"GH_CONFIG_DIR": "/tmp/empty", "CLAUDE_CODE_OAUTH_TOKEN": "z"})
+                                     "ANTHROPIC_API_KEY": "w", "GIT_TERMINAL_PROMPT": "0", "PATH": "/bin",
+                                     "GIT_ASKPASS": "", "SSH_ASKPASS": "", "VSCODE_GIT_IPC_HANDLE": ""}) == []
+    code, out, calls = banc("login", extra={"GH_CONFIG_DIR": "/tmp/empty", "CLAUDE_CODE_OAUTH_TOKEN": "z",
+                                            "GIT_ASKPASS": "", "SSH_ASKPASS": ""})
     assert code == 0, out
     # logout clears the reader's tokens, inherited credentials or not.
     code, out, _ = banc("logout", extra={"GH_TOKEN": "x"})

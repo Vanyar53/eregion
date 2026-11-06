@@ -64,13 +64,15 @@ def _logged_items(client: str, reads: _Reads, row: dict) -> list[dict]:
     items = [_grant_item(client, _param("id de l'octroi", g["id"], "log", why), g["resource"],
                          g["consent_type"], g["principal"], g["scope"])
              for g in entra_consent.parse(row.get("Permissions"))["grants"]
-             if g["id"] and g["client"] in ("", client)]
+             if g["id"] and g["client"] == client]          # another application's grant: never
     if items:   # the delegated grants only: the same consent may have assigned application permissions
         items.append(_item(
             "Revoir aussi les permissions d'application de l'application cliente (le journal de ce "
             "consentement ne nomme que ses octrois délégués)",
-            find=f"az rest --method GET --url {GRAPH_URL}/servicePrincipals/{client}/appRoleAssignments"))
-    op = str(row.get("EntraOperation") or "").strip().lower()
+            find=f"az rest --method GET --url {GRAPH_URL}/servicePrincipals/{client}/appRoleAssignments",
+            # Verify reads them too: the card is never « held » while an application permission stands.
+            check={"kind": "consent_gone", "client": client}))
+    op =str(row.get("EntraOperation") or "").strip().lower()
     res = guid(row.get("TargetId")) if op == "add app role assignment to service principal" else ""
     if res:
         aid_p = _param("id de l'attribution", "", "", "le journal ne le donne pas ; " + (reads.why or "non lu"))

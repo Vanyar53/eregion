@@ -228,6 +228,63 @@ def test_graph_unread_a_consents_grant_is_removed_by_the_id_its_log_gives():
                for i in plan["items"])
 
 
+VICTIM = "VICTIMgrantid000"            # another application's grant, named by a forged line
+
+
+def _grant_template(plan) -> dict:
+    return next(i for i in plan["items"] if "oauth2PermissionGrants/" in i["command"])
+
+
+def test_a_scope_that_closes_its_entry_never_forges_a_second_grant():
+    """A `]` in a scope closed the entry, and the `[Id: …]` after it became a grant of its own: a
+    complete DELETE on another application's grant (the 5.5 review). The diff is read only in
+    Entra's canonical form, whole: here, nothing of it is read."""
+    forged = (f"[Id: {GRANT}, ClientId: {SP}, PrincipalId: , ResourceId: {RES}, ConsentType: AllPrincipals, "
+              f"Scope: User.Read] [Id: {VICTIM}, ClientId: {SP}, PrincipalId: , ResourceId: {RES}, "
+              "ConsentType: AllPrincipals, Scope: Mail.Read, CreatedDateTime: , LastModifiedDateTime ]")
+    row = _consent(permissions=_permissions([forged]))
+    assert entra_consent.parse(row["Permissions"]) == {"grants": [], "words": "", "format": "unknown"}
+    plan = _plan(row, NO_GRAPH)
+    assert not any(VICTIM in c or GRANT in c for c in _commands(plan))
+    grant = _grant_template(plan)
+    assert grant["command"].endswith("/oauth2PermissionGrants/<id-de-l-octroi>") and not grant["complete"]
+    assert "non lue (format du journal non reconnu" in entra.describe(row, plan)[0]
+
+
+def test_a_grant_the_log_gives_to_another_application_is_never_removed():
+    other = "00000000-0000-0000-0000-0000000000f9"
+    plan = _plan(_consent(permissions=_permissions([_grant_text(gid=VICTIM, client=other)])), NO_GRAPH)
+    assert not any(VICTIM in c for c in _commands(plan))
+    assert _grant_template(plan)["command"].endswith("<id-de-l-octroi>")
+
+
+def test_a_widened_scope_that_is_no_words_is_said_unread_never_unchanged():
+    """Before `User.Read`, after `User.Read Mail.Read;x`: not skipped as « unchanged »."""
+    perms = _permissions([_grant_text(scope="User.Read Mail.Read;x")], [_grant_text(scope="User.Read")])
+    row = _consent(permissions=perms)
+    assert entra_consent.parse(perms)["format"] == "unknown"
+    assert "non lue (format du journal non reconnu" in entra_consent.line(row)
+    assert "non nommée" not in entra_consent.line(row)
+
+
+def test_without_graph_verify_never_says_held_while_an_application_permission_stands(tenant):
+    """The log names only the delegated grants: the review of the application permissions is
+    checked too (`consent_gone`) — the card is not « held » while one stands (IR1a's Verify)."""
+    from glorfindel.providers.azure import entra_check
+    plan = _plan(_consent(), NO_GRAPH)
+    review = next(i for i in plan["items"] if "permissions d'application" in i["what"])
+    assert review["check"] == {"kind": "consent_gone", "client": SP}
+    tenant.sps[SP]["accountEnabled"] = False                 # the gestures made…
+    tenant.grants.clear()
+    tenant.users[ADMIN]["signInSessionsValidFromDateTime"] = "2026-11-06T10:05:00Z"
+    tenant.app_roles[SP] = [{"id": "ar-1", "principalId": SP, "resourceId": RES,
+                             "appRoleId": "00000000-0000-0000-0000-0000000000a9"}]
+    out = entra_check.verify(plan, tenant, now=NOW)          # …but an application permission stands
+    assert out["verdict"] == "not_held"
+    tenant.app_roles[SP] = []
+    assert entra_check.verify(plan, tenant, now=NOW)["verdict"] == "held"
+
+
 def test_a_widened_grant_is_one_grant_and_an_unchanged_one_none():
     old = [_grant_text(scope="User.Read"), _grant_text(gid=OTHER_GRANT, scope="openid")]
     new = [_grant_text(scope="User.Read Mail.Read"), _grant_text(gid=OTHER_GRANT, scope="openid")]

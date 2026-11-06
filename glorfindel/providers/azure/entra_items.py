@@ -135,8 +135,9 @@ def _param(name: str, value: str, source: str, why: str = "") -> dict:
 def placeholder(name: str) -> str:
     """What a command holds in place of a parameter not read (C2b): `<id-de-l-octroi>` — it says
     what to replace, and stays inert pasted as it is: no space nor quote (a quote of « l'octroi »
-    left the shell waiting), and the shell refuses its `<` rather than call Graph without an id
-    (an empty one left `…/roleAssignments//…`). Never an id: a template."""
+    left the shell waiting); bare in a command, the shell refuses its `<`; between quotes (the body
+    of an `adminRemove`, a `find` in double quotes), Graph refuses it (400) — never a call on an
+    empty id (an empty one left `…/roleAssignments//…`). Never an id: a template."""
     slug = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode()
     return "<" + (re.sub(r"[^A-Za-z0-9]+", "-", slug).strip("-") or "valeur") + ">"
 

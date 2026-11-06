@@ -23,45 +23,64 @@ import re
 from glorfindel.providers.azure.entra_items import graph_id, guid, words
 
 DELEGATED, APPLICATION = "delegated", "application"
-_ENTRY = re.compile(r"\[([^\[\]]*:[^\[\]]*)\]")
-_FIELD = re.compile(r"([A-Za-z]+)\s*:\s*([^,]*)")
 _CONSENT_TYPES = ("AllPrincipals", "Principal")
+_G = r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+_FREE = r"[^\[\],=]*"          # a value of the diff: never a bracket, a comma nor an arrow
 
 
-def _entries(side: str) -> list[dict]:
-    return [{k: v.strip() for k, v in _FIELD.findall(m.group(1))} for m in _ENTRY.finditer(side)]
+def _entry(named: bool) -> str:
+    """One grant, in the canonical form Entra writes, every field in its place: an entry that
+    strays from it — a `]` in a scope that would close it and open a forged `[Id: …]` — is never
+    read. `named`: its fields as groups (to read one entry), else plain (to match a whole side)."""
+    def g(name: str, body: str) -> str:
+        return f"(?P<{name}>{body})" if named else f"(?:{body})"
+    return (rf"\[\s*Id:\s*{g('id', '[A-Za-z0-9_-]+')}\s*,\s*ClientId:\s*{g('client', _G)}\s*,\s*"
+            rf"PrincipalId:\s*{g('principal', _G + '|')}\s*,\s*ResourceId:\s*{g('resource', _G)}\s*,\s*"
+            rf"ConsentType:\s*{g('ctype', 'AllPrincipals|Principal')}\s*,\s*Scope:{g('scope', _FREE)},\s*"
+            rf"CreatedDateTime:{_FREE},\s*LastModifiedDateTime(?::{_FREE})?\s*\]")
+
+
+_SIDE_RE = re.compile(rf"\[\s*(?:{_entry(False)}(?:\s*,\s*{_entry(False)})*)?\s*\]")
+_ENTRY_RE = re.compile(_entry(True))
+_DIFF_RE = re.compile(r"\s*(?P<old>\[.*\])\s*=>\s*(?P<new>\[.*\])\s*;?\s*", re.DOTALL)
+
+
+def _side(text: str) -> list[dict] | None:
+    """The grants of one side of the diff, or None when the side is not in the canonical form."""
+    if not _SIDE_RE.fullmatch(text):
+        return None
+    return [m.groupdict() for m in _ENTRY_RE.finditer(text)]
 
 
 def parse(value) -> dict:
     """`Permissions` as the rule projects it. `grants`: the delegated grants the consent added or
     widened (old → new), each with its id, client, principal, resource, consent type, its whole
     scope and what it added; `words`: a permission's or a scope's words; `format`: `diff`, `words`,
-    `none` (empty) or `unknown` (nothing of it is read: never shown raw)."""
-    s = str(value or "").strip().strip(";").strip().strip('"').strip().rstrip(";").strip()
+    `none` (empty) or `unknown` (nothing of it is read: never shown raw, no id taken from it).
+    A diff is read only whole, each side in the canonical form (`_ENTRY`), each scope words."""
+    s = str(value or "").strip().strip('"').strip()
     if not s:
         return {"grants": [], "words": "", "format": "none"}
+    unknown = {"grants": [], "words": "", "format": "unknown"}
     if "=>" in s:
-        old, new = s.split("=>", 1)
-        before = {e.get("Id"): set(words(e.get("Scope")).split()) for e in _entries(old)}
-        grants, unread = [], 0
-        for e in _entries(new):
-            scope = words(e.get("Scope"))
-            added = [w for w in scope.split() if w not in before.get(e.get("Id"), set())]
-            if e.get("Id") in before and not added:
+        m = _DIFF_RE.fullmatch(s)
+        old, new = (_side(m.group("old")), _side(m.group("new"))) if m else (None, None)
+        if old is None or new is None:
+            return unknown
+        if any(e["scope"].strip() and not words(e["scope"]) for e in old + new):
+            return unknown                                 # a scope that is no words: not read
+        before = {e["id"]: set(words(e["scope"]).split()) for e in old}
+        grants = []
+        for e in new:
+            scope = words(e["scope"])
+            added = [w for w in scope.split() if w not in before.get(e["id"], set())]
+            if e["id"] in before and not added:
                 continue                                   # unchanged: not this consent's
-            gid = graph_id(e.get("Id"))
-            if not (gid or scope):
-                unread += 1                                # neither an id nor a scope: nothing read
-                continue
-            ctype = e.get("ConsentType") if e.get("ConsentType") in _CONSENT_TYPES else ""
-            grants.append({"id": gid, "client": guid(e.get("ClientId")),
-                           "principal": guid(e.get("PrincipalId")), "resource": guid(e.get("ResourceId")),
-                           "consent_type": ctype, "scope": scope, "added": " ".join(added)})
-        empty = re.fullmatch(r"\[\s*\]", new.strip().rstrip(";").strip()) is not None
-        if grants or empty or (_entries(new) and not unread):
-            return {"grants": grants, "words": "", "format": "diff"}
-        return {"grants": [], "words": "", "format": "unknown"}
-    w = words(s)
+            grants.append({"id": graph_id(e["id"]), "client": guid(e["client"]),
+                           "principal": guid(e["principal"]), "resource": guid(e["resource"]),
+                           "consent_type": e["ctype"], "scope": scope, "added": " ".join(added)})
+        return {"grants": grants, "words": "", "format": "diff"}
+    w = words(s.rstrip(";").strip())
     return {"grants": [], "words": w, "format": "words" if w else "unknown"}
 
 

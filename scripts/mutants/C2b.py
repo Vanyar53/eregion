@@ -2,7 +2,8 @@
 gives the id, else a template that says what to replace (never `//`); Graph not read, the ids the
 row names fill the commands; Discord shows each command as code, whole; a consent said in one line
 (the permission, the application, its nature, for whom), never its raw diff.
-M4370–M4374, measured by tests/unit/test_identity_cards.py."""
+M4370–M4374 and M4405–M4409 (the first review), measured by tests/unit/test_identity_cards.py
+(M4409 also by tests/unit/test_chat_escaping.py)."""
 ITEMS = "glorfindel/providers/azure/entra_items.py"
 GRANTS = "glorfindel/providers/azure/entra_grants.py"
 CONSENT = "glorfindel/providers/azure/entra_consent.py"
@@ -28,5 +29,24 @@ MUTANTS = [
     ("M4374", "the consent's raw diff back on the card: `[] => [[Id: …, ClientId: …]]` (C2b)", ENTRA,
      '                + f". {entra_consent.line(row)}")\n',
      '                + f". {entra_consent.line(row)} Permissions : {row.get(\'Permissions\')}")\n'),
+    # Relecture 1 (06/11): M4405–M4409.
+    ("M4405", "a grant the log gives to another application removed by a complete command (C2b r1)", GRANTS,
+     '             if g["id"] and g["client"] == client]          # another application\'s grant: never\n',
+     '             if g["id"]]\n'),
+    ("M4406", "a diff read in pieces: a `]` in a scope forges a second grant, complete (C2b r1)", CONSENT,
+     "    if not _SIDE_RE.fullmatch(text):\n        return None\n",
+     ""),
+    ("M4407", "Graph not read, the application permissions left out of Verify: « held » while one stands (C2b r1)",
+     GRANTS,
+     "            # Verify reads them too: the card is never « held » while an application permission stands.\n"
+     '            check={"kind": "consent_gone", "client": client}))\n',
+     "            check=None))\n"),
+    ("M4408", "a widened scope that is no words taken for unchanged: « not named by the log » (C2b r1)", CONSENT,
+     '        if any(e["scope"].strip() and not words(e["scope"]) for e in old + new):\n',
+     "        if False:\n"),
+    ("M4409", "a plan's step, a name from outside in it, posted raw to Discord (C2b r1)", BOT,
+     "    head = f\"• {discord_text(i.get('n', '?'))}. {discord_text(i.get('what') or '')}\"\n",
+     "    head = f\"• {discord_text(i.get('n', '?'))}. {i.get('what') or ''}\"\n"),
 ]
-TESTS = {f"M{n}": _TESTS for n in range(4370, 4375)}
+TESTS = {f"M{n}": _TESTS for n in list(range(4370, 4375)) + list(range(4405, 4410))}
+TESTS["M4409"] = f"{_TESTS} tests/unit/test_chat_escaping.py"

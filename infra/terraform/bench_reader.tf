@@ -20,7 +20,9 @@
 #   - son principal de service ;
 #   - un certificat public sur l'application, lu du fichier que bench_reader_certificate_file
 #     nomme : un seul bloc CERTIFICATE, rien d'autre (une clé privée collée là par erreur arrête le
-#     plan avant d'entrer dans l'état) ; sa durée est celle du certificat ;
+#     plan avant d'entrer dans l'état, et le diagnostic ne la montre pas : la valeur est sensible) ;
+#     sa fin est celle du certificat, lue de bench_reader_certificate_end_file (keygen l'écrit),
+#     91 jours au plus après le plan ;
 #   - UNE attribution de rôle Azure : Log Analytics Reader, à la portée du workspace du banc seul —
 #     ni le groupe, ni l'abonnement, ni H0 (rg-glorfindel), ni un autre workspace. Aucun rôle
 #     d'annuaire, aucun consentement dans Microsoft Graph.
@@ -53,15 +55,29 @@ variable "bench_reader_certificate_file" {
   nullable    = false
 }
 
+variable "bench_reader_certificate_end_file" {
+  description = "La fin du certificat (RFC 3339, UTC), écrite par make celebrimbor-reader-key à côté du certificat : la fin de l'identifiant posé sur l'application, 91 jours au plus après le plan. Lu seulement quand bench_reader_enabled."
+  type        = string
+  default     = "~/.config/eregion-banc/reader.end"
+  nullable    = false
+}
+
 locals {
   bench_reader_enabled = var.bench_reader_enabled && local.instance == "default"
 
   # Le rôle, et lui seul : lire et interroger le workspace (*/read, query, search), sans ses clés
-  # partagées ni aucune écriture (définition intégrée d'Azure).
+  # partagées (définition intégrée d'Azure). Il porterait aussi Microsoft.Support/* (ouvrir un ticket
+  # de support), sans prise sur le workspace : hypothèse jusqu'à la mesure (docs/operations.md,
+  # « À mesurer au banc »).
   bench_reader_role = "Log Analytics Reader"
 
-  # Lu seulement activé ; un fichier absent donne "" et la précondition du certificat le dit.
-  bench_reader_certificate = local.bench_reader_enabled ? try(file(pathexpand(var.bench_reader_certificate_file)), "") : ""
+  # Lu seulement activé ; un fichier absent donne "" et la précondition du certificat le dit. Sensible :
+  # une clé privée collée là par erreur n'apparaît pas dans le diagnostic de la précondition.
+  bench_reader_certificate = local.bench_reader_enabled ? sensitive(try(file(pathexpand(var.bench_reader_certificate_file)), "")) : ""
+
+  # La fin du certificat, que keygen écrit à côté (RFC 3339, UTC) : posée telle quelle sur
+  # l'identifiant. Sans elle, l'API choisit (« typiquement deux ans », dit le fournisseur azuread).
+  bench_reader_certificate_end = local.bench_reader_enabled ? trimspace(try(file(pathexpand(var.bench_reader_certificate_end_file)), "")) : ""
 }
 
 resource "azuread_application" "bench_reader" {
@@ -87,11 +103,19 @@ resource "azuread_application_certificate" "bench_reader" {
   type           = "AsymmetricX509Cert"
   encoding       = "pem"
   value          = local.bench_reader_certificate
+  end_date       = local.bench_reader_certificate_end
 
   lifecycle {
+    # nonsensitive : le seul résultat du test (vrai ou faux), jamais le contenu du fichier.
     precondition {
-      condition     = can(regex("^\\s*-----BEGIN CERTIFICATE-----\\s+[A-Za-z0-9+/=\\s]+-----END CERTIFICATE-----\\s*$", local.bench_reader_certificate))
+      condition     = nonsensitive(can(regex("^\\s*-----BEGIN CERTIFICATE-----\\s+[A-Za-z0-9+/=\\s]+-----END CERTIFICATE-----\\s*$", local.bench_reader_certificate)))
       error_message = "bench_reader_certificate_file : un seul bloc CERTIFICATE (PEM), et rien d'autre — absent, ou une clé privée à côté. Tirer la paire d'abord (make celebrimbor-reader-key) ; jamais la clé privée dans Terraform."
+    }
+    # Une identité à durée courte : la fin du certificat, 91 jours au plus après le plan (90, et un
+    # jour de marge pour l'heure du keygen).
+    precondition {
+      condition     = can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", local.bench_reader_certificate_end)) && try(timecmp(local.bench_reader_certificate_end, timeadd(plantimestamp(), "2184h")) <= 0, false)
+      error_message = "bench_reader_certificate_end_file : la fin du certificat en RFC 3339 (UTC), 91 jours au plus après le plan — absente, illisible ou trop lointaine. Tirer la paire (make celebrimbor-reader-key) : elle l'écrit."
     }
   }
 }

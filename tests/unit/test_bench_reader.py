@@ -64,8 +64,9 @@ def test_off_by_default_on_the_canonical_instance_only():
     assert 'check "bench_reader_on_the_canonical_instance"' in text
     assert 'condition     = local.instance == "default" || !var.bench_reader_enabled' in text
     # The certificate file is read only when on: off, nothing on the operator's disk is touched.
+    # Sensitive: a private key pasted there by mistake is never shown by the precondition's diagnostic.
     assert ('bench_reader_certificate = local.bench_reader_enabled ? '
-            'try(file(pathexpand(var.bench_reader_certificate_file)), "") : ""') in text
+            'sensitive(try(file(pathexpand(var.bench_reader_certificate_file)), "")) : ""') in text
     example = (TF / "terraform.tfvars.example").read_text(encoding="utf-8")
     assert re.search(r"(?m)^# bench_reader_enabled = true", example)
     assert not re.search(r"(?m)^\s*bench_reader_enabled\s*=", example)
@@ -130,10 +131,64 @@ def test_the_reader_is_never_a_target():
     assert "bench_reader" not in identity
 
 
+def test_the_end_of_the_identifier_is_the_certificate_s_never_the_api_s():
+    """Without end_date, the API picks one (« typically around 2 years », the azuread provider says):
+    the end keygen wrote beside the certificate is posed, 91 days at most after the plan."""
+    text = _reader_tf()
+    assert 'default     = "~/.config/eregion-banc/reader.end"' in text
+    assert ('bench_reader_certificate_end = local.bench_reader_enabled ? '
+            'trimspace(try(file(pathexpand(var.bench_reader_certificate_end_file)), "")) : ""') in text
+    cert = _block(text, "resource", 'azuread_application_certificate" "bench_reader')
+    assert "end_date       = local.bench_reader_certificate_end\n" in cert
+    assert 'timecmp(local.bench_reader_certificate_end, timeadd(plantimestamp(), "2184h")) <= 0' in cert
+    assert "end_date_relative" not in cert
+
+
+needs_tf = pytest.mark.skipif(shutil.which("terraform") is None or not (TF / ".terraform" / "providers").is_dir(),
+                              reason="terraform absent, or infra/terraform not initialized (init -backend=false)")
+
+
+@needs_tf
+def test_a_private_key_beside_the_certificate_is_never_shown_by_the_plan(tmp_path):
+    """The precondition stops the plan, and its diagnostic never shows the file (reproduced before the
+    value was made sensitive: the whole file, in clear): the module copied to tmp (never the
+    operator's tfvars nor state), its providers linked, a mock plan."""
+    mod = tmp_path / "mod"
+    shutil.copytree(TF, mod, ignore=shutil.ignore_patterns(".terraform", "tests", "*.tfvars", "*.tfstate*"))
+    (mod / ".terraform").symlink_to(TF / ".terraform", target_is_directory=True)
+    (mod / "tests").mkdir()
+    marker = "bm90IGEga2V5LCBhIG1hcmtlciB0aGF0IG11c3QgbmV2ZXIgYmUgc2hvd24"
+    crt = (TF / "tests/fixtures/bench_reader.crt").read_text()
+    (mod / "tests" / "two_blocks.pem").write_text(crt + f"-----BEGIN EXAMPLE BLOCK-----\n{marker}\n"
+                                                  "-----END EXAMPLE BLOCK-----\n")
+    (mod / "tests" / "end").write_text("2026-12-06T00:00:00Z\n")
+    head = (TF / "tests" / "bench_reader.tftest.hcl").read_text(encoding="utf-8").split('\nrun "')[0]
+    (mod / "tests" / "leak.tftest.hcl").write_text(head + """
+run "leak" {
+  command = plan
+  variables {
+    bench_reader_enabled              = true
+    bench_reader_certificate_file     = "tests/two_blocks.pem"
+    bench_reader_certificate_end_file = "tests/end"
+  }
+}
+""")
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(home), "CHECKPOINT_DISABLE": "1", "TF_IN_AUTOMATION": "1"}
+    res = subprocess.run(["terraform", f"-chdir={mod}", "test", "-no-color", "-filter=tests/leak.tftest.hcl"],
+                         env=env, capture_output=True, text=True, timeout=300)
+    out = res.stdout + res.stderr
+    assert res.returncode != 0 and "Resource precondition failed" in out, out
+    assert "bench_reader_certificate_file : un seul bloc CERTIFICATE" in out, out
+    assert marker not in out and "BEGIN CERTIFICATE-----\\n" not in out and crt.splitlines()[1] not in out, out
+
+
 def test_every_terraform_test_keeps_it_off_and_its_own_covers_it():
     tftest = (TF / "tests" / "bench_reader.tftest.hcl").read_text(encoding="utf-8")
     for run in ("off_nothing_in_the_tenant_nothing_on_the_workspace", "on_the_exact_role_on_the_workspace_alone",
-                "on_a_private_key_beside_the_certificate_stops_the_plan", "on_no_certificate_file_stops_the_plan"):
+                "on_a_private_key_beside_the_certificate_stops_the_plan", "on_no_certificate_file_stops_the_plan",
+                "on_no_end_date_file_stops_the_plan", "on_an_end_date_beyond_ninety_one_days_stops_the_plan"):
         assert f'run "{run}"' in tftest, run
     for path in (TF / "tests").glob("*.tftest.hcl"):
         text = path.read_text(encoding="utf-8")
@@ -248,10 +303,31 @@ def test_a_code_session_is_refused(tmp_path):
     assert br.banc_session_refusal({"EREGION_BANC_SESSION": "1"}, str(lot))
 
 
+def _banc_env(tmp_path, **extra):
+    d = tmp_path / "banc"
+    return {"EREGION_BANC_SESSION": "1", "EREGION_BANC_DIR": str(d), "AZURE_CONFIG_DIR": str(d / "az"), **extra}
+
+
 def test_only_the_banc_session_uses_it(tmp_path):
     assert "EREGION_BANC_SESSION" in br.banc_session_refusal({}, str(tmp_path))
-    assert br.banc_session_refusal({"EREGION_BANC_SESSION": "yes"}, str(tmp_path))
-    assert br.banc_session_refusal({"EREGION_BANC_SESSION": "1"}, str(tmp_path)) == ""
+    assert br.banc_session_refusal(_banc_env(tmp_path, EREGION_BANC_SESSION="yes"), str(tmp_path))
+    assert br.banc_session_refusal(_banc_env(tmp_path), str(tmp_path)) == ""
+    # The same directory, spelled otherwise: still the reader's.
+    same = _banc_env(tmp_path, AZURE_CONFIG_DIR=str(tmp_path / "banc" / "x" / ".." / "az"))
+    assert br.banc_session_refusal(same, str(tmp_path)) == ""
+
+
+@pytest.mark.parametrize("cfg", [None, "", "~/.azure", "OTHER"])
+def test_the_banc_session_without_the_reader_s_az_config_dir_is_refused(tmp_path, cfg):
+    """Without the reader's AZURE_CONFIG_DIR in its settings, a bare `az` in the Banc session reads the
+    operator's ~/.azure, his own sign-in: refused, said."""
+    env = _banc_env(tmp_path)
+    if cfg is None:
+        del env["AZURE_CONFIG_DIR"]
+    else:
+        env["AZURE_CONFIG_DIR"] = str(tmp_path / "other") if cfg == "OTHER" else cfg
+    said = br.banc_session_refusal(env, str(tmp_path))
+    assert "AZURE_CONFIG_DIR" in said and str(tmp_path / "banc" / "az") in said
 
 
 @pytest.mark.parametrize("raw,days", [(None, 30), ("", 30), ("1", 1), ("90", 90)])
@@ -304,7 +380,7 @@ def banc(tmp_path, monkeypatch):
     work.mkdir()
     env = {k: v for k, v in os.environ.items() if k not in ("EREGION_AGENT_SESSION", "EREGION_BANC_DAYS")}
     env.update({"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "HOME": str(home), "EREGION_BANC_DIR": str(d),
-                "EREGION_BANC_SESSION": "1", "FAKE_AZ_LOG": str(log),
+                "EREGION_BANC_SESSION": "1", "AZURE_CONFIG_DIR": str(d / "az"), "FAKE_AZ_LOG": str(log),
                 "AZURE_CLIENT_SECRET": "the-operator-s", "ARM_SUBSCRIPTION_ID": "00000000-0000-0000-0000-000000000000"})
 
     def run(*args, extra=None, cwd=work, stdin=""):
@@ -340,6 +416,7 @@ def test_query_reads_the_profile_s_workspace_alone(banc):
     ({"EREGION_AGENT_SESSION": "1"}, False, "session de code"),
     ({"EREGION_BANC_SESSION": ""}, False, "EREGION_BANC_SESSION"),
     ({}, True, "worktree d'un lot"),
+    ({"AZURE_CONFIG_DIR": ""}, False, "AZURE_CONFIG_DIR"),
 ])
 @pytest.mark.parametrize("cmd", [("login",), ("query", "Syslog"), ("verify",), ("logout",)])
 def test_a_code_session_is_refused_before_any_call(banc, tmp_path, extra, cwd_lot, said, cmd):
@@ -432,3 +509,24 @@ def test_keygen_a_short_pair_the_key_private_the_certificate_alone_for_terraform
                          capture_output=True, text=True)
     assert end.returncode == 1           # expires within three days: two asked
     assert [p.name for p in d.iterdir() if p.name.startswith(".")] == []
+    # The end Terraform poses on the identifier: the certificate's own, in RFC 3339.
+    assert stat.S_IMODE((d / "reader.end").stat().st_mode) == 0o600
+    enddate = subprocess.run(["openssl", "x509", "-noout", "-enddate", "-in", str(d / "reader.crt")],
+                             capture_output=True, text=True).stdout
+    assert (d / "reader.end").read_text() == br.end_date(enddate) + "\n"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\n", (d / "reader.end").read_text())
+    assert "reader.end" in out
+
+
+@pytest.mark.parametrize("raw,rfc", [
+    ("notAfter=Dec  6 12:00:00 2026 GMT\n", "2026-12-06T12:00:00Z"),
+    ("notAfter=Feb 28 23:59:59 2027 GMT", "2027-02-28T23:59:59Z"),
+])
+def test_the_certificate_s_end_in_rfc_3339(raw, rfc):
+    assert br.end_date(raw) == rfc
+
+
+@pytest.mark.parametrize("raw", ["", "notAfter=Dec  6 12:00:00 2026", "notAfter=6/12/2026 GMT", "garbage GMT"])
+def test_an_unreadable_end_is_refused(raw):
+    with pytest.raises(br.ReaderError, match="illisible"):
+        br.end_date(raw)

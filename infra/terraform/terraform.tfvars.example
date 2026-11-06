@@ -45,3 +45,4 @@ vm_shutdown_email    = "you@example.com"
 # « L'identité de lecture du banc (BRO1) »).
 # bench_reader_enabled = true
 # bench_reader_certificate_file = "~/.config/eregion-banc/reader.crt"   # le défaut
+# bench_reader_certificate_end_file = "~/.config/eregion-banc/reader.end"   # le défaut : la fin du certificat, que keygen écrit

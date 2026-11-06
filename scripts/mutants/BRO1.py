@@ -2,7 +2,8 @@
 its principal, a certificate whose private key never enters Terraform, Log Analytics Reader on the
 bench's workspace alone (infra/terraform/bench_reader.tf), and the script the session signs in and
 queries with (scripts/bench_reader.py): a code session refused, the Banc session's variable wanted,
-a short certificate, the operator's Azure identity never mixed in. M4420–M4424, measured by
+a short certificate whose end is posed, the operator's Azure identity never mixed in, the
+certificate never shown by a failed plan. M4420–M4424, M4495–M4498, measured by
 tests/unit/test_bench_reader.py (the Terraform plan itself: infra/terraform/tests/bench_reader.tftest.hcl).
 """
 SCRIPT = "scripts/bench_reader.py"
@@ -24,5 +25,17 @@ MUTANTS = [
      "workspace alone (BRO1)", READER_TF,
      "  scope                = azurerm_log_analytics_workspace.celebrimbor.id\n",
      "  scope                = azurerm_resource_group.celebrimbor.id\n"),
+    ("M4495", "the Banc session without the reader's AZURE_CONFIG_DIR: a bare az in it reads the operator's "
+     "~/.azure, his own sign-in (BRO1)", SCRIPT,
+     "    if not cfg or Path(cfg).expanduser().resolve() != own.expanduser().resolve():\n", "    if False:\n"),
+    ("M4496", "the certificate file no longer sensitive: a private key pasted beside it shown in clear by the "
+     "precondition's diagnostic (BRO1)", READER_TF,
+     'sensitive(try(file(pathexpand(var.bench_reader_certificate_file)), ""))',
+     'try(file(pathexpand(var.bench_reader_certificate_file)), "")'),
+    ("M4497", "no end_date posed: the identifier's end the API's (« typically around 2 years »), not the "
+     "certificate's (BRO1)", READER_TF,
+     "  end_date       = local.bench_reader_certificate_end\n", ""),
+    ("M4498", "keygen writes no end: Terraform's plan stops, or poses an older one (BRO1)", SCRIPT,
+     '        _write_private(d / "reader.end", f"{when}\\n".encode())\n', ""),
 ]
-TESTS = {f"M{n}": _TESTS for n in range(4420, 4425)}
+TESTS = {**{f"M{n}": _TESTS for n in range(4420, 4425)}, **{f"M{n}": _TESTS for n in range(4495, 4499)}}

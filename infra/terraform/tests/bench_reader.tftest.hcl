@@ -38,14 +38,6 @@ override_resource {
 }
 
 override_resource {
-  target          = azuread_application_certificate.bench_reader
-  override_during = plan
-  values = {
-    end_date = "2026-12-06T00:00:00Z"
-  }
-}
-
-override_resource {
   target          = azurerm_log_analytics_workspace.celebrimbor
   override_during = plan
   values = {
@@ -58,13 +50,14 @@ variables {
   # La clé jetable du test d'ID1 (sa clé privée n'a jamais été gardée).
   admin_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHJsmbq1cw7yKD96VpcLp0pc+ghC6Shc4ZG5t9jktOyi id1-test"
   # Hermétique face au terraform.tfvars de l'opérateur (qui peut les activer).
-  activity_log_enabled          = false
-  entra_logs_enabled            = false
-  auditd_enabled                = false
-  entra_test_identity_enabled   = false
-  entra_bench_unit_enabled      = false
-  bench_reader_enabled          = false
-  bench_reader_certificate_file = "tests/fixtures/bench_reader.crt"
+  activity_log_enabled              = false
+  entra_logs_enabled                = false
+  auditd_enabled                    = false
+  entra_test_identity_enabled       = false
+  entra_bench_unit_enabled          = false
+  bench_reader_enabled              = false
+  bench_reader_certificate_file     = "tests/fixtures/bench_reader.crt"
+  bench_reader_certificate_end_file = "tests/fixtures/bench_reader.end"
 }
 
 run "off_nothing_in_the_tenant_nothing_on_the_workspace" {
@@ -80,8 +73,8 @@ run "off_nothing_in_the_tenant_nothing_on_the_workspace" {
     error_message = "désactivée, la sortie nomme une identité de lecture"
   }
   assert {
-    condition     = local.bench_reader_certificate == ""
-    error_message = "désactivée, le certificat est lu quand même"
+    condition     = local.bench_reader_certificate == "" && local.bench_reader_certificate_end == ""
+    error_message = "désactivée, le certificat ou sa fin est lu quand même"
   }
 }
 
@@ -129,6 +122,11 @@ run "on_the_exact_role_on_the_workspace_alone" {
     condition     = azuread_application_certificate.bench_reader[0].value == file("tests/fixtures/bench_reader.crt")
     error_message = "le certificat posé n'est pas celui du fichier nommé"
   }
+  # La fin de l'identifiant est celle que keygen a écrite, jamais celle que l'API choisirait.
+  assert {
+    condition     = azuread_application_certificate.bench_reader[0].end_date == "2026-12-06T00:00:00Z"
+    error_message = "la fin de l'identifiant n'est pas celle du fichier nommé"
+  }
   # Elle n'est pas une cible : ni la clé Entra, ni la clé ARM d'IDI1.
   assert {
     condition     = !contains(keys(azurerm_resource_group.celebrimbor.tags), "eregion-identities")
@@ -164,6 +162,28 @@ run "on_no_certificate_file_stops_the_plan" {
   variables {
     bench_reader_enabled          = true
     bench_reader_certificate_file = "tests/fixtures/absent.crt"
+  }
+
+  expect_failures = [azuread_application_certificate.bench_reader]
+}
+
+run "on_no_end_date_file_stops_the_plan" {
+  command = plan
+
+  variables {
+    bench_reader_enabled              = true
+    bench_reader_certificate_end_file = "tests/fixtures/absent.end"
+  }
+
+  expect_failures = [azuread_application_certificate.bench_reader]
+}
+
+run "on_an_end_date_beyond_ninety_one_days_stops_the_plan" {
+  command = plan
+
+  variables {
+    bench_reader_enabled              = true
+    bench_reader_certificate_end_file = "tests/fixtures/bench_reader_far.end"
   }
 
   expect_failures = [azuread_application_certificate.bench_reader]

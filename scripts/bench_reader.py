@@ -17,13 +17,16 @@ operator's machine: Terraform gets the public certificate only, so the key never
 Its directory (EREGION_BANC_DIR, else ~/.config/eregion-banc; 0700, the user's):
   reader.pem    the private key and its certificate, what `az login --certificate` reads (0600)
   reader.crt    the public certificate, what Terraform puts on the application (0600)
+  reader.end    the certificate's end (RFC 3339), what Terraform poses as the identifier's end (0600)
   profile.env   tenant, application, workspace: identifiers, no secret (0600)
   az/           the session's AZURE_CONFIG_DIR, never the operator's ~/.azure (0700)
 
 A code session never uses it (docs/sessions.md): every command but `status` refuses inside one —
 EREGION_AGENT_SESSION set (the sessions of the repository, SEC12), or a lot's worktree
 (.claude/worktrees/) as the current directory; `login`, `query`, `verify` and `logout` also want
-EREGION_BANC_SESSION=1, which only the Banc session's own settings set. A guard against a mistake,
+EREGION_BANC_SESSION=1 and AZURE_CONFIG_DIR set to the reader's az/, which only the Banc session's
+own settings set (without the latter, a bare `az` in the session reads the operator's ~/.azure). A
+guard against a mistake,
 not against a session that means harm: every session runs as the same Unix user
 (docs/design/modele-de-menace.md, frontière 8).
 
@@ -42,6 +45,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 GUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -60,8 +64,9 @@ class ReaderError(Exception):
     """Said on stderr, exit 1."""
 
 
-def reader_dir() -> Path:
-    return Path(os.environ.get("EREGION_BANC_DIR") or Path.home() / ".config" / "eregion-banc")
+def reader_dir(env: dict[str, str] | None = None) -> Path:
+    env = os.environ if env is None else env
+    return Path(env.get("EREGION_BANC_DIR") or Path.home() / ".config" / "eregion-banc")
 
 
 # ── the guard ────────────────────────────────────────────────────────────────
@@ -80,7 +85,9 @@ def code_session_refusal(env: dict[str, str] | None = None, cwd: str | None = No
 
 
 def banc_session_refusal(env: dict[str, str] | None = None, cwd: str | None = None) -> str:
-    """Why this is not the Banc session, or ''."""
+    """Why this is not the Banc session, or ''. The Banc session's settings also set its
+    AZURE_CONFIG_DIR to the reader's: without it, a bare `az` in the session reads the operator's
+    ~/.azure, his own sign-in."""
     env = os.environ if env is None else env
     refusal = code_session_refusal(env, cwd)
     if refusal:
@@ -88,6 +95,12 @@ def banc_session_refusal(env: dict[str, str] | None = None, cwd: str | None = No
     if env.get("EREGION_BANC_SESSION") != "1":
         return ("EREGION_BANC_SESSION n'est pas 1 : seule la session Banc s'en sert, lancée depuis son "
                 "dossier (docs/operations.md, « L'identité de lecture du banc (BRO1) »)")
+    own = reader_dir(env) / "az"
+    cfg = env.get("AZURE_CONFIG_DIR", "")
+    if not cfg or Path(cfg).expanduser().resolve() != own.expanduser().resolve():
+        return (f"AZURE_CONFIG_DIR n'est pas {own} : sans lui, un az nu de la session lit ton ~/.azure, ta "
+                "propre connexion. Le poser dans le .claude/settings.local.json de ~/eregion-banc/ "
+                "(docs/operations.md, « La remise à la session Banc »)")
     return ""
 
 
@@ -182,8 +195,21 @@ def parse_days(raw: str | None) -> int:
     return days
 
 
+def end_date(enddate: str) -> str:
+    """`openssl x509 -enddate` (notAfter=Dec  6 12:00:00 2026 GMT) in RFC 3339, UTC: the end
+    Terraform poses on the identifier (bench_reader_certificate_end_file), never the API's."""
+    value = enddate.strip().removeprefix("notAfter=")
+    if not value.endswith(" GMT"):
+        raise ReaderError(f"la fin du certificat est illisible ({enddate.strip()[:60]!r})")
+    try:
+        when = datetime.strptime(" ".join(value.removesuffix(" GMT").split()), "%b %d %H:%M:%S %Y")
+    except ValueError:
+        raise ReaderError(f"la fin du certificat est illisible ({enddate.strip()[:60]!r})")
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def keygen(d: Path, days: int, openssl: str = "openssl") -> None:
-    """A fresh RSA key and its self-signed certificate; the key never leaves `d`."""
+    """A fresh RSA key, its self-signed certificate and the certificate's end; the key never leaves `d`."""
     _ensure_dir(d)
     with tempfile.TemporaryDirectory(dir=d, prefix=".keygen.") as tmp:
         key, crt = Path(tmp) / "k", Path(tmp) / "c"
@@ -192,9 +218,16 @@ def keygen(d: Path, days: int, openssl: str = "openssl") -> None:
                              capture_output=True, text=True, timeout=120)
         if res.returncode != 0 or not key.exists() or not crt.exists():
             raise ReaderError(f"openssl a échoué : {res.stderr.strip()[:300]}")
+        end = subprocess.run([openssl, "x509", "-noout", "-enddate", "-in", str(crt)],
+                             capture_output=True, text=True, timeout=30)
+        if end.returncode != 0:
+            raise ReaderError(f"openssl a échoué : {end.stderr.strip()[:300]}")
+        when = end_date(end.stdout)
         cert = crt.read_bytes()
         _write_private(d / "reader.pem", key.read_bytes() + cert)
         _write_private(d / "reader.crt", cert)
+        # Last: if it fails, the end left is the older one, earlier than the new certificate's.
+        _write_private(d / "reader.end", f"{when}\n".encode())
 
 
 # ── az, as the reader ────────────────────────────────────────────────────────
@@ -274,8 +307,10 @@ def main(argv: list[str] | None = None) -> int:
         if a.cmd == "keygen":
             days = parse_days(os.environ.get("EREGION_BANC_DAYS"))
             keygen(d, days)
-            print(f"{d}/reader.pem (la clé, 0600) et {d}/reader.crt (le certificat public) : {days} jours. "
-                  "Puis make celebrimbor-reader-plan, et make celebrimbor-reader-up YES=1.")
+            end = (d / "reader.end").read_text(encoding="utf-8").strip()
+            print(f"{d}/reader.pem (la clé, 0600), {d}/reader.crt (le certificat public) et {d}/reader.end "
+                  f"(sa fin, {end}) : {days} jours. Puis make celebrimbor-reader-plan, et make "
+                  "celebrimbor-reader-up YES=1.")
         elif a.cmd == "profile":
             text = profile_from_output(sys.stdin.read())
             _ensure_dir(d)
@@ -287,6 +322,9 @@ def main(argv: list[str] | None = None) -> int:
                                  capture_output=True, text=True, timeout=30)
             print(f"application {p['EREGION_BANC_CLIENT_ID']}, workspace {p['EREGION_BANC_WORKSPACE_ID']} ({ROLE})")
             print(f"certificat : {end.stdout.strip() or 'illisible'}")
+            posed = d / "reader.end"
+            print(f"fin posée sur l'identifiant (reader.end) : "
+                  f"{posed.read_text(encoding='utf-8').strip() if posed.is_file() else 'absente'}")
         elif a.cmd == "login":
             p = _session(d)
             res = _az(d, login_args(p, d))

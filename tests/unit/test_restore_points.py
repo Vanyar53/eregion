@@ -13,12 +13,15 @@ RulePoller — no Azure, no model. What is held:
     ingested alone make no card — anyone else's card comes at the pass where their line lands;
   - the same operations by a human, or by any other principal, make a card — under a
     backup's own correlation id too (a client chooses it);
-  - a failure makes none — the operation's latest line is read;
+  - a failure alone makes none; an operation that succeeded makes one, whatever its
+    latest line (AL1d, #600) — a success that may be Azure Backup's never counts as
+    another caller's;
   - RETRIEVESASURIS alone makes one; so does a disk restore point's download access;
   - the card names the operation and the resource, and the caller that decided it — a bare
     latest line, or Azure Backup's, takes the caller another line names;
   - Glorfindel's identity on a restore point is kept, critical — its latest line bare too;
-  - the snapshot rule does not change.
+  - the snapshot rule is not extended to restore points: its sha256 is held (AL1d changed
+    it since, to read an operation that succeeded — the digest follows).
 """
 from __future__ import annotations
 
@@ -315,6 +318,59 @@ def test_a_failure_makes_no_card(table, status):
     table += [_line(SAS, "Start", corr="c-f", minutes_ago=5.0),
               _line(SAS, status, corr="c-f", minutes_ago=4.9)]
     assert _cards(table) == []
+
+
+# ── an operation that succeeded: a card, whatever its latest line (AL1d, #600) ──
+
+@pytest.mark.parametrize("success", ["named", "bare"])
+@pytest.mark.parametrize("statuses", [("Start", "Success", "Failure"), ("Started", "succeeded", "Failed")])
+def test_an_operation_that_succeeded_makes_a_card_whatever_its_latest_line(table, success, statuses):
+    """A human's operation, a line that succeeded (naming them, or bare), then a failure as
+    its latest line: it took effect — a card, naming the human, that says so."""
+    start, ok, failed = statuses
+    table += [_line(SAS, start, corr="c-ok", minutes_ago=5.0),
+              _line(SAS, ok, corr="c-ok", minutes_ago=4.9,
+                    **({} if success == "named" else dict(caller="", claims=False))),
+              _line(SAS, failed, corr="c-ok", minutes_ago=4.8)]
+    [sig] = _cards(table)
+    row = sig["raw_signal"]["first_result_row"]
+    assert (row["ActivityStatusValue"], row["Succeeded"], row["Caller"]) == (failed, 1, HUMAN)
+    from glorfindel.agent import _control_plane_text
+    what, _ = _control_plane_text(sig)
+    assert "une de ses lignes a réussi" in what and "a pris effet" in what
+
+
+def test_a_bare_failure_after_a_success_names_the_caller(table):
+    """Its latest line, the failure, names no one: the row names whoever its lines name."""
+    table += [_line(SAS, "Start", corr="c-bf", minutes_ago=5.0, ip="198.51.100.23"),
+              _line(SAS, "Success", corr="c-bf", minutes_ago=4.9, caller="", claims=False),
+              _line(SAS, "Failure", corr="c-bf", minutes_ago=4.8, caller="", claims=False, ip="")]
+    [row] = _rows(table)
+    assert (row["Caller"], row["CallerIpAddress"], row["Succeeded"]) == (HUMAN, "198.51.100.23", 1)
+
+
+@pytest.mark.parametrize("where", ["claims", "caller", "start_only"])
+def test_a_backup_s_success_never_counts_as_another_caller_s(table, where):
+    """A backup's correlation id taken up by someone whose own try failed, on the same restore
+    point: the operation holds Azure Backup's Success (naming it, or bare) and the other
+    caller's failure as its latest line. That Success may be the backup's: the other caller's
+    try only failed — no card."""
+    table += [*_backup(SAS, "b-s", where),
+              _line(SAS, "Start", corr="b-s", minutes_ago=2.0),
+              _line(SAS, "Failure", corr="b-s", minutes_ago=1.9)]
+    assert _rows(table) == []
+    assert _cards(table) == []
+
+
+def test_a_backup_s_correlation_id_with_the_other_caller_s_own_success_makes_a_card(table):
+    """The same, but the other caller's own line succeeded (it names them): it took effect."""
+    table += [*_backup(SAS, "b-s", "start_only"),
+              _line(SAS, "Start", corr="b-s", minutes_ago=2.0),
+              _line(SAS, "Success", corr="b-s", minutes_ago=1.95),
+              _line(SAS, "Failure", corr="b-s", minutes_ago=1.9, caller="", claims=False)]
+    [sig] = _cards(table)
+    row = sig["raw_signal"]["first_result_row"]
+    assert (row["ActivityStatusValue"], row["Succeeded"], row["Caller"]) == ("Failure", 1, HUMAN)
 
 
 # ── what it does not read ─────────────────────────────────────────────────────

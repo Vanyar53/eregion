@@ -572,6 +572,10 @@ rules:
   # ligne peut mêler leurs identifiants. L'identité de Glorfindel reste traitée par
   # l'adaptateur, sur les identifiants qu'elle porte, comme dans les autres règles : aucune de
   # ces opérations n'est à lui — quand l'un d'eux est le sien, la ligne reste, critique.
+  # Une opération qui a réussi est lue quelle que soit sa dernière ligne, comme dans les autres
+  # règles du journal d'activité (AL1d, #600), mais pas par leur forme commune : ses colonnes
+  # ne viennent que des lignes qui nomment un autre appelant (iif(OtherCaller, …)), et seuls
+  # comptent les succès qui ne peuvent pas être ceux d'Azure Backup.
   # RESTOREPOINTCOLLECTIONS/WRITE n'est pas lue : une collection seule ne contient rien, son
   # premier point de restauration fait la carte.
   - name: restorepoint-by-unexpected-caller
@@ -590,9 +594,10 @@ rules:
       stockage), une restauration ou une récupération de fichiers depuis le coffre (Recovery
       Services), ce qu'Azure Backup fait sous son identité — exclu : qui tient le coffre en
       tire les disques sans carte —, une opération dont aucune ligne ne nomme d'appelant,
-      une opération lue par sa dernière ligne, dont l'échec est écarté (limite connue de la
-      famille des règles du journal d'activité, suivie par un lot à part), ni rien sans le
-      journal d'activité dans le workspace.
+      ni rien sans le journal d'activité dans le workspace. Une opération qui a réussi est
+      lue quelle que soit sa dernière ligne, une qui n'a qu'échoué ne l'est pas (AL1d) ; seul
+      compte un succès qui ne peut pas être celui d'Azure Backup — sous le CorrelationId
+      repris d'une sauvegarde, un succès nu ne compte pas pour l'autre appelant.
     enabled: true
     source: azure_activity
     ttp: T1578.001
@@ -619,14 +624,26 @@ rules:
       // Start line (Azure Backup's) may be out of the window or not yet in. Anyone else's Start
       // line names them (ID1-A9 shows each line): their card comes at the pass where it lands.
       // Named*: who else the operation's lines name, to carry on its row (below).
+      // *Succeeded, BackupLines: its lines that succeeded, and whose (AL1d, below).
       | summarize arg_max(TimeGenerated, *), OtherLines = countif(OtherCaller),
+            BackupLines = countif(AzureBackup),
+            OtherSucceeded = countif(OtherCaller and ActivityStatusValue in~ ("Success", "Succeeded")),
+            AnySucceeded = countif(ActivityStatusValue in~ ("Success", "Succeeded")),
             NamedCaller = take_anyif(Caller, OtherCaller and isnotempty(Caller)),
             NamedAppId = take_anyif(CallerAppId, OtherCaller and isnotempty(CallerAppId)),
             NamedObjectId = take_anyif(CallerObjectId, OtherCaller and isnotempty(CallerObjectId)),
             NamedIp = take_anyif(CallerIpAddress, OtherCaller and isnotempty(CallerIpAddress))
           by CorrelationId, OperationNameValue, _ResourceId
       | where OtherLines > 0
-      | where ActivityStatusValue !in~ ("Failure", "Failed")
+      // An operation that succeeded is read, whatever its latest line; one that only failed
+      // is not (AL1d, #600). Only a success that cannot be Azure Backup's counts: a line that
+      // names someone else, or any line when none of the operation's names Azure Backup. Under
+      // a backup's correlation id taken up, a bare Success may be the backup's: it never counts
+      // as the other caller's — their operation is then read by its own success, or its
+      // latest line. (The backup's named line out of the window: its bare Success counts —
+      // a card too many, never one fewer.)
+      | extend Succeeded = iif(BackupLines > 0, OtherSucceeded, AnySucceeded)
+      | where Succeeded > 0 or ActivityStatusValue !in~ ("Failure", "Failed")
       // The row names the caller that decided it, and its address: its latest line's when that
       // line names someone else, else what the lines naming someone else carry (a bare latest
       // line, or Azure Backup's) — each column taken on one of those lines: with several other
@@ -636,7 +653,7 @@ rules:
                CallerAppId = iif(OtherCaller, CallerAppId, NamedAppId),
                CallerObjectId = iif(OtherCaller, CallerObjectId, NamedObjectId),
                CallerIpAddress = iif(OtherCaller, CallerIpAddress, NamedIp)
-      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Succeeded, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
 
   # Notre propre identité surveillée (SID1, #409). Le rôle de réponse tient runCommand pour

@@ -2,7 +2,9 @@
 always read, whatever its latest line; one that only failed is not; and a latest line that
 names no caller keeps the caller its operation's other lines name. M4380–M4389, measured by
 tests/unit/test_activity_operation_read.py (the shipped queries run as written on forged lines,
-through tests/unit/kql_subset.py, then the detector and the RulePoller)."""
+through tests/unit/kql_subset.py, then the detector and the RulePoller). M4490–M4493, after
+AL2's merge: the same reading in its sister rule on restore points, where only a success that
+cannot be Azure Backup's counts — measured by tests/unit/test_restore_points.py."""
 RULES = "glorfindel/rules/azure/detection_rules.yaml"
 AGENT = "glorfindel/agent.py"
 SUBSET = "tests/unit/kql_subset.py"
@@ -65,4 +67,29 @@ MUTANTS = [
      '        (f(r) for r in members if pred(r) and f(r) is not None), None),\n',
      '        (f(r) for r in members if f(r) is not None), None),\n'),
 ]
-TESTS = {f"M{n}": _TESTS for n in range(4380, 4390)}
+
+# ── AL2's sister rule, after the merge (relecture 4 d'AL2, 06/11): restore points ──
+_RP_TESTS = "tests/unit/test_restore_points.py"
+_RP_SUCCEEDED = "      | extend Succeeded = iif(BackupLines > 0, OtherSucceeded, AnySucceeded)\n"
+_RP_KEEP = _RP_SUCCEEDED + _KEEP
+_RP_OTHER_OK = ('            OtherSucceeded = countif(OtherCaller and ActivityStatusValue in~ '
+                '("Success", "Succeeded")),\n')
+_RP_PROJECT = ("               CallerIpAddress = iif(OtherCaller, CallerIpAddress, NamedIp)\n"
+               "      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Succeeded, Caller, "
+               "CallerIpAddress,\n")
+
+MUTANTS += [
+    ("M4490", "restorepoint-by-unexpected-caller reads an operation by its latest line only: one that "
+              "succeeded is not read when its latest line failed (AL1d)", RULES,
+     _RP_KEEP, _RP_SUCCEEDED + _LATEST_ONLY),
+    ("M4491", "restorepoint-by-unexpected-caller counts a bare success under a backup's correlation id: "
+              "the backup's Success taken for the other caller's, whose try only failed (AL1d)", RULES,
+     _RP_SUCCEEDED, "      | extend Succeeded = AnySucceeded\n"),
+    ("M4492", "restorepoint-by-unexpected-caller counts Azure Backup's own success for the other "
+              "caller (AL1d)", RULES,
+     _RP_OTHER_OK, '            OtherSucceeded = countif(ActivityStatusValue in~ ("Success", "Succeeded")),\n'),
+    ("M4493", "restorepoint-by-unexpected-caller no longer projects Succeeded: the card of an operation "
+              "whose latest line failed after one succeeded says only « Failure » (AL1d)", RULES,
+     _RP_PROJECT, _RP_PROJECT.replace("ActivityStatusValue, Succeeded, Caller", "ActivityStatusValue, Caller")),
+]
+TESTS = {**{f"M{n}": _TESTS for n in range(4380, 4390)}, **{f"M{n}": _RP_TESTS for n in range(4490, 4494)}}

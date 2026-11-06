@@ -12,10 +12,12 @@ the real AzureActivityDetector and RulePoller. What is held, for each rule:
   - what each rule already leaves out stays out: another operation, a line older than its
     window, Glorfindel's own isolation; one row per operation; the same columns, plus
     `Succeeded`; the dedup of an operation across polls is unchanged.
-The Run Command rule (SID1) keeps failures by design: every operation is read already.
-And in the four rules, a latest line that names no caller keeps the caller its operation's
-other lines name: Glorfindel's own isolation stays out, its identity elsewhere stays critical,
-its Run Command is read as its own and another's is not this rule's.
+The Run Command rule (SID1) keeps failures by design: every operation is read already. The
+restore point rule (AL2) reads what succeeded in its own form — held here with the others, and
+in tests/unit/test_restore_points.py. And in the first four rules, a latest line that names
+no caller keeps the caller its operation's other lines name: Glorfindel's own isolation stays
+out, its identity elsewhere stays critical, its Run Command is read as its own and another's
+is not this rule's.
 
 Every identifier is made up (repository public): 00000000-… GUIDs, example names,
 documentation addresses (RFC 5737). No Azure, no model.
@@ -61,6 +63,13 @@ RULES = {
 }
 RUN_COMMAND = "run-command-by-glorfindel-outside-isolation"
 RUN_OP = "MICROSOFT.COMPUTE/VIRTUALMACHINES/RUNCOMMAND/ACTION"
+# AL2's sister rule sets failures aside too, in its own form (Azure Backup excluded, the row's
+# columns taken on the lines that name someone else): held here for what every rule holds,
+# and in tests/unit/test_restore_points.py for what is its own.
+RESTOREPOINT = "restorepoint-by-unexpected-caller"
+RESTOREPOINT_OP = ("MICROSOFT.COMPUTE/RESTOREPOINTCOLLECTIONS/RESTOREPOINTS/RETRIEVESASURIS/ACTION",
+                   f"{RG}/Microsoft.Compute/restorePointCollections/rpc-vm1/restorePoints/rp-1")
+OPS = {**RULES, RESTOREPOINT: RESTOREPOINT_OP}
 COLUMNS = ["TimeGenerated", "OperationNameValue", "ActivityStatusValue", "Succeeded", "Caller",
            "CallerIpAddress", "CallerAppId", "CallerObjectId", "_ResourceId", "ResourceGroup",
            "CorrelationId"]
@@ -84,7 +93,7 @@ def _line(rule, status, minutes_ago, corr="c-1", caller=OUTSIDER, oid=OUTSIDER_O
           op=None, target=None, bare=False):
     """One line of AzureActivity, as the table writes it; `bare`: a line that names no
     caller (no Caller, no address, no Claims)."""
-    rule_op, rule_target = RULES.get(rule, (RUN_OP, VM1))
+    rule_op, rule_target = OPS.get(rule, (RUN_OP, VM1))
     return {"Type": "AzureActivity", "TimeGenerated": NOW - timedelta(minutes=minutes_ago),
             "OperationNameValue": op or rule_op, "ActivityStatusValue": status,
             "Caller": "" if bare else caller, "CallerIpAddress": "" if bare else "203.0.113.7",
@@ -98,6 +107,24 @@ def _run(rule, lines):
 
 
 # ── the queries, as written ─────────────────────────────────────────────────────
+
+def test_every_shipped_activity_rule_is_held_here():
+    """A new rule on the Activity Log is read here before it ships: it says whether it sets
+    failures aside, and is held to read an operation that succeeded."""
+    assert {n for n, r in SHIPPED.items() if r.get("source") == "azure_activity"} == {
+        *RULES, RUN_COMMAND, RESTOREPOINT}
+
+
+@pytest.mark.parametrize("rule", [*RULES, RESTOREPOINT])
+def test_every_rule_that_sets_failures_aside_reads_what_succeeded(rule):
+    """The issue's two criteria, in each shipped rule that sets failures aside: an operation
+    with a line that succeeded is one row whatever its latest line; one that only failed is
+    none."""
+    rows = _run(rule, [_line(rule, "Start", 6), _line(rule, "Success", 5), _line(rule, "Failure", 4)])
+    assert [(r["ActivityStatusValue"], r["Succeeded"], r["Caller"]) for r in rows] == [("Failure", 1, OUTSIDER)]
+    assert _run(rule, [_line(rule, "Start", 6), _line(rule, "Failure", 5)]) == []
+    assert _run(rule, [_line(rule, "Failed", 5)]) == []
+
 
 @pytest.mark.parametrize("rule", RULES)
 @pytest.mark.parametrize("statuses", [("Start", "Success", "Failure"),

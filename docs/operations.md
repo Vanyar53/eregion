@@ -3746,6 +3746,334 @@ qui échoue). L'exécuteur d'IR1 les tiendra par ses rôles (geste 7).
 
 ---
 
+## L'identité de lecture du banc (BRO1, #614)
+
+**Décision de Jonathan (06/11).** Une session Claude « Banc » lit les détections et les rapports du banc
+(du KQL sur le workspace Log Analytics du banc) sans lui demander chaque fois. Elle a sa propre
+identité : **Log Analytics Reader sur le seul workspace du banc**, aucun droit d'écriture. Cette
+identité ne sert jamais à un lot de code, seulement à la session Banc. Le Terraform est prêt et
+désactivé ; rien ici n'a été planifié ni appliqué. `<…>` est à remplacer ; rien de réel dans ce dépôt.
+
+### Le type d'identité, et pourquoi
+
+| Forme | Ce qu'elle donne | Pourquoi pas, ou ce qu'elle coûte |
+|---|---|---|
+| **Une application, son principal, un certificat tiré sur ton poste** (retenue) | La clé privée ne quitte jamais ton poste et n'entre jamais dans l'état Terraform : seul le certificat **public** y passe. Durée courte (30 jours par défaut, 90 au plus). `az login --service-principal --certificate` la prend. Elle se révoque en retirant le certificat ou en désactivant le principal. | Un fichier de clé sur le disque, lisible par toute session qui tourne sous ton utilisateur Unix (comme la clé de l'App, SEC12) |
+| Une application, son principal, un secret (`azuread_application_password`) | La forme la plus courte à écrire | Le secret serait en clair dans `infra/terraform/terraform.tfstate` (un état local, dans le dépôt, lisible par toute session) et dans le profil |
+| Une identité managée | Aucun secret | Elle ne s'attache qu'à une ressource Azure ; un poste sous WSL n'en a pas |
+| Un identifiant fédéré (OIDC) | Aucun secret | Il faut un émetteur de jetons, ce que ton poste n'a pas (c'est la forme de la CI, pour le canari) |
+| Ton compte, avec un rôle de plus | Rien à créer | La session porterait tous tes droits |
+| Un utilisateur d'Entra dédié | Une identité nommée | MFA, mot de passe, connexion interactive : rien qu'une session sache tenir seule |
+
+### Ce que le Terraform pose (`infra/terraform/bench_reader.tf`)
+
+| Variable (`terraform.tfvars`) | Ressource | Droit pour l'apply |
+|---|---|---|
+| `bench_reader_enabled = true` | `azuread_application.bench_reader` (`app-celebrimbor-bench-reader`, mono-tenant, aucune permission demandée, **aucun tag d'inscription** : ce n'est pas une cible, IDI1 ne la nomme jamais), `azuread_service_principal.bench_reader`, `azuread_application_certificate.bench_reader` (le certificat public, un seul bloc `CERTIFICATE`), `azurerm_role_assignment.bench_reader` (**Log Analytics Reader**, à la portée du **workspace** du banc seul) | créer une application : **Développeur d'applications** (ou plus) ; attribuer un rôle sur le workspace (Propriétaire ou Administrateur de l'accès utilisateur sur le groupe du banc, ce que l'apply du banc a déjà) |
+| `bench_reader_certificate_file` (défaut `~/.config/eregion-banc/reader.crt`) | le fichier lu pour le certificat, et seulement quand le drapeau est levé | — |
+| `bench_reader_certificate_end_file` (défaut `~/.config/eregion-banc/reader.end`) | la fin du certificat (RFC 3339, UTC), que `keygen` écrit ; posée comme `end_date` de l'identifiant | — |
+
+- **Désactivée par défaut**, dans `terraform.tfvars` (ignoré par git), jamais en `-var` d'une commande.
+  Instance `default` seule : une autre instance ne la pose pas, et le plan le dit.
+- **Une clé privée collée à côté du certificat arrête le plan** avant d'entrer dans l'état :
+  le fichier doit tenir un seul bloc `CERTIFICATE`, et rien d'autre. Le contenu du fichier est une
+  valeur sensible : le diagnostic de la précondition ne le montre pas (avant la relecture, il
+  l'affichait en entier ; le test `test_a_private_key_beside_the_certificate_is_never_shown_by_the_plan`
+  le prouve hors ligne, quand `infra/terraform` est initialisé).
+- **La fin de l'identifiant est celle du certificat**, posée explicitement (`end_date`) : sans elle,
+  l'API en choisit une, « typiquement deux ans » selon le fournisseur azuread. Le plan s'arrête si
+  `reader.end` manque, est illisible ou tombe à plus de 91 jours.
+- **Aucun fournisseur nouveau** : azuread et azurerm sont déjà verrouillés (CI4). Le
+  `.terraform.lock.hcl` ne change pas.
+- **La sortie `bench_reader`** donne des identifiants seulement, sans secret : le tenant, l'application,
+  le workspace (son GUID et son id ARM), le rôle et la fin du certificat. Elle vaut `null` quand le
+  drapeau est baissé.
+- Le contrat est planifié contre de faux providers dans `infra/terraform/tests/bench_reader.tftest.hcl`
+  (`terraform test`). Les cibles `make` et le script sont testés dans `tests/unit/test_bench_reader.py`.
+
+### Les gestes de Jonathan, dans l'ordre
+
+```bash
+# 0. Lecture seule : le tenant et le compte que prendra l'apply (un az login, jamais un principal).
+az account show --query "{tenant:tenantId, user:user.name, type:user.type}" -o table
+
+# 1. La paire, sur ce poste : la clé ne part jamais.
+make celebrimbor-reader-key            # DAYS=30 par défaut, 90 au plus. Écrit ~/.config/eregion-banc/ (0700) :
+                                       # reader.pem (la clé et son certificat, 0600), reader.crt (le certificat public, 0600),
+                                       # reader.end (la fin du certificat, RFC 3339, 0600)
+
+# 2. Le drapeau, persistant. Si terraform.tfvars a déjà une ligne bench_reader_enabled, la remplacer
+#    (deux lignes pour la même variable : Terraform refuse le fichier).
+grep -n '^bench_reader_enabled' infra/terraform/terraform.tfvars    # rien : ajouter ; une ligne : la remplacer
+printf '\nbench_reader_enabled = true\n' >> infra/terraform/terraform.tfvars   # ignoré par git
+
+# 3. Le plan, relu.
+make celebrimbor-reader-plan           # doit montrer ceci, et rien d'autre :
+                                       # + azuread_application.bench_reader[0] : display_name = "app-celebrimbor-bench-reader",
+                                       #   sign_in_audience = "AzureADMyOrg", sans tags ni required_resource_access
+                                       # + azuread_service_principal.bench_reader[0]
+                                       # + azuread_application_certificate.bench_reader[0] : type = "AsymmetricX509Cert",
+                                       #   value = (sensitive value), end_date = le contenu de reader.end
+                                       # + azurerm_role_assignment.bench_reader[0] : role_definition_name = "Log Analytics Reader",
+                                       #   scope = "/subscriptions/<…>/resourceGroups/rg-celebrimbor/providers/
+                                       #   Microsoft.OperationalInsights/workspaces/law-celebrimbor-<…>", principal_type = "ServicePrincipal"
+                                       # Plan: 4 to add, 0 to change, 0 to destroy ; « Resource targeting is in effect » attendu
+
+# 4. L'apply, une fois le plan relu.
+make celebrimbor-reader-up YES=1
+
+# 5. Le profil de la session Banc : des identifiants, aucun secret.
+make celebrimbor-reader-profile        # ~/.config/eregion-banc/profile.env (0600)
+
+# 6. Vérifier depuis ton terminal, en lecture seule : un seul rôle, sur le workspace, et rien d'autre.
+terraform -chdir=infra/terraform output bench_reader        # client_id = "<…>", certificate_end_date = "<…>"
+# 6a. Azure : l'abonnement du banc nommé (sans --subscription, az ne lit que son abonnement courant).
+az role assignment list --assignee <client_id> --all --subscription <abonnement du banc> -o table
+                                       # une ligne : Log Analytics Reader, scope …/workspaces/law-celebrimbor-<…>
+for sub in $(az account list --query "[].id" -o tsv); do  # puis chaque abonnement que ton compte voit
+  echo "$sub"; az role assignment list --assignee <client_id> --all --subscription "$sub" -o tsv
+done                                   # rien, sauf la ligne ci-dessus sous l'abonnement du banc
+# 6b. Entra (Graph, en lecture) : ce que ces six lectures montrent, et rien de plus — aucun rôle
+#     d'application, aucune appartenance, aucun consentement délégué, aucun rôle d'annuaire, aucun
+#     objet possédé, un seul identifiant.
+SP=$(az ad sp show --id <client_id> --query id -o tsv)
+az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignments" --query "value" -o json
+az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/transitiveMemberOf" --query "value" -o json
+az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/oauth2PermissionGrants" --query "value" -o json
+az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?\$filter=principalId eq '$SP'" --query "value" -o json
+az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/ownedObjects" --query "value" -o json
+                                       # cinq fois [] : une liste vide
+az ad app credential list --id <client_id> --cert -o table   # une ligne : le certificat posé, aucun secret
+az ad app credential list --id <client_id> -o table          # aucune ligne : aucun mot de passe
+# 6c. La fin de l'identifiant : celle du certificat, au jour près.
+openssl x509 -enddate -noout -in ~/.config/eregion-banc/reader.crt   # notAfter=<…> GMT
+cat ~/.config/eregion-banc/reader.end                                 # la même date, en RFC 3339 (Z)
+                                       # certificate_end_date (6, ci-dessus) doit donner la même. Si elle diffère,
+                                       # s'arrêter : Entra n'a pas pris la fin posée (« À mesurer au banc »)
+```
+
+Si le plan d'une de ces étapes montre un autre changement (une dérive du workspace ou du groupe),
+**s'arrêter**, et le traiter à part avec `make celebrimbor-plan`.
+
+**Ce que Glorfindel verra** (si les journaux d'ID1 sont activés ; sans eux, rien) : la création de
+l'application et l'attribution du rôle, dans `AuditLogs` et `AzureActivity`. Ce sont des cartes
+`identity_change` et `control_plane_change`, jamais une action. Deux cartes sont attendues, et
+s'acceptent :
+- **`entra-credential-added`** (T1098.001) à la création, puis à chaque rotation : chaque nouveau
+  certificat est un identifiant ajouté à l'application ;
+- **`entra-sp-unusual-signin`** (T1078.004) quand l'adresse publique du poste change (une autre box,
+  un VPN, un partage de connexion), une fois que le principal a un historique (vu au moins 3 jours
+  de sa base de 14). Les premiers jours, aucune carte de ce côté.
+
+Pas d'exclusion dans la couche du client pour cette identité : ces cartes sont la trace qu'on attend
+d'elle, et une carte qu'on n'attend pas (un certificat ajouté hors rotation, une connexion depuis
+une adresse qui n'est pas la tienne) est exactement ce qu'il faut voir.
+
+### La remise à la session Banc
+
+La session ne lit jamais `.envrc`, `~/.config/eregion/`, `~/.config/eregion-agents/`, `~/.config/gh/` ni
+`host.env`. On lui remet un dossier à part, **`~/.config/eregion-banc/`** (0700, à toi) :
+
+| Fichier | Contenu | Droits |
+|---|---|---|
+| `reader.pem` | la clé privée et son certificat, ce que lit `az login --certificate` | 0600 |
+| `reader.crt` | le certificat public, ce que lit Terraform | 0600 |
+| `reader.end` | la fin du certificat (RFC 3339), ce que Terraform pose comme fin de l'identifiant | 0600 |
+| `profile.env` | `EREGION_BANC_TENANT_ID`, `EREGION_BANC_CLIENT_ID`, `EREGION_BANC_WORKSPACE_ID` (GUID), `EREGION_BANC_WORKSPACE_RESOURCE_ID`, sans aucun secret | 0600 |
+| `az/` | l'`AZURE_CONFIG_DIR` de la session : ses jetons, jamais ton `~/.azure` | 0700 |
+
+Le script refuse un dossier ou un fichier lisible par d'autres.
+
+**Le dossier de la session**, hors du dépôt : `~/eregion-banc/`. Lancée de là
+(`cd ~/eregion-banc && claude --add-dir ~/eregion`), la session ne lit pas
+`~/eregion/.claude/settings.local.json`. Elle n'a donc ni `EREGION_AGENT_SESSION` ni la config des
+sessions (SEC12). **Elle n'est pas pour autant sans identité** : hors de ce bloc `env`, l'aiguilleur
+`~/.local/bin/gh` retombe sur le `gh` du système, et `git` garde ta config globale (`docs/sessions.md`,
+« Ce que la bascule ne ferme pas seule ») ; un `az` nu lit `~/.azure`, ton `az login`. **Sans les
+variables ci-dessous, elle a tes identifiants** (GitHub, Azure) tant qu'ils sont sur le poste.
+**Elle hérite aussi de l'environnement du shell qui la lance** : si `.envrc` y a été sourcé, elle a
+`GLORFINDEL_AZURE_CLIENT_SECRET` et les autres secrets, des `ARM_*` (un `terraform` ou un SDK de la
+session les emploie : le script ne les retire que pour son propre `az`), et un `GH_TOKEN` ou
+`GITHUB_TOKEN` exporté passe outre `GH_CONFIG_DIR`. **Lance-la donc d'un terminal neuf, où `.envrc`
+n'a jamais été sourcé** (ni `direnv` actif sur `~/eregion-banc/`). Avec les variables ci-dessous et
+ce terminal neuf, elle n'a aucun de tes identifiants, hors ce qui reste ouvert (plus bas : un nom
+qu'aucune vérification ne reconnaît, l'assistant de VS Code tant que ses variables ne sont pas
+vidées, une clé SSH chargée dans un agent).
+
+Le dossier contient un `.claude/settings.local.json` à lui. C'est **ton fichier** : une session ne
+l'écrit pas, ce dépôt non plus. Remplace `<toi>` par ton utilisateur (des chemins absolus : le bloc
+`env` ne développe pas `~`) :
+
+```json
+{
+  "env": {
+    "EREGION_BANC_SESSION": "1",
+    "AZURE_CONFIG_DIR": "/home/<toi>/.config/eregion-banc/az",
+    "GH_CONFIG_DIR": "/home/<toi>/eregion-banc/.gh-vide",
+    "GIT_CONFIG_GLOBAL": "/home/<toi>/eregion-banc/.gitconfig",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_ASKPASS": "",
+    "SSH_ASKPASS": ""
+  },
+  "permissions": {
+    "deny": ["Bash(git push*)", "Bash(gh *)"]
+  }
+}
+```
+
+- `AZURE_CONFIG_DIR` : un `az` lancé dans la session prend les jetons de l'identité de lecture, jamais
+  ton `~/.azure`. Le script le vérifie : `login`, `query`, `verify` et `logout` refusent si la
+  variable ne nomme pas `~/.config/eregion-banc/az` ;
+- `GH_CONFIG_DIR` : un dossier vide, à créer (`mkdir -m 700 ~/eregion-banc/.gh-vide`). `gh` n'y trouve
+  aucun jeton, et échoue sur toute requête authentifiée ;
+- `GIT_CONFIG_GLOBAL` : une config `git` sans assistant d'identifiants, à créer
+  (`printf '[user]\n\tname = Session Banc\n\temail = banc@invalid\n[credential]\n\thelper =\n' > ~/eregion-banc/.gitconfig`) ;
+  ta config globale n'est plus lue, et le `helper =` vide efface un assistant venu de la config du
+  système (`/etc/gitconfig`) ;
+- `GIT_TERMINAL_PROMPT=0` : `git` ne demande rien **dans le terminal**. Il ne ferme pas un assistant
+  graphique : `git` appelle `GIT_ASKPASS` (ou `SSH_ASKPASS`) avant, et indépendamment de cette
+  variable ;
+- `GIT_ASKPASS` et `SSH_ASKPASS` vides : une session lancée d'un **terminal intégré de VS Code** en
+  hérite (avec `VSCODE_GIT_IPC_HANDLE`), et VS Code sert alors l'identifiant par ta connexion GitHub.
+  Vides, `git` les ignore ; un `push` en https échoue au lieu de passer ;
+- les `deny`, en option : `git push` et `gh` refusés avant même de partir. Une ceinture : la session
+  n'a rien à pousser.
+
+**Au premier geste de la session**, vérifier les seuls noms des variables non vides (jamais les
+valeurs) :
+
+```bash
+env | awk -F= '$2 != "" {print $1}' \
+  | grep -E '^(ARM_|AZURE_|GH_|GITHUB_|VSCODE_GIT)|SECRET|TOKEN|ASKPASS|KEY|PASSWORD|WEBHOOK' \
+  | grep -vE '^(CLAUDE_CODE_|ANTHROPIC_)'
+                                       # AZURE_CONFIG_DIR et GH_CONFIG_DIR, rien d'autre
+                                       # (CLAUDE_CODE_* et ANTHROPIC_* écartés : l'accès au modèle de la session)
+```
+
+Le script fait la même vérification, sur une liste plus courte : `login`, `query` et `verify`
+refusent une session qui a hérité d'une variable `ARM_*`, `AZURE_*` (hors `AZURE_CONFIG_DIR`),
+`GH_*` (hors `GH_CONFIG_DIR`), `GITHUB_*`, dont le nom contient `SECRET` ou `TOKEN` (hors
+`CLAUDE_CODE_*` et `ANTHROPIC_*`, l'accès au modèle), ou d'un `GIT_ASKPASS`, `SSH_ASKPASS` ou
+`VSCODE_GIT_*` non vide. Il en dit les noms, jamais les valeurs. `logout` reste permis : effacer les
+jetons de la lecture ne coûte rien.
+
+Ce qui reste ouvert :
+- **un secret hérité du shell de lancement** sous un nom que ni le script ni la vérification ne
+  reconnaissent : d'où le terminal neuf, plutôt que la liste ;
+- **l'assistant d'identifiants de VS Code** : une session lancée d'un terminal intégré de VS Code
+  hérite de son `GIT_ASKPASS` et de `VSCODE_GIT_IPC_HANDLE`. Les deux variables vides ci-dessus et
+  le refus du script le ferment ; si un doute reste, lance la session d'un terminal hors de VS Code.
+  Que VS Code serve l'identifiant **sans un clic** de ta part reste à mesurer ;
+- **une clé SSH chargée dans un agent** (`SSH_AUTH_SOCK`) sert encore à `git push` en SSH. Le retrait
+  de tes identifiants du poste (`docs/sessions.md`, « Retirer tes identifiants du poste des
+  sessions ») le ferme ; la règle `deny` ci-dessus, en attendant.
+
+La session lit le dépôt (les règles, les docs) par `--add-dir`. Son premier message :
+
+> Tu es la session Banc d'Eregion. Lis ~/eregion/CLAUDE.md, puis ~/eregion/docs/operations.md,
+> « L'identité de lecture du banc (BRO1) ». Ton premier geste : la vérification des noms de ton
+> environnement (« La remise à la session Banc »), `CLAUDE_CODE_*` et `ANTHROPIC_*` écartés ;
+> autre chose qu'`AZURE_CONFIG_DIR` et `GH_CONFIG_DIR`, tu t'arrêtes et tu le dis. Tu lis les détections et les rapports du banc par
+> `python3 ~/eregion/scripts/bench_reader.py` seul. Tu n'écris rien, nulle part ; une action sur le banc
+> ou sur H0 reste à Jonathan.
+
+**Ce que la session lance :**
+
+```bash
+python3 ~/eregion/scripts/bench_reader.py login     # az login --service-principal --username <client_id> --tenant <tenant>
+                                                    #   --certificate ~/.config/eregion-banc/reader.pem --allow-no-subscriptions,
+                                                    #   dans AZURE_CONFIG_DIR=~/.config/eregion-banc/az, sans aucune variable
+                                                    #   AZURE_* ni ARM_* du shell
+python3 ~/eregion/scripts/bench_reader.py verify    # une fois, après le login : « lecture : passée »,
+                                                    #   « écriture : refusée (AuthorizationFailed) » (un tag sur le workspace) ;
+                                                    #   si l'écriture passe, le tag est retiré et le script échoue
+python3 ~/eregion/scripts/bench_reader.py query 'Syslog | where TimeGenerated > ago(1d) | take 20' --timespan P1D
+python3 ~/eregion/scripts/bench_reader.py status    # l'application, le workspace, la fin du certificat et celle posée (reader.end)
+python3 ~/eregion/scripts/bench_reader.py logout    # efface ses jetons
+```
+
+Le workspace est celui du profil, jamais un argument.
+
+### Ce qu'elle peut faire, et ce qu'elle ne peut pas
+
+- **Elle peut** lancer des requêtes KQL sur le workspace du banc : `Syslog`, `Perf`, et les tables
+  d'ID1 si elles sont activées (`AzureActivity`, `AuditLogs`,
+  `AADServicePrincipalSignInLogs`). Elle peut aussi lire la configuration du workspace (`*/read` à sa
+  portée).
+- **Le seul workspace n'est pas les seules données du banc.** Avec AL1 (`activity_log_enabled`),
+  `AzureActivity` porte l'activité de **tout l'abonnement** (H0, Orodruin, les noms de compte et les
+  adresses de ceux qui agissent) ; avec C2 et ID1 (`entra_logs_enabled`), `AuditLogs` et
+  `AADServicePrincipalSignInLogs` celle de **tout le tenant**. Ce que la
+  session lit part chez le fournisseur du modèle qu'elle emploie (`design/modele-de-menace.md`,
+  frontières 4 et 8).
+- **Elle ne peut pas** (hypothèse jusqu'à la mesure, « À mesurer au banc ») :
+  - écrire sur le workspace : selon la doc d'Azure, le rôle n'y donne aucune action d'écriture, donc
+    ni table, ni règle de résumé, ni job de recherche, ni tag. Il porterait en revanche
+    `Microsoft.Support/*` (ouvrir un ticket de support), une écriture qui ne touche pas le
+    workspace et, à la portée d'un workspace, sans doute sans effet : les tickets vivent à
+    l'abonnement ;
+  - lire les clés partagées du workspace (exclues du rôle) ;
+  - toucher une autre ressource ARM : le groupe du banc, les VM, `rg-glorfindel` (H0), Orodruin ;
+  - lire un autre workspace ;
+  - appeler Microsoft Graph (aucune permission) ;
+  - atteindre H0 : aucune ressource, aucune clé SSH, aucun jeton de la console.
+
+### La rotation et le retrait
+
+- **Une fin déjà passée ne bloque pas le plan** (pas de borne basse dans la précondition : des plans
+  stables). L'identité ne se connecte simplement plus, et `status` dit la fin posée « PASSÉE ».
+- **La rotation**, avant la fin du certificat (`status` la dit) : `make celebrimbor-reader-key`, puis
+  `make celebrimbor-reader-plan`. Le plan doit montrer le seul certificat remplacé (`1 to add, 0 to
+  change, 1 to destroy`). Ensuite `make celebrimbor-reader-up YES=1`, et un nouveau `login` de la
+  session. Le profil ne change pas. Entre la nouvelle paire et l'apply, le `login` échoue : c'est
+  attendu.
+- **Le retrait** : `bench_reader_enabled = false`, puis `make celebrimbor-reader-plan`
+  (`4 to destroy`) et `make celebrimbor-reader-up YES=1`. Ensuite `rm -r ~/.config/eregion-banc` et
+  le `.claude/settings.local.json` de `~/eregion-banc/`.
+- **En urgence** (une clé exposée), sans attendre Terraform : désactiver le principal
+  (`az ad sp update --id <client_id> --set accountEnabled=false`), puis le retrait ci-dessus. Un jeton
+  déjà tiré reste valable jusqu'à son expiration (une heure environ).
+
+### Ce qui empêche un lot de code de s'en servir
+
+- **La règle** : aucune session de code ne lit ni n'utilise `~/.config/eregion-banc/` ou
+  `scripts/bench_reader.py` (`docs/sessions.md`, « Ce qui reste à Jonathan »).
+- **Le garde-fou** : `scripts/bench_reader.py` refuse avant tout appel : quand
+  `EREGION_AGENT_SESSION` est posé (les sessions du dépôt, SEC12), quand le dossier courant est un
+  worktree de lot (`.claude/worktrees/`), et, pour `login`, `query`, `verify` et `logout`, quand
+  `EREGION_BANC_SESSION` n'est pas `1` ou qu'`AZURE_CONFIG_DIR` ne nomme pas
+  `~/.config/eregion-banc/az` ; pour `login`, `query` et `verify`, quand la session a hérité d'un
+  identifiant du shell qui l'a lancée (ci-dessus). Le `az` d'un lot garde `~/.azure` : il n'y trouve
+  jamais le jeton de la session Banc.
+- **Ce que le garde-fou ne ferme pas** : toutes les sessions tournent sous le même utilisateur Unix.
+  Une session qui le veut lit la clé. Ce qui la borne alors, c'est le droit lui-même : une lecture,
+  sur un seul workspace, pour 90 jours au plus. Pour fermer davantage (ton fichier) : une règle de
+  refus dans `~/eregion/.claude/settings.local.json`,
+  `"permissions": {"deny": ["Read(~/.config/eregion-banc/**)", "Bash(*eregion-banc*)", "Bash(*bench_reader*)"]}`.
+  Elle ne vaut que pour les sessions lancées dans `~/eregion`, pas pour la session Banc. Fermer tout à
+  fait demande un utilisateur Unix propre aux sessions (`design/modele-de-menace.md`, frontières 7 et 8).
+
+### À mesurer au banc
+
+- que `az login --service-principal --certificate --allow-no-subscriptions` passe avec ce seul rôle ;
+- que `az monitor log-analytics query` passe avec Log Analytics Reader seul ;
+- la définition du rôle telle qu'Azure la donne
+  (`az role definition list --name "Log Analytics Reader" --query "[].permissions"`) : on attend
+  `*/read`, `…/query/action`, `…/search/action`, **`Microsoft.Support/*`**, et les clés partagées en
+  `notActions` — c'est ce que dit la doc, rien n'est encore mesuré. Toute autre action (une écriture
+  sur `Microsoft.OperationalInsights`, un `*/write`, un `*/delete`) : s'arrêter, et retirer
+  l'identité ;
+- le délai avant que le rôle prenne effet après l'apply (quelques minutes) ;
+- que `verify` reçoive bien `AuthorizationFailed` ;
+- qu'Entra accepte la fin posée (`end_date`, la fin du certificat au format RFC 3339) et la rende
+  telle quelle : `certificate_end_date` après l'apply, `reader.end` et `openssl x509 -enddate`
+  donnent la même date (geste 6c) ;
+- qu'un second `make celebrimbor-reader-plan`, juste après l'apply, ne montre **aucun changement**.
+  Si Graph rend `end_date` sous une autre forme (des millisecondes, un autre fuseau), le certificat
+  serait remplacé à chaque plan : s'arrêter, et le dire avant le prochain apply.
+
+---
+
 ## auditd au banc (AUD1, #408)
 
 ADM1 et COR1 jugent un `sudo` vers root ; ce qui se fait ensuite dans un shell root, sudo ne l'écrit

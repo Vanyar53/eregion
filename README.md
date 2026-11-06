@@ -278,6 +278,8 @@ Optional, off by default (IDI1): a **test identity in Entra ID** — a single-te
 
 Optional, off by default (IDI1b): **test users in Entra ID**, held by the bench's **restricted administrative unit** — the target of IR1's user verbs. A user carries no tags either, so it is enrolled by two halves: the unit holding it (its id pinned, never looked up by name) **and** the custom security attribute `Eregion.eregionTarget` / `eregionZone` on the user; no role, no group, no licence. The azuread provider cannot make a unit restricted nor define an attribute set: `make celebrimbor-unit-prepare` does it through Microsoft Graph, then `entra_bench_unit_enabled = true` and `make celebrimbor-users-plan` / `celebrimbor-users-up` (`docs/operations.md`, « Les utilisateurs de test du banc (IDI1b) »).
 
+Optional, off by default (BRO1): a **read-only identity for the Claude session « Banc »**, which reads the bench's detections and reports without asking the maintainer each time — never for a code lot. A single-tenant application and its service principal, holding **Log Analytics Reader on the bench's workspace alone**; it signs in with a certificate whose private key is drawn on the operator's machine (`make celebrimbor-reader-key`, 30 days by default) and never enters the Terraform state. `bench_reader_enabled = true`, then `make celebrimbor-reader-plan` / `celebrimbor-reader-up` / `celebrimbor-reader-profile`; the session signs in and queries with `scripts/bench_reader.py`, which refuses inside a code session (`docs/operations.md`, « L'identité de lecture du banc (BRO1) »).
+
 **Cost of the test sandbox** (West Europe, pay-as-you-go — only if you deploy the Terraform):
 
 | Item | Monthly cost |

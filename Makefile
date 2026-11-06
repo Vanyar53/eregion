@@ -152,6 +152,7 @@ DOCKER_GLORFINDEL_WATCH = $(WATCH_KEY_DIR) && $(RUNS_DIRS) && $(GLORFINDEL_AZURE
 	canary-jit providers-lock celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	celebrimbor-logs-plan celebrimbor-logs-up celebrimbor-auditd-plan celebrimbor-auditd-up \
 	celebrimbor-identity-plan celebrimbor-identity-up celebrimbor-unit-prepare celebrimbor-users-plan celebrimbor-users-up \
+	celebrimbor-reader-key celebrimbor-reader-plan celebrimbor-reader-up celebrimbor-reader-profile \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push glorfindel-host-client-rules \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
@@ -241,6 +242,10 @@ help:
 	@echo "  make celebrimbor-unit-prepare [UNIT=] [YES=1] Par Graph : l'ensemble d'attributs Eregion, l'unité restreinte du banc (IDI1b) ; lecture seule sans YES"
 	@echo "  make celebrimbor-users-plan                 Plan des utilisateurs de test du banc seuls (unité, attribut, rôles de l'exécuteur)"
 	@echo "  make celebrimbor-users-up [YES=1]           L'applique (entra_bench_unit_enabled du tfvars ; false : les retire)"
+	@echo "  make celebrimbor-reader-key [DAYS=30]       Clé et certificat de l'identité de lecture du banc, sur ce poste (BRO1)"
+	@echo "  make celebrimbor-reader-plan                Plan de l'identité de lecture seule (application, certificat, Log Analytics Reader)"
+	@echo "  make celebrimbor-reader-up [YES=1]          L'applique (bench_reader_enabled du tfvars ; false : la retire)"
+	@echo "  make celebrimbor-reader-profile             Le profil de la session Banc (aucun secret), depuis les sorties"
 	@echo "  make celebrimbor-auditd-plan [INSTANCE=]    Plan d'auditd seul : l'extension des VM et la DCR (AUD1)"
 	@echo "  make celebrimbor-auditd-up [YES=1]          L'applique (auditd_enabled du tfvars ; false : le retire)"
 	@echo ""
@@ -750,6 +755,38 @@ celebrimbor-users-plan celebrimbor-users-up:
 	@$(TF) init
 	@$(TF) workspace select default
 	@$(TF) $(if $(filter celebrimbor-users-up,$@),apply $(if $(YES),-auto-approve),plan) $(USERS_TARGETS)
+
+# BRO1 (#614) : l'identité de lecture du banc, pour la session Banc seule (bench_reader.tf) — une
+# application, son principal, un certificat PUBLIC, et Log Analytics Reader sur le seul workspace du
+# banc. celebrimbor-reader-key tire la clé, le certificat et sa fin sur ce poste (scripts/bench_reader.py
+# keygen, ~/.config/eregion-banc/, 0600) : la clé privée n'entre jamais dans Terraform. DAYS (30 ; 90
+# au plus) passe par l'environnement, jamais développé par make. Plan et apply ciblés sur ses quatre
+# ressources, rien d'autre du banc (une dérive en attente du workspace ou du groupe y paraîtrait :
+# alors s'arrêter, et la traiter par celebrimbor-plan) ; ce qu'ils posent vient de terraform.tfvars
+# (bench_reader_enabled : persistant), jamais d'un -var d'ici. Remis à false, le même
+# `celebrimbor-reader-up` la retire. celebrimbor-reader-profile écrit le profil de la session Banc
+# depuis les sorties (aucun secret). Instance canonique seulement.
+#   make celebrimbor-reader-key [DAYS=30]      # une paire neuve : la rotation, avant le plan
+#   make celebrimbor-reader-plan               # lecture seule
+#   make celebrimbor-reader-up [YES=1]         # YES=1 : sans confirmation, plan relu avant
+#   make celebrimbor-reader-profile            # ~/.config/eregion-banc/profile.env
+READER_TARGETS = -target=azuread_application.bench_reader -target=azuread_service_principal.bench_reader -target=azuread_application_certificate.bench_reader -target=azurerm_role_assignment.bench_reader
+
+unexport DAYS
+celebrimbor-reader-key: export EREGION_BANC_DAYS = $(value DAYS)
+celebrimbor-reader-key:
+	@python3 scripts/bench_reader.py keygen
+
+celebrimbor-reader-plan celebrimbor-reader-up:
+	@[ "$(INSTANCE)" = "default" ] || { echo "!! $@ : instance '$(INSTANCE)' refusée — l'identité de lecture vit dans le tenant, posée par l'instance canonique (default) seule."; exit 1; }
+	@$(TF) init
+	@$(TF) workspace select default
+	@$(TF) $(if $(filter celebrimbor-reader-up,$@),apply $(if $(YES),-auto-approve),plan) $(READER_TARGETS)
+
+celebrimbor-reader-profile:
+	@[ "$(INSTANCE)" = "default" ] || { echo "!! $@ : instance '$(INSTANCE)' refusée — l'identité de lecture vit dans le tenant, posée par l'instance canonique (default) seule."; exit 1; }
+	@$(TF) workspace select default
+	@$(TF) output -json bench_reader | python3 scripts/bench_reader.py profile
 
 # AUD1 : auditd sur les VM du banc et local6 dans la DCR, seuls — plan et apply ciblés sur
 # l'extension d'auditd et la DCR, rien d'autre du banc (une dérive en attente sur une VM ou le

@@ -194,6 +194,12 @@ Et jamais, par personne : lire `.envrc`, `~/.config/eregion/`, `~/.config/eregio
 l'App : seul `scripts/agent_token.py` la lit), `~/.config/gh/`, `infra/glorfindel-host/host.env` ou un
 fichier de secrets.
 
+Et jamais, par une session de code (un lot, l'Orchestre, une session de rôle) : lire ou utiliser
+l'identité de lecture du banc, `~/.config/eregion-banc/` et `scripts/bench_reader.py`. Elle est à la
+seule session « Banc », lancée depuis son propre dossier, hors du dépôt (BRO1, décision de Jonathan du
+06/11 ; `docs/operations.md`, « L'identité de lecture du banc (BRO1) »). Le script refuse dans une
+session du dépôt (`EREGION_AGENT_SESSION`) ou dans le worktree d'un lot.
+
 Les questions de conception se posent à Jonathan en interactif, une à la fois (`AskUserQuestion`), en mettant
 l'option recommandée en premier. La réponse s'écrit dans la doc de conception avec sa date.
 

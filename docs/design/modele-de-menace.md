@@ -17,6 +17,7 @@ _SEC6 (#277), 28/10, sur la 0.4.3. Une page par frontière : qui y est de confia
 | [5. Les hôtes](#5-les-hôtes--h0-orodruin-le-banc) | l'opérateur, l'hôte (root) | identités Azure, actions sur le cloud, injecteurs |
 | [6. La CI et le CD](#6-la-ci-et-le-cd-github-release-tags) | le mainteneur, `main` protégée | code des PR, événements GitHub, secrets, releases vers H0 |
 | [7. Les sessions d'agents → `main` → le CD](#7-les-sessions-dagents--main--le-cd) | le mainteneur (tags `v*`, release, réglages) ; les sessions, pour le code qu'elles fusionnent | branches, PR, fusions, verdicts de relecture, releases en brouillon |
+| [8. La session Banc](#8-la-session-banc-et-lidentité-de-lecture-du-banc) | Jonathan (la paire de clés, l'apply, le profil) ; la session Banc, pour lire | requêtes KQL vers le workspace du banc, leurs résultats vers le modèle |
 
 ---
 
@@ -350,6 +351,38 @@ _SEC12 (#418), 02/11. Décision de Jonathan : une identité propre aux sessions 
 - un utilisateur Unix propre aux sessions — planifié
 - la règle des tags lue par H0 sans jeton, à mesurer — planifié : #418
 - la fusion d'une PR de workflow par l'App, à mesurer — planifié
+
+---
+
+## 8. La session Banc et l'identité de lecture du banc
+
+_BRO1 (#614), 06/11. Décision de Jonathan : une session Claude « Banc » lit les journaux du banc sous sa propre identité, Log Analytics Reader sur le seul workspace du banc ; jamais un lot de code._
+
+**De confiance** : Jonathan, qui tire la paire de clés, applique le Terraform et remet le profil ; la session Banc, pour lire. **Pas de confiance** : le contenu des journaux qu'elle lit (un attaquant sur une VM du banc écrit ses lignes, et ce que le modèle lit est une entrée) ; une session de code qui voudrait s'en servir.
+
+**Ce qui la traverse** : des requêtes KQL vers le workspace du banc, et leurs résultats vers la session, donc vers le fournisseur du modèle (frontière 4) ; un certificat public vers Entra ID. La clé privée reste sur le poste.
+
+| | Menace | Ce qui la tient |
+|---|---|---|
+| S | Une session de code se sert de l'identité de la session Banc | Le script refuse avant tout appel dans trois cas : `EREGION_AGENT_SESSION` posé, le worktree d'un lot, `EREGION_BANC_SESSION` absent. La session Banc est lancée hors du dépôt, sans l'identité GitHub des sessions. La règle est dans `docs/sessions.md` (BRO1, `scripts/bench_reader.py`, `tests/unit/test_bench_reader.py`, M4420, M4421). C'est un garde-fou contre l'erreur, pas contre une session qui le veut : même utilisateur Unix |
+| T | L'identité écrit sur le banc : une règle, une table, un paramètre de diagnostic, un tag | Un seul rôle, Log Analytics Reader, qui ne contient aucune action d'écriture. Sa portée est le workspace, jamais le groupe ni l'abonnement (`infra/terraform/bench_reader.tf`, `terraform test`, M4424). `bench_reader.py verify` mesure une écriture refusée |
+| R | Une lecture qu'on ne peut pas attribuer | Les connexions sont dans `AADServicePrincipalSignInLogs` (ID1), sous un principal propre, jamais le compte de Jonathan. Glorfindel voit sa création (`identity_change`, `control_plane_change`) |
+| I | La clé privée fuit | La clé est tirée sur le poste et n'entre jamais dans l'état Terraform : un fichier de certificat qui porte autre chose qu'un bloc `CERTIFICATE` arrête le plan. Elle est en 0600 dans un dossier 0700, refusée si d'autres peuvent la lire. Le certificat vit 30 jours (90 au plus). L'identité ne lit que ce workspace |
+| D | La session privée de lecture : certificat expiré, principal désactivé | Rien ne bascule sur une autre identité : la connexion échoue, et l'erreur est dite. `status` dit la fin du certificat. Glorfindel ne dépend pas d'elle |
+| E | L'identité sert de marche vers plus de droits : un autre workspace, H0, Graph, un rôle d'annuaire | Aucune permission Graph, aucun rôle d'annuaire, aucun tag d'inscription (ce n'est jamais une cible d'IDI1). Le rôle est à la portée du workspace seul, sans aucune ressource de H0 ni d'Orodruin. `az` tourne sans les variables `AZURE_*` ni `ARM_*` de l'appelant, dans son propre `AZURE_CONFIG_DIR` (M4423) |
+
+**Où c'est** : `infra/terraform/bench_reader.tf`, `scripts/bench_reader.py`, le `Makefile` (`celebrimbor-reader-*`), `docs/operations.md` (« L'identité de lecture du banc (BRO1) »), `docs/sessions.md` ; tests `infra/terraform/tests/bench_reader.tftest.hcl`, `tests/unit/test_bench_reader.py`.
+
+**Ce qui reste, assumé** :
+- La clé est lisible par toute session qui tourne sous le même utilisateur Unix. Le droit la borne : une lecture, sur un seul workspace, pour 90 jours au plus, révocable en désactivant le principal.
+- Ce que la session lit entre dans le contexte du modèle (frontière 4). Si ID1 est activé, ce sont l'audit et les connexions des principaux du tenant entier : des noms et des adresses partent chez le fournisseur choisi.
+- Une ligne de journal peut tromper la session (injection). Elle ne peut alors qu'écrire du texte : elle n'a aucun droit d'écriture.
+
+**Ouvert** :
+- les gestes de Jonathan qui ouvrent cette frontière — planifié : #614
+- une règle de refus des sessions de code sur le dossier du lecteur — planifié : #614
+- un utilisateur Unix propre aux sessions — planifié
+- le rôle et la connexion mesurés au banc — planifié : #614
 
 ---
 

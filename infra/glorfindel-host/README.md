@@ -343,8 +343,9 @@ programmée de bree »). Rien ne les pose seul sur H0 : ni le CD, ni `glorfindel
 `glorfindel-host-start`. Le geste est celui de Jonathan, depuis le poste, **une fois déployée une
 release qui contient WL1** (avant, la watch ne connaît pas `base_sha256` : elle charge la
 copie, même périmée, sans jamais dire sa dérive). Une couche de H0 qui tiendrait encore une copie
-avec `base_query_sha256` (le champ retiré) : la watch l'ignore, le dit, et la règle livrée charge ;
-la cible la remplace par son nom :
+avec `base_query_sha256` (le champ retiré) : la watch l'ignore, le dit, et la règle livrée charge
+si elle n'est pas désactivée (sinon rien, comme pour toute entrée invalide de la couche) ; la cible
+la remplace par son nom :
 
 ```bash
 make glorfindel-host-client-rules

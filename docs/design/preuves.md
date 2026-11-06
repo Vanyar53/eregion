@@ -1003,7 +1003,8 @@ test de sa propriété — une cible où le hasard ne joue pas, un seul tour (CI
 copie (`base_sha256`, `_drift` de `glorfindel/detection_rules.py`) a ses mutants aussi, après la
 relecture : une copie périmée écartée, la règle livrée à sa place — seulement si elle charge
 (seconde relecture : M4365–M4367) ; une copie au champ retiré `base_query_sha256` écartée
-(M4368) ; attrapés de même.
+(M4368) ; troisième relecture : une autre entrée du même nom (M4369), une copie invalide (M4395) ;
+attrapés de même.
 
 | Mutant | Défaut réinjecté | Effet |
 |---|---|---|
@@ -1021,6 +1022,8 @@ relecture : une copie périmée écartée, la règle livrée à sa place — seu
 | M4366 | copie périmée écartée malgré une règle livrée `enabled: false` | plus rien ne détecte la technique |
 | M4367 | la copie d'une règle livrée qui ne charge pas retirée | plus rien ne détecte la technique |
 | M4368 | le champ retiré `base_query_sha256` accepté | la copie charge, jamais comparée |
+| M4369 | copie périmée écartée malgré une autre entrée du même nom | une entrée `enabled: false` gagne : plus rien ne détecte |
+| M4395 | une copie invalide lue pour la dérive | une note de dérive pour une règle ignorée |
 
 ### Annatar et Gothmog exigent Glorfindel (V1)
 

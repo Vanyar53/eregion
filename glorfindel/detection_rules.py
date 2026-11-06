@@ -438,12 +438,13 @@ def _invalid_client_entry(key: str, entry) -> str | None:
         return None
     if "base_query_sha256" in entry:
         # WL1's first form (the fingerprint of the query alone), retired: a copy carrying it would
-        # load without ever being compared. Skipped, the base rule of its name loads instead.
+        # load without ever being compared. Skipped, the base rule of its name loads instead — if
+        # it is not disabled; otherwise nothing, as for any invalid entry of the layer.
         return ("`base_query_sha256` : champ retiré (WL1) — refaire la copie avec `base_sha256`, "
                 "l'empreinte de la règle livrée entière")
     sha = entry.get("base_sha256")
     if sha is not None and not _is_sha256(sha):
-        # Skipped, the base rule of its name loads instead: more cards, never fewer (WL1).
+        # Skipped, the base rule of its name loads instead, if it is not disabled (WL1).
         return "`base_sha256` n'est pas une empreinte sha256 (64 caractères hexadécimaux)"
     if not isinstance(entry.get("enabled", True), bool):
         return "`enabled` n'est ni true ni false"

@@ -501,6 +501,9 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   client_rules.yaml           → P1 : la couche du client — règles approuvées (`approve-rule`, War Room), règles de
                                 base remplacées (même nom) ou désactivées (`disable:`), chargée par-dessus la base
                                 livrée. Hors du dépôt : une mise à jour ne la touche jamais (conteneurs : base `:ro`)
+                                Sur H0, les règles du banc y sont fondues par `make glorfindel-host-client-rules`
+                                (WL1 : `infra/glorfindel-host/client_rules.bench.yaml`) ; une copie d'une règle de
+                                base porte `base_query_sha256`, et sa dérive est dite au chargement
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error ;

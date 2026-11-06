@@ -59,6 +59,7 @@ make glorfindel-host-tunnel                  # tunnel + « Console → http://lo
                                              # (l'ancien nom reste valide, rien à renommer) ; -url : l'URL seule
 make glorfindel-host-status                  # tout tourne ? lit le jeton sur la VM sous l'un ou l'autre nom, sans l'afficher
 make glorfindel-host-push                    # host_env.py --check d'abord : refuse un host.env sans jeton de la console (et dit, sans refuser, une variable de never_target vide, NT1)
+make glorfindel-host-client-rules           # WL1 : les règles du banc (infra/glorfindel-host/client_rules.bench.yaml) fondues dans la couche du client de H0, par nom ; la watch redémarre (README, « La couche du client du banc »)
 make glorfindel-host-cd-install              # le CD de H0 (H1) : agent dans ~/.eregion-cd/, timer désactivé ; README, « Le CD de H0 »
 make glorfindel-host-cd-check                # à blanc : vérifie, construit à côté, préflight (config sous A3), sans basculer
 make glorfindel-host-cd-enable               # puis : toute release publiée se déploie (5 min), retour arrière si malade

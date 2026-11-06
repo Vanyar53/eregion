@@ -894,6 +894,28 @@ glorfindel-host-push: glorfindel-host-known
 	 rc=$$?; rm -f $$cfg $$h0 $$h1; exit $$rc
 	@echo "  host.env et glorfindel-config.yaml poussés sur $(HOST_IP)"
 
+# WL1 (#595) : les règles du dépôt pour le banc (CLIENT_RULES, défaut client_rules.bench.yaml)
+# fondues dans la couche du client de H0, ~/.glorfindel/client_rules.yaml : lue par ssh, chaque
+# règle ajoutée ou remplacée par son nom (les règles approuvées sur H0 restent), relue comme la
+# watch la lira (host_client_rules.py : rien d'envoyé si une règle serait ignorée ou si sa copie de
+# la base a dérivé), puis mise en place sur H0 sous le verrou de la couche, seulement si elle n'a
+# pas changé depuis la lecture (une règle approuvée entre-temps : rien n'est remplacé, relancer).
+# Puis la watch redémarre (elle lit ses règles au démarrage) et `glorfindel rules` dit ce qui tourne.
+CLIENT_RULES ?= infra/glorfindel-host/client_rules.bench.yaml
+HOST_LAYER    = .glorfindel/client_rules.yaml
+glorfindel-host-client-rules: glorfindel-host-known
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@test -f "$(CLIENT_RULES)" || { echo "$(CLIENT_RULES) manquant"; exit 1; }
+	@d=$$(mktemp -d); \
+	 { $(HOST_SSH) 'if [ -e $(HOST_LAYER) ]; then cat $(HOST_LAYER); fi' > $$d/seen.yaml || { echo "  couche du client de H0 illisible par ssh : rien d'envoyé"; false; }; } && \
+	 $(PYTHON) infra/glorfindel-host/host_client_rules.py "$(CLIENT_RULES)" $$d/seen.yaml $$d/client_rules.yaml && \
+	 scp -q $(HOST_SSH_OPTS) $$d/seen.yaml $(HOST_USER)@$(HOST_IP):.glorfindel/.client_rules.yaml.seen && \
+	 scp -q $(HOST_SSH_OPTS) $$d/client_rules.yaml $(HOST_USER)@$(HOST_IP):.glorfindel/.client_rules.yaml.push && \
+	 $(HOST_SSH) 'cd .glorfindel && flock .client_rules.yaml.lock sh -c '"'"'if [ -e client_rules.yaml ]; then cmp -s client_rules.yaml .client_rules.yaml.seen; else ! [ -s .client_rules.yaml.seen ]; fi || { rm -f .client_rules.yaml.seen .client_rules.yaml.push; echo "  la couche du client de H0 a changé pendant le push (une règle approuvée ?) : rien de remplacé, relancer"; exit 3; }; chmod 600 .client_rules.yaml.push && mv .client_rules.yaml.push client_rules.yaml && rm -f .client_rules.yaml.seen'"'"'' && \
+	 echo "  ✓ couche du client écrite sur $(HOST_IP) : ~/$(HOST_LAYER) ; la watch redémarre" && \
+	 $(HOST_SSH) 'cd eregion && docker compose restart watch >/dev/null && docker exec eregion-watch glorfindel rules'; \
+	 rc=$$?; rm -rf $$d; exit $$rc
+
 # M-3 (#183) : une référence nommée, jamais une branche — REF=<tag ou commit>, exigée (SEC14,
 # V-22 : ce chemin construit sur H0, hors de la vérification de CI3 — le chemin de secours ; il ne
 # construit que ce que l'opérateur nomme, jamais « le dernier tag »). Le CD de H0 ne construit

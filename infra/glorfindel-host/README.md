@@ -334,6 +334,42 @@ fait à la base (une règle remplacée, une désactivée). Revenir à une réfé
 ne lit pas la couche — les règles du client manquent à la détection (rien n'est perdu, le
 fichier reste), jusqu'au retour à une référence avec P1.
 
+### La couche du client du banc (WL1)
+
+Les règles que le dépôt tient pour le banc sont dans `infra/glorfindel-host/client_rules.bench.yaml`.
+Aujourd'hui une seule : `sudo-privilege-escalation`, la règle livrée recopiée, sans la maintenance
+programmée de bree (décision de Jonathan, 06/11 ; `docs/glorfindel.md`, « La maintenance
+programmée de bree »). Rien ne les pose seul sur H0 : ni le CD, ni `glorfindel-host-push`, ni
+`glorfindel-host-start`. Le geste est celui de Jonathan, depuis le poste, **une fois déployée une
+release qui contient WL1** (avant, la watch ne connaît pas `base_query_sha256` : elle charge la
+règle, sans jamais dire sa dérive) :
+
+```bash
+make glorfindel-host-client-rules
+```
+
+- **Fondue, jamais copiée par-dessus** : la cible lit `~/.glorfindel/client_rules.yaml` de H0 par
+  ssh, y ajoute chaque règle du fichier ou remplace celle de son nom
+  (`infra/glorfindel-host/host_client_rules.py`, comme une approbation l'écrit) ; les règles
+  approuvées sur H0, `disable`, `assets` et `monitoring_backends` restent tels quels.
+- **Relue avant d'être envoyée**, comme la watch la lira, sur la base du checkout du poste : une
+  règle que la watch ignorerait, ou une copie dont la requête de base a changé (dérive), et rien
+  n'est envoyé. Une couche de H0 illisible : rien n'est envoyé non plus.
+- **Mise en place sous le verrou** de la couche (celui que prennent la watch, la console et la
+  CLI), par un renommage, seulement si elle n'a pas changé depuis la lecture. Une règle approuvée
+  entre-temps : rien n'est remplacé (« a changé pendant le push »), relancer.
+- Puis la watch redémarre (elle lit ses règles au démarrage), et `glorfindel rules` s'affiche :
+  `sudo-privilege-escalation` doit y être en `client (remplace)`, avec la note « remplacée par
+  celle de la couche du client », et aucune ligne « copie périmée ».
+- `CLIENT_RULES=<fichier>` pousse un autre fichier, de la même forme (`rules:` seulement).
+
+**Après une mise à jour de Glorfindel**, si la requête livrée d'une règle recopiée a changé, la
+watch le dit au démarrage, en rouge (« copie périmée d'une règle livrée »), et `glorfindel rules`
+aussi : la copie tourne toujours, sur l'ancienne requête. La reprendre dans le dépôt (le test
+`tests/unit/test_bench_routine.py` échoue déjà dans la PR qui change la base), puis relancer
+`make glorfindel-host-client-rules`. Pour revenir à la règle livrée : retirer la règle de
+`~/.glorfindel/client_rules.yaml` sur H0, puis `docker compose restart watch`.
+
 ### Migrer les règles approuvées vers la couche du client
 
 À faire une fois, avec Jonathan, au premier déploiement d'une référence avec P1. Avant P1, les

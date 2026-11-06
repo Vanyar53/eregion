@@ -29,14 +29,64 @@ def _consent_items(row: dict, reads: _Reads, event_at: str) -> list[dict]:
         if isinstance(sp, dict):
             name = sp.get("displayName") or name
         items.append(_disable_principal(cp, sp, name, "l'application cliente"))
-        items += _grant_items(client, reads)
+        items += _grant_items(client, reads, row)
     user = _user_actor(row)
     if user:
         items.append(_revoke_sessions(user, event_at, str(row.get("ActorName") or "qui a consenti")))
     return items
 
 
-def _grant_items(client: str, reads: _Reads) -> list[dict]:
+def _grant_item(client: str, gid_p: dict, res: str, ctype, principal: str, scope: str) -> dict:
+    """Remove one delegated grant: its id read on Graph, or given by the log (C2b)."""
+    ctype = ctype if ctype in ("AllPrincipals", "Principal") else ""
+    gid = gid_p["value"]
+    body = (f"{{\"clientId\":\"{client}\",\"consentType\":\"{ctype}\",\"principalId\":"
+            + (f"\"{principal}\"" if principal else "null")
+            + f",\"resourceId\":\"{res}\",\"scope\":\"{scope}\"}}")
+    back = (f"az rest --method POST --url {GRAPH_URL}/oauth2PermissionGrants --body '{body}'"
+            if ctype and res and scope else "recréer l'octroi à l'identique (portée non reprise : "
+                                            "des caractères inattendus)")
+    return _item(
+        f"Retirer l'octroi délégué ({scope or 'portée non reprise'}"
+        + (", pour tout le tenant" if ctype == "AllPrincipals" else "") + ")",
+        why_human=_CONSENT, params=[gid_p],
+        command=f"az rest --method DELETE --url {GRAPH_URL}/oauth2PermissionGrants/{gid}",
+        side_effect="une intégration légitime perd l'accès (courrier, fichiers, Graph) et s'arrête",
+        rollback=back, check={"kind": "grant_gone", "client": client, "grant_id": gid})
+
+
+def _logged_items(client: str, reads: _Reads, row: dict) -> list[dict]:
+    """Graph not read (C2b): what the row itself names — the grants a « Consent to application »
+    added (ConsentAction.Permissions: their ids, resource, type, scope), the resource of an app
+    role assignment (its target). Never a value that is no id: `entra_consent.parse` keeps ids."""
+    from glorfindel.providers.azure import entra_consent
+    why = f"lu dans le journal, non confirmé dans Graph : {reads.why or 'non lu'}"
+    items = [_grant_item(client, _param("id de l'octroi", g["id"], "log", why), g["resource"],
+                         g["consent_type"], g["principal"], g["scope"])
+             for g in entra_consent.parse(row.get("Permissions"))["grants"]
+             if g["id"] and g["client"] in ("", client)]
+    if items:   # the delegated grants only: the same consent may have assigned application permissions
+        items.append(_item(
+            "Revoir aussi les permissions d'application de l'application cliente (le journal de ce "
+            "consentement ne nomme que ses octrois délégués)",
+            find=f"az rest --method GET --url {GRAPH_URL}/servicePrincipals/{client}/appRoleAssignments"))
+    op = str(row.get("EntraOperation") or "").strip().lower()
+    res = guid(row.get("TargetId")) if op == "add app role assignment to service principal" else ""
+    if res:
+        aid_p = _param("id de l'attribution", "", "", "le journal ne le donne pas ; " + (reads.why or "non lu"))
+        role = words(row.get("Permissions"))
+        items.append(_item(
+            "Retirer la permission d'application attribuée" + (f" ({role})" if role else ""),
+            why_human=_CONSENT, params=[aid_p, _param("id du principal de la ressource", res, "log")],
+            command=f"az rest --method DELETE --url {GRAPH_URL}/servicePrincipals/{res}/appRoleAssignedTo/{_v(aid_p)}",
+            find=f"az rest --method GET --url {GRAPH_URL}/servicePrincipals/{client}/appRoleAssignments",
+            side_effect="une intégration légitime perd la permission et s'arrête",
+            rollback="recréer l'attribution à l'identique : lire ses champs avant de la retirer",
+            check={"kind": "consent_gone", "client": client}))
+    return items
+
+
+def _grant_items(client: str, reads: _Reads, row: dict | None = None) -> list[dict]:
     grants = reads.list("/oauth2PermissionGrants", {"$filter": f"clientId eq '{client}'"})
     roles = reads.list(f"/servicePrincipals/{client}/appRoleAssignments")
     items: list[dict] = []
@@ -45,21 +95,8 @@ def _grant_items(client: str, reads: _Reads) -> list[dict]:
             gid, res = graph_id(g.get("id")), guid(g.get("resourceId"))
             if not gid:
                 continue
-            ctype = g.get("consentType") if g.get("consentType") in ("AllPrincipals", "Principal") else ""
-            principal, scope = guid(g.get("principalId")), words(g.get("scope"))
-            body = (f"{{\"clientId\":\"{client}\",\"consentType\":\"{ctype}\",\"principalId\":"
-                    + (f"\"{principal}\"" if principal else "null")
-                    + f",\"resourceId\":\"{res}\",\"scope\":\"{scope}\"}}")
-            back = (f"az rest --method POST --url {GRAPH_URL}/oauth2PermissionGrants --body '{body}'"
-                    if ctype and res and scope else "recréer l'octroi à l'identique (portée non reprise : "
-                                                    "des caractères inattendus)")
-            items.append(_item(
-                f"Retirer l'octroi délégué ({scope or 'portée non reprise'}"
-                + (", pour tout le tenant" if ctype == "AllPrincipals" else "") + ")",
-                why_human=_CONSENT, params=[_param("id de l'octroi", gid, "graph")],
-                command=f"az rest --method DELETE --url {GRAPH_URL}/oauth2PermissionGrants/{gid}",
-                side_effect="une intégration légitime perd l'accès (courrier, fichiers, Graph) et s'arrête",
-                rollback=back, check={"kind": "grant_gone", "client": client, "grant_id": gid}))
+            items.append(_grant_item(client, _param("id de l'octroi", gid, "graph"), res, g.get("consentType"),
+                                     guid(g.get("principalId")), words(g.get("scope"))))
         for a in roles:
             aid, res, role = graph_id(a.get("id")), guid(a.get("resourceId")), guid(a.get("appRoleId"))
             if not (aid and res):
@@ -78,6 +115,9 @@ def _grant_items(client: str, reads: _Reads) -> list[dict]:
             items.append(_item("Aucun octroi ni attribution lu pour l'application cliente : déjà retirés ?",
                                why_human=_CONSENT, check={"kind": "consent_gone", "client": client}))
         return items
+    logged = _logged_items(client, reads, row or {})
+    if logged:
+        return logged
     unread = _param("id de l'octroi", "", "", reads.why or "non lu")
     items.append(_item(
         "Retirer l'octroi délégué ou la permission d'application",
@@ -164,6 +204,14 @@ def _role_items(row: dict, reads: _Reads, event_at: str) -> list[dict]:
             side_effect="un administrateur légitime ou un pipeline perd le rôle",
             rollback="recréer l'attribution avec le même rôle, le même membre, la même portée",
             check=check_by_name, verifiable=True))
+        if eligible:      # an eligibility is no assignment: a schedule request removes it, never a DELETE (C2b)
+            rdef_p = _param("id de la définition du rôle", "", "", why)
+            scope_p = _param("portée du rôle", "", "", why)
+            items[-1].update(
+                params=[rdef_p, scope_p] + ([] if member_p["read"] else [member_p]), complete=False,
+                command=(f"az rest --method POST --url {GRAPH_URL}/roleManagement/directory/roleEligibilityScheduleRequests "
+                         f"--body '{{\"action\":\"adminRemove\",\"principalId\":\"{_v(member_p)}\",\"roleDefinitionId\":"
+                         f"\"{_v(rdef_p)}\",\"directoryScopeId\":\"{_v(scope_p)}\",\"justification\":\"Eregion IR1a\"}}'"))
         if candidates:
             items[-1]["candidates"] = candidates[:20]
     if mtype.lower() == "user" and member:

@@ -4,6 +4,7 @@ entra_grants.py, a consent and a role)."""
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from glorfindel.providers.azure.graph import Unreadable
 
@@ -17,7 +18,6 @@ _KEY_ID = re.compile(r"KeyIdentifier=([0-9A-Fa-f-]{36})")
 _KEY_TYPE = re.compile(r"KeyType=([A-Za-z0-9]+)")
 _FIC_NAME = re.compile(r"""["']?Name["']?\s*[:=]\s*["']?([A-Za-z0-9._-]{1,120})""")
 GRAPH_URL = "https://graph.microsoft.com/v1.0"
-NOT_READ = "‹{} non lu›"
 _GLORFINDEL = ("l'identité de Glorfindel, acteur ou cible : jamais un verbe de l'exécuteur — un "
                "attaquant ne doit pas pouvoir faire désactiver la watch par Eregion (§3.5)")
 _NO_EXECUTOR = "pas d'exécuteur d'identité avant IR1c : chaque verbe se fait à la main"
@@ -132,8 +132,17 @@ def _param(name: str, value: str, source: str, why: str = "") -> dict:
     return {"name": name, "value": "", "from": "", "read": False, "why": why or "non lu"}
 
 
+def placeholder(name: str) -> str:
+    """What a command holds in place of a parameter not read (C2b): `<id-de-l-octroi>` — it says
+    what to replace, and stays inert pasted as it is: no space nor quote (a quote of « l'octroi »
+    left the shell waiting), and the shell refuses its `<` rather than call Graph without an id
+    (an empty one left `…/roleAssignments//…`). Never an id: a template."""
+    slug = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode()
+    return "<" + (re.sub(r"[^A-Za-z0-9]+", "-", slug).strip("-") or "valeur") + ">"
+
+
 def _v(p: dict) -> str:
-    return p["value"] if p["read"] else NOT_READ.format(p["name"])
+    return p["value"] if p["read"] else placeholder(p["name"])
 
 
 def _item(what: str, *, verb: str = "", target: dict | None = None, params: list | None = None,

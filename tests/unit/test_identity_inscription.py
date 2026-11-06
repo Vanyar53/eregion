@@ -331,8 +331,8 @@ def test_the_reader_refuses_what_the_guard_refuses():
                                    "roleEligibilityScheduleInstances", "resourceGroups"])
 @pytest.mark.parametrize("status", [401, 403, 404, 429, 500])
 def test_a_read_that_fails_refuses(which, status):
-    """Never enrolled by default (M3817) — a tenant without PIM whose eligibility read fails
-    included: everything is then refused, said (to measure on the bench)."""
+    """Never enrolled by default (M3817) — the eligible read included: only the one exact answer of a
+    tenant without PIM (400, AadPremiumLicenseRequired) reads as none (IDI1p, below)."""
     graph = FakeGraph()
     ends = {"applications": f"/applications/{APP}", "servicePrincipals(appId": f"(appId='{APP_ID}')",
             "roleAssignments": "/directory/roleAssignments", "resourceGroups": "/resourceGroups/rg-celebrimbor"}

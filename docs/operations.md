@@ -1002,7 +1002,10 @@ glorfindel-host-down` le retire avec le reste de l'état de H0 (même ordre : Ce
 pour lire ses propres droits et ceux de ce qu'il possède (10) — Directory Readers est celui que le
 contrat attend, pour les attributions de rôles, les appartenances, les permissions d'application et
 les instances éligibles de PIM ; **si Directory Readers ne lit pas PIM, le contrat ne s'arme
-jamais**, et un droit de lecture serait à ajouter après la mesure (jamais une écriture) ; `wids` ne
+jamais**, et un droit de lecture serait à ajouter après la mesure (jamais une écriture) — sur un tenant
+sans licence PIM, Graph répond à cette lecture `400` `AadPremiumLicenseRequired` (mesuré le 06/11 par la
+garde d'IDI1) : aucun rôle éligible ne peut y exister, le contrat le lit comme « aucun » et le dit
+(`note — eligible roles: none can exist…`, IDI1p), toute autre réponse le laisse `passive` ; `wids` ne
 porte que les rôles au tenant, jamais un rôle borné à une unité ; le temps de ses lectures par objet
 possédé, contre le budget de 60 s et le plafond de 20 objets (IR1e). Les identifiants des rôles intégrés
 que le contrat épingle (`DIRECTORY_READERS`, `USER_ADMINISTRATOR`, `ATTRIBUTE_ASSIGNMENT_READER`,
@@ -3464,14 +3467,21 @@ make celebrimbor-identity-plan     # doit montrer, et rien d'autre :
                                    #   sign_in_audience = "AzureADMyOrg", tags = ["eregion-target=celebrimbor", "eregion-zone=bench"],
                                    #   aucun password, aucun required_resource_access
                                    # + azuread_service_principal.bench_test[0]
-                                   # ~ azurerm_resource_group.celebrimbor : tags + "eregion-identities" = (known after apply)
+                                   # ~ azurerm_resource_group.celebrimbor : tags = (known after apply) — toute la
+                                   #   carte de tags du groupe, pas un seul « + » (mesuré le 06/11 : la valeur du tag
+                                   #   ajouté n'est connue qu'à l'apply, Terraform montre alors toute la carte)
                                    # Plan: 2 to add, 1 to change, 0 to destroy ; « Resource targeting is in effect » attendu
 make celebrimbor-identity-up YES=1 # une fois le plan relu
 
 # 5. La garde, lue depuis Orodruin : l'identité de test est inscrite.
 make orodruin-identity ID=$(terraform -chdir=infra/terraform output -raw entra_test_identity_object_id)
                                    # attendu : « non-destructive technique: allowed (zone bench) »,
-                                   #           « destructive technique: allowed (zone bench) »
+                                   #           « destructive technique: allowed (zone bench) » ;
+                                   # sur un tenant sans licence PIM (le banc), en plus (IDI1p) :
+                                   #   « note — eligible roles: none can exist, the tenant has no PIM license
+                                   #     (Graph: AadPremiumLicenseRequired) »
+                                   # « refused — identity unreadable: GraphRefused: HTTP 400 <code> reading … » :
+                                   #   une autre réponse de Graph, son code dit — s'arrêter et la lire
 ```
 
 Un autre changement au plan d'une de ces étapes (une dérive des tags du groupe, une VM, le canal) :
@@ -3500,9 +3510,26 @@ déclaré — `armed`, aucune note `graph` : absente, ou `APP_DEFAULT_WIDS`. IDI
 déclaré : un `wids` inconnu est `passive` ; seul un jeton Graph introuvable reste dit sans déclaration
 (un Orodruin sans droit Graph ne tombe pas, et l'absence de jeton n'est pas un privilège).
 
+**Mesuré le 06/11** (geste 5, #618) : la lecture des rôles éligibles (PIM) sur le tenant du banc, sans
+Entra ID P2 ni ID Governance. Graph répond `400`, corps `{"error":{"code":"AadPremiumLicenseRequired",
+"message":"The tenant needs to have Microsoft Entra ID P2 or Microsoft Entra ID Governance license.",…}}`,
+et `make orodruin-identity` refusait toute identité (« identity unreadable: RuntimeError: HTTP 400 reading
+roleEligibilityScheduleInstances »). Sans cette licence, aucun rôle éligible ne peut exister (Microsoft,
+« licensing fundamentals » d'Entra ID Governance : à son expiration, les attributions éligibles de rôles
+d'Entra sont retirées). **Décision de Jonathan** (IDI1p) : cette réponse exacte — statut `400`, code
+`AadPremiumLicenseRequired` comparé à l'identique, sur la seule lecture
+`/roleManagement/directory/roleEligibilityScheduleInstances`, à sa première page — vaut « aucun rôle
+éligible », et le verdict le dit (`note — eligible roles: none can exist, the tenant has no PIM license
+(Graph: AadPremiumLicenseRequired)`). Tout autre échec reste un refus : un autre code, un autre statut, un
+corps illisible, la même réponse sur une autre lecture, ou sur une page suivante après une première lue.
+Un refus dit désormais le code d'erreur de Graph (`error.code`, filtré : lettres seules, 64 au plus, sinon
+rien). La même lecture vaut pour un utilisateur de test (`eregion_core.inscription user`) et pour le
+contrat de l'exécuteur d'identité (`glorfindel identity-contract`, « L'exécuteur d'identité »). Il faut une
+release qui porte IDI1p, puis `make orodruin-push REF=<cette release>` pour qu'Orodruin l'ait ; H0 l'a par
+son CD.
+
 **À mesurer au banc** : le `wids` une fois les deux rôles d'application posés et le droit déclaré
-(geste 3 : `armed` attendu) ; la lecture des rôles éligibles (PIM) sur un tenant sans Entra ID P2 — si elle
-échoue, toute identité est refusée, et c'est dit (une décision de Jonathan, alors) ; qu'`AzureActiveDirectory` couvre bien `graph.microsoft.com` depuis Orodruin (la
+(geste 3 : `armed` attendu) ; qu'`AzureActiveDirectory` couvre bien `graph.microsoft.com` depuis Orodruin (la
 documentation des service tags le dit) ; le délai du jeton en cache après l'attribution (jusqu'à 24 h :
 `make orodruin-check` peut dire l'ancien jeton) ; les tags d'une application lus par Graph tels que
 Terraform les pose.
@@ -3634,7 +3661,9 @@ az rest --method GET --url "https://graph.microsoft.com/v1.0/users/$USER_ID?\$se
 EREGION_TENANT_ID=$(az account show --query tenantId -o tsv) EREGION_OPERATOR_OBJECT_ID="$ME" \
   EREGION_BENCH_ADMIN_UNIT_ID="$UNIT" .venv/bin/python -m eregion_core.inscription user "$USER_ID"
                                    # attendu : « non-destructive technique: allowed (zone bench) »,
-                                   #           « destructive technique: allowed (zone bench) »
+                                   #           « destructive technique: allowed (zone bench) » ;
+                                   # sans licence PIM, en plus la note d'IDI1p (« note — eligible roles: none
+                                   # can exist… », la section d'IDI1)
 # La première fois, mesurer ce que transitiveMemberOf dit des unités d'un utilisateur — le refus d'un
 # membre d'une autre unité en dépend (M4095) :
 az rest --method GET --url "https://graph.microsoft.com/v1.0/users/$USER_ID/transitiveMemberOf?\$select=id" \

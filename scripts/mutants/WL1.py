@@ -7,7 +7,7 @@ tests/unit/test_bench_routine.py.
 The drift of a copy (`base_sha256`, glorfindel/detection_rules.py `_drift`), after the review: a
 stale copy set aside, the shipped rule in its place — more cards, never fewer. M4300–M4304, each
 measured by the test of its property. Second review: a stale copy set aside only when the
-shipped rule will load in its place. M4365–M4367."""
+shipped rule will load in its place; the retired field `base_query_sha256` refused. M4365–M4368."""
 BENCH = "infra/glorfindel-host/client_rules.bench.yaml"
 RULES = "glorfindel/detection_rules.py"
 _TESTS = "tests/unit/test_bench_routine.py"
@@ -59,6 +59,8 @@ MUTANTS += [
     ("M4367", "a stale copy of a shipped rule that will not load dropped: nothing detects (WL1)", RULES,
      "                kept.append(entry)          # the shipped rule off: the copy alone detects its technique\n",
      "                pass\n"),
+    ("M4368", "a copy with the retired base_query_sha256 loads, never compared (WL1)", RULES,
+     "    if \"base_query_sha256\" in entry:\n", "    if False:\n"),
 ]
 TESTS = {f"M{n}": _TESTS for n in range(4265, 4270)}
 TESTS.update({
@@ -70,4 +72,5 @@ TESTS.update({
     "M4365": f"{_TESTS}::test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running",
     "M4366": f"{_TESTS}::test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running",
     "M4367": f"{_TESTS}::test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running",
+    "M4368": f"{_TESTS}::test_a_copy_with_the_retired_field_is_set_aside_and_the_shipped_rule_loads",
 })

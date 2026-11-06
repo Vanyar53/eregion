@@ -356,6 +356,17 @@ def test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running(tmp_path, 
     assert base_rule_sha256(rule) in note
 
 
+def test_a_copy_with_the_retired_field_is_set_aside_and_the_shipped_rule_loads(tmp_path):
+    """`base_query_sha256` (WL1's first form, the query alone): a copy carrying it is never
+    compared — skipped and said, the shipped rule loads."""
+    layer = _layer(tmp_path, drop=("base_sha256",), base_query_sha256="0" * 64)
+    cfg = load_config(shipped_rules_path(), client_layer=layer)
+    rule = next(r for r in cfg.rules if r.name == NAME)
+    assert rule.layer == "base" and rule.query == SHIPPED[NAME]["query"]
+    assert any("base_query_sha256" in n and "champ retiré" in n and "base_sha256" in n and "ignorée" in n
+               for n in cfg.notes)
+
+
 def test_a_client_rule_that_is_no_copy_says_no_drift(tmp_path):
     rule = {k: v for k, v in CLIENT[NAME].items() if k != "base_sha256"}
     path = tmp_path / "client_rules.yaml"

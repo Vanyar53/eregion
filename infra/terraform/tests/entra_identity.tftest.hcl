@@ -38,6 +38,7 @@ variables {
   auditd_enabled              = false
   entra_test_identity_enabled = false
   entra_bench_unit_enabled    = false
+  bench_reader_enabled        = false
 }
 
 run "off_nothing_in_the_tenant_the_group_as_always" {

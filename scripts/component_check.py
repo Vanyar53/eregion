@@ -111,7 +111,7 @@ COMPONENTS: dict[str, Component] = {
 # runs, the analysis AI over a campaign and Glorfindel's decisions, the gate seen from both
 # sides, the host and the Makefile — and the repository-wide checks. The full suite runs them.
 TOGETHER = (
-    "test_action_proposal.py", "test_action_queue_async.py", "test_action_queue_watch.py", "test_activity_logs.py", "test_card_target.py", "test_own_run_command.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
+    "test_action_proposal.py", "test_action_queue_async.py", "test_action_queue_watch.py", "test_activity_logs.py", "test_activity_operation_read.py", "test_card_target.py", "test_own_run_command.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
     "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_console_shots.py", "test_docs_home.py", "test_console_dagorlad_request.py", "test_console_dagorlad_drills.py", "test_console_dagorlad_follow.py", "test_console_dagorlad_annatar.py", "test_console_blocks.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_console_signed_detections.py", "test_console_identity_plan.py", "test_profiles.py",
     "test_coverage.py",
@@ -121,7 +121,7 @@ TOGETHER = (
     "test_docs_budget.py", "test_repo_owner.py", "test_exercise.py", "test_exercise_e2e.py", "test_held.py", "test_dagorlad_blind.py", "test_githooks.py", "test_exercise_guard.py",
     "test_experiment_schema.py", "test_vm3_pairs.py", "test_vm3b_suites.py", "test_fault_rate.py", "test_glorfindel_host.py", "test_host_console.py",
     "test_host_cd.py", "test_host_deploy.py", "test_hosted_report.py", "test_indicators.py",
-    "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_exercise.py", "test_makefile_secrets.py", "test_bench_logs.py", "test_bench_auditd.py", "test_bench_identity.py", "test_bench_users.py",
+    "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_exercise.py", "test_makefile_secrets.py", "test_bench_logs.py", "test_bench_auditd.py", "test_bench_identity.py", "test_bench_users.py", "test_bench_reader.py",
     "test_identity_executor_host.py",
     "test_notify_discord.py", "test_observation.py", "test_orodruin_kill.py", "test_orodruin_word.py", "test_palantir.py",
     "test_pip_audit_issues.py",

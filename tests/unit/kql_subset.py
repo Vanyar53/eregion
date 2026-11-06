@@ -1,15 +1,17 @@
 """A KQL subset, evaluated in Python over rows in memory — the shipped Syslog rules run
 as written, on lines the test writes (SEC2). No Log Analytics, no Azure.
 
-Only what the Syslog rules use: a table, then `where`, `extend`, `summarize` (`arg_max(col, *)`
-alone or followed by named aggregations — AL2 —, or `name = count()`, `countif(p)`, `min(col)`,
-`max(col)`, `take_any(col)`, `take_anyif(col, p)`, `make_set_if(col, p, n)` — AUD1 —, several of
-them), `project`, `order by`, `limit`; predicates `==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`,
-`!has`, `in (…)`, `in~ (…)`, `!in~ (…)`, `matches regex`, `startswith`, `endswith` (both
+Only what the Syslog and AzureActivity rules use: a table, then `where`, `extend`, `summarize`
+(`arg_max(col, *)`, alone or among named aggregations in any order — AL2, AL1d —, `name = count()`,
+`countif(p)`, `min(col)`, `max(col)`, `take_any(col)`, `take_anyif(col, p)` — AL2, AL1d —,
+`make_set_if(col, p, n)` — AUD1 —, `dcountif(col, p)` — AL1d, exact here, an estimate in Log
+Analytics, exact at the few values a rule counts —, several of them), `project`, `order by`, `limit`; predicates
+`==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`, `!has`, `in (…)`, `!in (…)`, `in~ (…)`, `!in~ (…)`
+(case-insensitive on strings — AL2, AL1d), `matches regex`, `startswith`, `endswith` (both
 case-insensitive, as in KQL — WL1), `and`, `or`, `not(…)`; functions `ago()`, `extract()`,
-`iif()` (or `iff()`), `isnotempty()`, `isnotnull()`, `toint()`, `tolong()`, `tostring()`,
-`parse_json()` with a member (`.appid`) or an index (`["…"]`) — the Activity Log's `Claims`, AL2.
-Anything
+`iif()` (or `iff()`), `isempty()`, `isnotempty()`, `isnotnull()`, `strcat()`, `toint()`,
+`tolong()`, `tostring()`, `parse_json()`; a member (`.appid`) or an index (`["…"]`) on a column or on what a
+function returns — the Activity Log's `Claims`, AL2, AL1d. Anything
 else raises NotImplementedError: a rule this reader cannot follow fails its test, never
 passes it by accident. `has` is KQL's term match (case-insensitive, at term boundaries);
 regexes are read by Python's `re` in ASCII mode (`\\d` is 0–9 only, as in RE2: AUD1's review —
@@ -30,7 +32,7 @@ _TOKEN = re.compile(r"""
   | (?P<str>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')
   | (?P<span>\d+(?:\.\d+)?(?:d|h|m|s|ms|min|days?|hours?|minutes?|seconds?)\b)
   | (?P<num>\d+(?:\.\d+)?)
-  | (?P<op>==|!=|>=|<=|=~|!in~|in~|!has\b|!contains\b|[|(),=<>*.\[\]])
+  | (?P<op>==|!=|>=|<=|=~|!has\b|!contains\b|!in~|!in\b|in~|[|(),=<>*.\[\]])
   | (?P<ident>[A-Za-z_][A-Za-z0-9_]*)
 """, re.VERBOSE)
 
@@ -157,7 +159,7 @@ class _Parser:
             self.take()
             right = self.primary()
             return lambda r: str(left(r) or "").lower().endswith(str(right(r)).lower())
-        if op == "in" and tok[0] == "ident":
+        if (op == "in" and tok[0] == "ident") or (op in ("!in", "in~", "!in~") and tok[0] == "op"):
             self.take()
             self.take("op", "(")
             items = [self.primary()]
@@ -165,22 +167,12 @@ class _Parser:
                 self.take()
                 items.append(self.primary())
             self.take("op", ")")
-            return lambda r: left(r) in [f(r) for f in items]
-        if op in ("in~", "!in~") and tok[0] == "op":
-            # KQL's case-insensitive membership, on strings (AL2: an operation's name, a status).
-            self.take()
-            self.take("op", "(")
-            items = [self.primary()]
-            while self.at(","):
-                self.take()
-                items.append(self.primary())
-            self.take("op", ")")
-            neg = op == "!in~"
+            neg, fold = op.startswith("!"), op.endswith("~")
 
-            def within(r):
-                v = left(r)
-                return isinstance(v, str) and v.lower() in [str(f(r)).lower() for f in items]
-            return lambda r: within(r) != neg
+            def norm(v):            # in~: KQL's case-insensitive membership, on strings (AL2, AL1d)
+                return v.lower() if fold and isinstance(v, str) else v
+
+            return lambda r: (norm(left(r)) in [norm(f(r)) for f in items]) != neg
         if op == "matches" and tok[0] == "ident":
             self.take()
             self.take("ident", "regex")
@@ -205,19 +197,20 @@ class _Parser:
         if kind == "ident":
             self.take()
             if self.at("("):
-                return self.access(self.call(text))
-            return lambda r, c=text: r.get(c)
+                return self.postfix(self.call(text))
+            return self.postfix(lambda r, c=text: r.get(c))
         raise NotImplementedError(f"KQL subset: unexpected {text!r}")
 
-    def access(self, f):
-        """`.member` and `["key"]` after a call (`parse_json(Claims).appid`): None when absent."""
-        while self.at(".") or self.at("["):
+    def postfix(self, f):
+        """A dynamic value's member, `.name` or `["name"]` (AL1d: `parse_json(Claims).appid`):
+        null when the value is not an object or has no such member, as in KQL."""
+        while self.peek() in (("op", "."), ("op", "[")):
             if self.take()[1] == ".":
                 key = self.take("ident")[1]
             else:
                 key = self.take("str")[1]
                 self.take("op", "]")
-            f = (lambda g, k: lambda r: g(r).get(k) if isinstance(g(r), dict) else None)(f, key)
+            f = (lambda inner, k: lambda r: (inner(r).get(k) if isinstance(inner(r), dict) else None))(f, key)
         return f
 
     def args(self):
@@ -246,8 +239,11 @@ class _Parser:
         if name == "isnotempty":
             (_, f), = args
             return lambda r: f(r) not in (None, "")
+        if name == "isempty":
+            (_, f), = args
+            return lambda r: f(r) in (None, "")
         if name in ("iif", "iff"):
-            # KQL's conditional (AL2: the row names the caller that decided it).
+            # KQL's conditional (AL2, AL1d: the row names the caller that decided it).
             (_, cond), (_, then), (_, other) = args
             return lambda r: then(r) if cond(r) else other(r)
         if name == "isnotnull":
@@ -269,21 +265,26 @@ class _Parser:
                 except (TypeError, ValueError):
                     return None
             return toint
+        if name == "strcat":
+            # KQL's strcat: its arguments as strings, a null as "" (AL1d: an operation's caller,
+            # its three ids as one value).
+            fs = [f for _, f in args]
+            return lambda r: "".join("" if f(r) is None else str(f(r)) for f in fs)
+        if name == "tostring":
+            (_, f), = args
+            return lambda r: "" if f(r) is None else str(f(r))
         if name == "parse_json":
             (_, f), = args
 
             def parse_json(r):
                 v = f(r)
-                if isinstance(v, str):
-                    try:
-                        return json.loads(v)
-                    except ValueError:
-                        return None
-                return v
+                if not isinstance(v, str):
+                    return v
+                try:
+                    return json.loads(v)
+                except ValueError:
+                    return v        # KQL: a string that is not JSON stays that string
             return parse_json
-        if name == "tostring":
-            (_, f), = args
-            return lambda r: "" if f(r) is None else str(f(r))
         raise NotImplementedError(f"KQL subset: function {name}()")
 
 
@@ -335,27 +336,29 @@ def run(query: str, rows: list[dict], now: datetime | None = None) -> list[dict]
 
 
 def _summarize(p: _Parser, rows: list[dict]) -> list[dict]:
+    # `arg_max(col, *)` (at most once: the row it keeps) and `name = agg(…)`, in any order
+    # (AL2, AL1d: `arg_max(TimeGenerated, *), Succeeded = countif(…)`).
     arg_max, aggs = None, []
-    if p.peek()[1] == "arg_max":
-        p.take()
-        p.take("op", "(")
-        arg_max = p.take("ident")[1]
-        p.take("op", ",")
-        p.take("op", "*")
-        p.take("op", ")")
-    if arg_max is None or p.at(","):
-        if arg_max is not None:
+    while True:
+        if p.peek() == ("ident", "arg_max") and p.peek(1) == ("op", "("):
+            if arg_max is not None:
+                raise NotImplementedError("KQL subset: arg_max() twice")
             p.take()
-        while True:
+            p.take("op", "(")
+            arg_max = p.take("ident")[1]
+            p.take("op", ",")
+            p.take("op", "*")
+            p.take("op", ")")
+        else:
             name = p.take("ident")[1]
             p.take("op", "=")
             fn = p.take("ident")[1]
             if fn not in _AGGREGATES:
                 raise NotImplementedError(f"KQL subset: aggregation {fn}()")
             aggs.append((name, fn, [f for _, f in p.args()]))
-            if not p.at(","):
-                break
-            p.take()
+        if not p.at(","):
+            break
+        p.take()
     p.take("ident", "by")
     by = [p.take("ident")[1]]
     while p.at(","):
@@ -399,10 +402,13 @@ _AGGREGATES = {
     "min": _min,
     "max": _max,
     "take_any": lambda members, f: next((f(r) for r in members if f(r) is not None), None),
+    # KQL's dcountif: how many distinct values (nulls left out) on the rows the predicate keeps
+    # (AL1d: how many callers an operation's lines name).
+    "dcountif": lambda members, f, pred: len({f(r) for r in members if pred(r) and f(r) is not None}),
     "make_set_if": _make_set_if,
     # Log Analytics picks any row the predicate keeps (no order): this reader takes the first.
     # A rule that reads it holds for any choice — its predicate keeps only what may be taken
-    # (AL2). Nulls left out, as take_any.
+    # (AL2, AL1d). Nulls left out, as take_any; null when no row is kept.
     "take_anyif": lambda members, f, pred: next(
         (f(r) for r in members if pred(r) and f(r) is not None), None),
 }

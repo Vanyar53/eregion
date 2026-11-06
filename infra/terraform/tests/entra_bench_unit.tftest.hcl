@@ -61,6 +61,7 @@ variables {
   auditd_enabled                    = false
   entra_test_identity_enabled       = false
   entra_bench_unit_enabled          = false
+  bench_reader_enabled              = false
   entra_bench_unit_id               = ""
   entra_test_users                  = ["tuor"]
   entra_identity_executor_object_id = ""

@@ -75,7 +75,7 @@ def test_security_md_says_where_to_report_without_an_address():
 def test_the_threat_model_has_a_page_per_boundary():
     text = THREAT_MODEL.read_text(encoding="utf-8")
     pages = re.split(r"\n## \d\. ", text)[1:]
-    assert len(pages) == 7               # SEC12: the agent sessions → main → the CD
+    assert len(pages) == 8               # SEC12: the agent sessions → main → the CD; BRO1: the Banc session
     for page in pages:
         page = page.split("\n## ", 1)[0]
         rows = re.findall(r"^\| ([STRIDE]) \|", page, re.M)
@@ -88,7 +88,7 @@ def test_an_open_point_names_its_plan_never_its_use():
     """A public repository: what is open is « planifié : #n » or « planifié », never a recipe."""
     text = THREAT_MODEL.read_text(encoding="utf-8")
     opens = re.findall(r"\*\*Ouvert\*\* :(.*?)(?=\n---|\n## )", text, re.S)
-    assert len(opens) == 7
+    assert len(opens) == 8
     item = re.compile(r"[^`/()_\[\]]{3,70} — planifié(?: : #\d+)?")   # a title, its plan: no name, no path
     for o in opens:
         points = [p.strip(" -;.\n") for p in re.split(r"\n- | ; ", o.strip()) if p.strip(" -;.\n")]

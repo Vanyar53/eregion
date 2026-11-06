@@ -339,7 +339,7 @@ def _scenario(**over) -> Scenario:
 def _fake_executor(tmp_path, *, before=True, after=True, rg_tags=None,
                    detonate_raises=False, warmup_raises=False,
                    before_raises=False, after_raises=False,
-                   warmup_interrupt=False, detonate_interrupt=False):
+                   warmup_interrupt=False, detonate_interrupt=False, interrupt_in=""):
     binary, digest = _fake_binary(tmp_path)
     r = resolve(TID, binary_path=binary, stratus_dir=_stratus_dir(tmp_path, digest),
                 catalog=_catalog())
@@ -353,8 +353,13 @@ def _fake_executor(tmp_path, *, before=True, after=True, rg_tags=None,
         def resource_group_tags(self, sub, rg):
             return ENROLLED if rg_tags is None else rg_tags
 
+        def _interrupt(self, phase):
+            if interrupt_in == phase:
+                raise KeyboardInterrupt(f"interrupted during {phase}")
+
         def warmup(self):
             calls.append("warmup")
+            self._interrupt("warmup")
             if warmup_interrupt:
                 raise KeyboardInterrupt("interrupted during warmup")
             if warmup_raises:
@@ -362,6 +367,7 @@ def _fake_executor(tmp_path, *, before=True, after=True, rg_tags=None,
 
         def detonate(self):
             calls.append("detonate")
+            self._interrupt("detonate")
             if detonate_interrupt:
                 raise KeyboardInterrupt("interrupted during detonate")
             if detonate_raises:
@@ -369,12 +375,15 @@ def _fake_executor(tmp_path, *, before=True, after=True, rg_tags=None,
 
         def revert(self):
             calls.append("revert")
+            self._interrupt("revert")
 
         def cleanup(self):
             calls.append("cleanup")
+            self._interrupt("cleanup")
 
         def probe_initial_state(self, when):
             calls.append(f"probe:{when}")
+            self._interrupt("before" if when == "before" else "after")
             if when == "before":
                 if before_raises:
                     raise RuntimeError("before-probe failed")
@@ -492,6 +501,24 @@ def test_run_stratus_cycle_error_after_detonation_is_not_before_probe(tmp_path, 
     assert rpt["checks"]["attack_started"] == "ERROR"      # the failure is labelled after it
     assert "initial_state_before" not in rpt["checks"] or \
         rpt["checks"]["initial_state_before"] != "ERROR"   # never mislabelled as the before-probe
+
+
+# A Ctrl-C in ANY phase cleans the bench and writes a FAIL report, then re-raises (round 4).
+_PHASE_CHECK = {"warmup": "warmup", "before": "initial_state_before", "detonate": "detonate",
+                "revert": "revert", "cleanup": "cleanup", "after": "initial_state_after"}
+
+
+@pytest.mark.parametrize("phase", list(_PHASE_CHECK))
+def test_run_stratus_cycle_interrupt_in_any_phase_cleans_up_and_reports(tmp_path, monkeypatch,
+                                                                        phase):
+    monkeypatch.chdir(tmp_path)
+    fake, r, calls = _fake_executor(tmp_path, interrupt_in=phase)
+    with pytest.raises(KeyboardInterrupt):
+        Engine()._run_stratus_cycle(_scenario(), fake, "20260101T000021Z", r)
+    rpt = _report(tmp_path)
+    assert rpt["result"] == "FAIL"                             # an interrupt is never a PASS
+    assert rpt["checks"][_PHASE_CHECK[phase]] == "INTERRUPTED"  # the phase in flight, labelled
+    assert "cleanup" in calls                                  # the bench is always cleaned up
 
 
 def test_run_stratus_cycle_does_not_detonate_on_a_dirty_initial_state(tmp_path, monkeypatch):

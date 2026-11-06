@@ -1,9 +1,11 @@
 """R2a (Partie de #79): the Stratus Red Team adapter — a technique id resolved against a CLOSED
 allow-list, the pinned binary checked at run time, the warmup/detonate/revert/cleanup cycle run
 from an armed Orodruin with every phase journaled, and a read-only Graph probe of the initial
-state. M4315–M4351 (M4335–M4344: first review — control-plane guard, bench-only zone, warmup
-cleanup, per-phase binary check; M4345–M4349: second review — a report never PASSes without a
-real detonation, legacy tag refused), measured by tests/unit/test_annatar_stratus.py."""
+state. M4315–M4354, measured by tests/unit/test_annatar_stratus.py — M4315–M4334 the adapter;
+M4335–M4344 review 1 (control-plane guard, bench-only zone, warmup cleanup, per-phase binary
+check); M4345–M4351 reviews 2–3 (report never PASSes without a detonation, legacy tag refused,
+accurate phase labels); M4352–M4354 review 4 (an interrupt mid-teardown still cleans up and
+reports). M4350 is EQUIVALENT (its reason is its 6th field)."""
 ENG = "annatar/engines/stratus.py"
 HOST = "annatar/executors/stratus_host.py"
 RUN = "annatar/runner/engine.py"
@@ -62,7 +64,7 @@ MUTANTS = [
     ("M4331", "the run's report mislabels the engine as atomic", RUN,
      '            "engine": "stratus",', '            "engine": "atomic",'),
     ("M4332", "the control-plane run claims a detection it never measured (ID1)", RUN,
-     '            metrics["detection"] = "unknown"', '            metrics["detection"] = "detected"'),
+     '        metrics["detection"] = "unknown"', '        metrics["detection"] = "detected"'),
     ("M4333", "detonate runs even on a dirty initial state (the before-probe failed)", RUN,
      "            if attack_error is None:", "            if attack_error is None or True:"),
     # ── Authoring ─────────────────────────────────────────────────────────────────────
@@ -83,10 +85,11 @@ MUTANTS = [
      "        guard = check_target(rg_scope, rg_tags, {}, kind=\"technique\","
      " destructive=destructive)"),
     ("M4338", "cleanup is skipped (prerequisites left behind after warmup)", RUN,
-     '                    executor.cleanup()\n                    checks["cleanup"] = "PASS"',
-     '                    checks["cleanup"] = "PASS"  # cleanup call removed (mutant)'),
+     '                        executor.cleanup()\n'
+     '                        checks["cleanup"] = "PASS"',
+     '                        checks["cleanup"] = "PASS"  # cleanup call removed (mutant)'),
     ("M4339", "revert runs without a detonation (meaningless, before detonate)", RUN,
-     "                if detonated:", "                if detonated or True:"),
+     "        if attempted and detonated:", "        if attempted and detonated or True:"),
     ("M4340", "warmup is marked attempted only after it returns (a failed warmup not cleaned)",
      RUN,
      "            attempted = True   # before the call: a warmup that fails half-way is still"
@@ -134,16 +137,33 @@ MUTANTS = [
      "            # Stratus is a new engine (R2): the migration tag 'annatar-test=true' alone,"
      " from"),
     # ── Review round 3 (Opus 5.5): an interruption never reports PASS ───────────────────
-    ("M4350", "a report PASSes without a detonation (a Basea/interrupt mid-run)", RUN,
-     '            overall = ("PASS" if detonated and checks\n'
-     '                       and all("PASS" in v for v in checks.values()) else "FAIL")',
-     '            overall = ("PASS" if checks\n'
-     '                       and all("PASS" in v for v in checks.values()) else "FAIL")'),
+    ("M4350", "a report PASSes without a detonation (a BaseException/interrupt mid-run)", RUN,
+     '        overall = ("PASS" if detonated and checks\n'
+     '                   and all("PASS" in v for v in checks.values()) else "FAIL")',
+     '        overall = ("PASS" if checks\n'
+     '                   and all("PASS" in v for v in checks.values()) else "FAIL")',
+     "EQUIVALENT: since round 4 the teardown labels every no-detonation path (detonate=SKIPPED "
+     "on a lost watch, ERROR/INTERRUPTED on an exception), so no all-PASS report reaches here "
+     "without a detonation; `detonated` is defence-in-depth, kept for a future code path"),
     ("M4351", "a failure after a successful detonation is mislabelled the before-probe", RUN,
      '            elif not tried_detonate:\n'
      '                checks["initial_state_before"] = "ERROR"   # the before-probe raised',
      '            elif True:\n'
      '                checks["initial_state_before"] = "ERROR"   # the before-probe raised'),
+    # ── Review round 4 (Opus 5.5): an interrupt mid-teardown still cleans up and reports ─
+    ("M4352", "the revert→cleanup nesting is removed (a revert interrupt skips cleanup)", RUN,
+     '                    checks["revert"] = "INTERRUPTED"\n'
+     '                    raise\n'
+     '        finally:',
+     '                    checks["revert"] = "INTERRUPTED"\n'
+     '                    raise\n'
+     '        except Exception:'),
+    ("M4353", "an interrupted detonation is not labelled INTERRUPTED", RUN,
+     '                checks["detonate"] = "INTERRUPTED"', '                pass'),
+    ("M4354", "no report is written (the innermost finally's report call removed)", RUN,
+     '                    self._stratus_report(run_id, scenario, resolved, checks, metrics,\n'
+     '                                         detonated=detonated)',
+     '                    pass   # report removed (mutant)'),
 ]
 
 TESTS = {
@@ -182,6 +202,8 @@ TESTS = {
     "M4347": f"{_T}::test_run_stratus_cycle_cleans_up_even_when_detonate_fails",
     "M4348": f"{_T}::test_run_stratus_cycle_after_probe_error_surfaces_an_error",
     "M4349": f"{_T}::test_run_stratus_refuses_a_legacy_enrolled_group",
-    "M4350": f"{_T}::test_run_stratus_cycle_interrupt_in_detonate_is_not_a_pass",
     "M4351": f"{_T}::test_run_stratus_cycle_error_after_detonation_is_not_before_probe",
+    "M4352": f"{_T}::test_run_stratus_cycle_interrupt_in_any_phase_cleans_up_and_reports",
+    "M4353": f"{_T}::test_run_stratus_cycle_interrupt_in_any_phase_cleans_up_and_reports",
+    "M4354": f"{_T}::test_run_stratus_cycle_interrupt_in_any_phase_cleans_up_and_reports",
 }

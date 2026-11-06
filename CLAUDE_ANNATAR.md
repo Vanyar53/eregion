@@ -63,7 +63,7 @@ Tu es spécialisé sur l'agent offensif. Lis ce fichier en début de session.
     `bench` seule, tag `annatar-test` hérité refusé), exécuteur injecteur `annatar/executors/stratus_host.py`
     (cycle journalisé par Orodruin, cleanup toujours joué, revert après détonation, sonde Graph lecture
     seule, hors-ligne via `airgap_env`), dispatch `Engine._run_stratus`. Tests hermétiques
-    (`tests/unit/test_annatar_stratus.py`), mutants M4315–M4351. La remontée réelle au banc (détection
+    (`tests/unit/test_annatar_stratus.py`), mutants M4315–M4354. La remontée réelle au banc (détection
     `azure_activity`) reste **ID1 (#281)** ; la question « Stratus crée-t-il son propre groupe ? » est
     une condition d'entrée d'ID1.
 - **Marquage des exercices (B2, ✅ côté stockage 16/10)** : `Engine.run` ouvre une fenêtre

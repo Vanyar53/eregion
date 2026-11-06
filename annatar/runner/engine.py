@@ -756,9 +756,9 @@ class Engine:
         try:
             return self._run_stratus_cycle(scenario, executor, run_id, resolved)
         finally:
+            # The report (with carry_run) is written inside the cycle's innermost finally, so it
+            # survives an interrupt mid-teardown; here only the exercise window is closed.
             close_window(run_id, injector="annatar")
-            if self.publish_report:
-                carry_run(run_id, RUNS_DIR)
 
     def _run_stratus_cycle(self, scenario, executor, run_id: str, resolved) -> RunOutcome:
         """The four phases of the Stratus cycle, from the armed contract: warmup (prerequisites),
@@ -788,7 +788,6 @@ class Engine:
         attempted = False   # warmup was journaled: cleanup must run, whatever happens next
         tried_detonate = False
         detonated = False
-        restored = None
         try:
             lost = self._watch_lost()
             if lost:
@@ -841,67 +840,111 @@ class Engine:
                 checks["attack_started"] = "ERROR"          # failed after a successful detonation
             console.print(f"[red]Stratus phase failed:[/red] {type(e).__name__}: {e}")
             raise
+        except BaseException:
+            # Ctrl-C / SystemExit in the attack part: `except Exception` does not catch it, so
+            # label the phase in flight INTERRUPTED and re-raise — the teardown-and-report
+            # finally below still runs (the bench is cleaned and the run is reported).
+            if checks.get("warmup") != "PASS":
+                checks["warmup"] = "INTERRUPTED"
+            elif not tried_detonate:
+                checks["initial_state_before"] = "INTERRUPTED"
+            elif not detonated:
+                checks["detonate"] = "INTERRUPTED"
+            else:
+                checks["attack_started"] = "INTERRUPTED"
+            raise
         finally:
-            if attempted:
-                # cleanup ALWAYS destroys what warmup created (even when warmup or detonate
-                # raised). revert runs ONLY after a detonation — reverting before detonating is
-                # meaningless, and not every technique supports revert. Each guarded, so the
-                # report is always saved.
-                if detonated:
-                    try:
-                        console.print("[cyan]->[/cyan] Revert (detonation)...")
-                        executor.revert()
-                        checks["revert"] = "PASS"
-                    except Exception as e:
-                        checks["revert"] = "SKIPPED"
-                        console.print(f"[yellow]Revert not applied:[/yellow] {e}")
-                try:
-                    console.print("[cyan]->[/cyan] Cleanup (prerequisites)...")
-                    executor.cleanup()
-                    checks["cleanup"] = "PASS"
-                except Exception as e:
-                    checks["cleanup"] = "ERROR"
-                    console.print(f"[red]Cleanup failed:[/red] {e}")
-                try:
-                    after = executor.probe_initial_state("after")
-                    if after is not None:
-                        restored = after
-                        checks["initial_state_after"] = "PASS" if after else "FAIL"
-                        metrics["initial_state_restored"] = after
-                except Exception as e:
-                    checks["initial_state_after"] = "ERROR"
-                    console.print(f"[red]After-probe failed:[/red] {e}")
-            # The control plane may be dirty when cleanup ran but failed, or the return is not
-            # restored (cleanup not attempted means warmup never ran — nothing to clean).
-            if checks.get("cleanup") == "ERROR" or restored is False:
-                self._stratus_recovery_hint(resolved)
-            # Control-plane detection is ID1 (#281): not waited on here.
-            metrics["detection"] = "unknown"
-            metrics["detection_note"] = \
-                "control-plane detection (azure_activity) measured at ID1 (#281)"
-            # A report is PASS only after a real detonation: a BaseException (Ctrl-C, SystemExit)
-            # during warmup or detonate is not caught by `except Exception` above and labels
-            # nothing, but the cleanup and after-probe in this finally would otherwise leave an
-            # all-PASS report — `detonated` keeps it FAIL.
-            overall = ("PASS" if detonated and checks
-                       and all("PASS" in v for v in checks.values()) else "FAIL")
-            report = RunReport(scenario=scenario.name, run_id=run_id, mitre=scenario.mitre,
-                               result=overall, metrics=metrics, thresholds={}, checks=checks)
-            path = report.save()
-            report.render()
-            console.print(f"\n[dim]Report saved: {path}[/dim]")
+            # Teardown (revert → cleanup → after-probe) and the report run whatever the attack
+            # part raised — Exception OR BaseException (Ctrl-C mid-run). The teardown is nested
+            # so cleanup and the after-probe run even if revert is interrupted, and the report is
+            # written and carried in the innermost finally, so an interrupt mid-teardown still
+            # leaves a FAIL report and a clean bench before the exception propagates (round 4).
+            self._stratus_teardown_and_report(executor, run_id, scenario, resolved, checks,
+                                              metrics, attempted=attempted, detonated=detonated)
 
         if attack_error:
             return RunOutcome(run_id, "unknown", error=attack_error)
         if checks.get("cleanup") != "PASS":
             return RunOutcome(run_id, "unknown",
                               error="cleanup did not pass — prerequisites may remain")
-        if restored is False:
+        if checks.get("initial_state_after") == "FAIL":
             return RunOutcome(run_id, "unknown", error="initial state not restored after cleanup")
         if checks.get("initial_state_after") == "ERROR":   # the after-probe itself could not run
             return RunOutcome(run_id, "unknown",
                               error="initial state not verified after cleanup")
         return RunOutcome(run_id, "unknown")
+
+    def _stratus_teardown_and_report(self, executor, run_id: str, scenario, resolved, checks,
+                                     metrics, *, attempted: bool, detonated: bool) -> None:
+        """Tear the run down and report it, whatever happened (round 4). revert (only after a
+        detonation), cleanup and the after-probe are nested so each later step runs even if an
+        earlier one is interrupted (Ctrl-C / SystemExit); the report is written and carried in
+        the innermost finally, so an interrupt mid-teardown still leaves a FAIL report and a
+        clean bench before the exception propagates. A teardown step interrupted is INTERRUPTED."""
+        try:
+            if attempted and detonated:
+                try:
+                    console.print("[cyan]->[/cyan] Revert (detonation)...")
+                    executor.revert()
+                    checks["revert"] = "PASS"
+                except Exception as e:
+                    checks["revert"] = "SKIPPED"
+                    console.print(f"[yellow]Revert not applied:[/yellow] {e}")
+                except BaseException:
+                    checks["revert"] = "INTERRUPTED"
+                    raise
+        finally:
+            try:
+                if attempted:
+                    try:
+                        console.print("[cyan]->[/cyan] Cleanup (prerequisites)...")
+                        executor.cleanup()
+                        checks["cleanup"] = "PASS"
+                    except Exception as e:
+                        checks["cleanup"] = "ERROR"
+                        console.print(f"[red]Cleanup failed:[/red] {e}")
+                    except BaseException:
+                        checks["cleanup"] = "INTERRUPTED"
+                        raise
+            finally:
+                try:
+                    if attempted:
+                        try:
+                            after = executor.probe_initial_state("after")
+                            if after is not None:
+                                checks["initial_state_after"] = "PASS" if after else "FAIL"
+                                metrics["initial_state_restored"] = after
+                        except Exception as e:
+                            checks["initial_state_after"] = "ERROR"
+                            console.print(f"[red]After-probe failed:[/red] {e}")
+                        except BaseException:
+                            checks["initial_state_after"] = "INTERRUPTED"
+                            raise
+                finally:
+                    self._stratus_report(run_id, scenario, resolved, checks, metrics,
+                                         detonated=detonated)
+
+    def _stratus_report(self, run_id: str, scenario, resolved, checks, metrics,
+                        *, detonated: bool) -> None:
+        """Build, save and carry the run's report (innermost finally — survives an interrupt).
+        A report is PASS only after a real detonation with every labelled phase PASS: a
+        BaseException (Ctrl-C) labels nothing in `except Exception`, and `detonated` keeps it
+        FAIL even when cleanup and the after-probe passed."""
+        if checks.get("cleanup") in ("ERROR", "INTERRUPTED") \
+                or checks.get("initial_state_after") in ("FAIL", "ERROR", "INTERRUPTED"):
+            self._stratus_recovery_hint(resolved)
+        metrics["detection"] = "unknown"
+        metrics["detection_note"] = \
+            "control-plane detection (azure_activity) measured at ID1 (#281)"
+        overall = ("PASS" if detonated and checks
+                   and all("PASS" in v for v in checks.values()) else "FAIL")
+        report = RunReport(scenario=scenario.name, run_id=run_id, mitre=scenario.mitre,
+                           result=overall, metrics=metrics, thresholds={}, checks=checks)
+        path = report.save()
+        report.render()
+        console.print(f"\n[dim]Report saved: {path}[/dim]")
+        if self.publish_report:
+            carry_run(run_id, RUNS_DIR)
 
     @staticmethod
     def _stratus_recovery_hint(resolved) -> None:

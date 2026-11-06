@@ -74,9 +74,17 @@ def test_the_test_identity_has_no_secret_no_right_no_owner():
     resources = set(re.findall(r'resource "(azuread_\w+)"', every))
     # IDI1b adds the bench's test users, their unit membership and the executor's roles
     # (entra_bench_unit.tf, tests/unit/test_bench_users.py): still no secret, no consent, no owner.
+    # BRO1 adds the bench's read identity: one certificate, on its own application alone
+    # (bench_reader.tf, tests/unit/test_bench_reader.py) — never on the test identity.
     assert resources == {"azuread_application", "azuread_service_principal", "azuread_user",
-                         "azuread_administrative_unit_member", "azuread_directory_role_assignment"}
-    for word in ("azuread_application_password", "azuread_service_principal_password", "azuread_application_certificate",
+                         "azuread_administrative_unit_member", "azuread_directory_role_assignment",
+                         "azuread_application_certificate"}
+    reader = (TF / "bench_reader.tf").read_text(encoding="utf-8")
+    assert every.count('resource "azuread_application_certificate"') == 1
+    assert 'resource "azuread_application_certificate" "bench_reader"' in reader
+    assert "application_id = azuread_application.bench_reader[0].id\n" in reader
+    assert "azuread_application.bench_test" not in reader
+    for word in ("azuread_application_password", "azuread_service_principal_password",
                  "azuread_application_federated_identity_credential", "azuread_app_role_assignment",
                  "azuread_service_principal_delegated_permission_grant", "azuread_application_owner"):
         assert f'resource "{word}"' not in every, word

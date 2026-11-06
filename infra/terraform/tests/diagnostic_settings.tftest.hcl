@@ -36,6 +36,7 @@ variables {
   # IDI1 : l'identité de test du banc, hermétique de même.
   entra_test_identity_enabled = false
   entra_bench_unit_enabled    = false
+  bench_reader_enabled        = false
 }
 
 run "both_off_nothing_of_the_subscription_nor_the_tenant" {

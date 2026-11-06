@@ -36,3 +36,12 @@ vm_shutdown_email    = "you@example.com"
 # entra_bench_unit_id      = "<l'id que celebrimbor-unit-prepare a dit>"
 # entra_test_users         = ["tuor"]
 # entra_identity_executor_object_id = "<le principal de l'exécuteur d'IR1, quand IR1b l'a créé>"
+
+# Optionnel (BRO1) — l'identité de lecture du banc, pour la session Banc seule : une application,
+# son principal, un certificat public tiré sur ce poste (la clé privée n'entre jamais dans l'état),
+# Log Analytics Reader sur le seul workspace du banc. Désactivée par défaut ; à poser ici, jamais en
+# -var. D'abord make celebrimbor-reader-key, puis make celebrimbor-reader-plan, make
+# celebrimbor-reader-up YES=1 et make celebrimbor-reader-profile (docs/operations.md,
+# « L'identité de lecture du banc (BRO1) »).
+# bench_reader_enabled = true
+# bench_reader_certificate_file = "~/.config/eregion-banc/reader.crt"   # le défaut

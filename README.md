@@ -609,8 +609,8 @@ glorfindel-config.yaml    → infrastructure config (workspace IDs, RSV, excepti
                              exceptions: fnmatch patterns to exclude VMs from auto-discovery
 
 glorfindel/
-  agent.py             → LangGraph graph (8 nodes): load_context → [poll_detection|propose_detection_rule]
-                         → investigate → decide → execute_action → verify_action → store_cycle
+  agent.py             → LangGraph graph (10 nodes): load_context → [poll_detection|propose_detection_rule]
+                         → confirm_facts → investigate → decide → execute_action → verify_action → store_cycle
                          investigate: requêtes KQL ciblées selon contenu signal (process list,
                            backup agent check, auth success, root commands post-escalation)
                            → enrichit raw_signal.investigative_context avant le LLM

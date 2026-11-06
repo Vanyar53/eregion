@@ -33,7 +33,7 @@ Tu es spécialisé sur l'agent défensif. Lis ce fichier en début de session.
 
 ## Contexte technique rapide
 
-- LangGraph 8 nœuds : `load_context → poll_detection → investigate → decide → execute_action → verify_action → store_cycle` (+ `escalate_to_human`)
+- LangGraph 10 nœuds : `load_context → poll_detection → confirm_facts → investigate → decide → execute_action → verify_action → store_cycle` (+ `escalate_to_human`, `propose_detection_rule`)
 - `investigate` : enrichit le signal avec des requêtes KQL contextuelles avant `decide`
 - `decide` : LLM via LiteLLM + few-shot + RAG ChromaDB — pas de routing table TTP→action
 - RulePoller : polling continu des règles `detection_rules.yaml`, émet un signal structuré avec `run_id` synthétique (`watch-{rule}-{ts}`)

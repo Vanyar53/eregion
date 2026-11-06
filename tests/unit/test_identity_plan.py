@@ -309,7 +309,7 @@ def test_without_graph_the_plan_stays_useful_and_marks_what_it_did_not_read():
     assert "non confirmé dans Graph" in first["params"][1]["note"]
     consent = _plan(_row("consent"), NoGraph("droit absent sur Graph (403)"))
     grant = next(i for i in consent["items"] if i["check"] and i["check"]["kind"] == "consent_gone")
-    assert not grant["complete"] and "‹id de l'octroi non lu›" in grant["command"]
+    assert not grant["complete"] and "oauth2PermissionGrants/<id-de-l-octroi>" in grant["command"]
     assert grant["params"][0] == {"name": "id de l'octroi", "value": "", "from": "", "read": False,
                                   "why": "droit absent sur Graph (403)"}
     assert "az ad app permission list-grants --id" in grant["find"]
@@ -321,7 +321,7 @@ def test_a_keyid_the_log_does_not_give_is_never_chosen_among_the_credentials(ten
     plan = _plan(_row("credential", CredentialAdded="[KeyType=Password]"), tenant)
     first = plan["items"][0]
     assert not first["complete"] and first["check"] is None and first["verifiable"]
-    assert "‹keyId non lu›" in first["command"]
+    assert "--key-id <keyId>" in first["command"]
     assert {c["keyId"] for c in first["candidates"]} == {KEY, OTHER_KEY}       # shown, not chosen
 
 

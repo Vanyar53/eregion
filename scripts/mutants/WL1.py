@@ -6,7 +6,8 @@ tests/unit/test_bench_routine.py.
 
 The drift of a copy (`base_sha256`, glorfindel/detection_rules.py `_drift`), after the review: a
 stale copy set aside, the shipped rule in its place — more cards, never fewer. M4300–M4304, each
-measured by the test of its property."""
+measured by the test of its property. Second review: a stale copy set aside only when the
+shipped rule will load in its place. M4365–M4367."""
 BENCH = "infra/glorfindel-host/client_rules.bench.yaml"
 RULES = "glorfindel/detection_rules.py"
 _TESTS = "tests/unit/test_bench_routine.py"
@@ -48,6 +49,17 @@ MUTANTS += [
      "    canonical = json.dumps(rule, sort_keys=True,",
      "    canonical = json.dumps(rule.get(\"query\"), sort_keys=True,"),
 ]
+MUTANTS += [
+    ("M4365", "a stale copy set aside although the layer disables the shipped rule: nothing detects (WL1)",
+     RULES, "            if not base.get(\"enabled\", True) or name in off:\n",
+     "            if not base.get(\"enabled\", True):\n"),
+    ("M4366", "a stale copy set aside although the release disables the shipped rule: nothing detects (WL1)",
+     RULES, "            if not base.get(\"enabled\", True) or name in off:\n",
+     "            if name in off:\n"),
+    ("M4367", "a stale copy of a shipped rule that will not load dropped: nothing detects (WL1)", RULES,
+     "                kept.append(entry)          # the shipped rule off: the copy alone detects its technique\n",
+     "                pass\n"),
+]
 TESTS = {f"M{n}": _TESTS for n in range(4265, 4270)}
 TESTS.update({
     "M4300": f"{_TESTS}::test_a_shipped_rule_changed_since_the_copy_sets_the_copy_aside_and_runs",
@@ -55,4 +67,7 @@ TESTS.update({
     "M4302": f"{_TESTS}::test_a_shipped_rule_changed_since_the_copy_sets_the_copy_aside_and_runs",
     "M4303": f"{_TESTS}::test_a_base_rule_gone_since_the_copy_keeps_the_copy_and_says_it",
     "M4304": f"{_TESTS}::test_the_fingerprint_is_the_rule_not_its_layout",
+    "M4365": f"{_TESTS}::test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running",
+    "M4366": f"{_TESTS}::test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running",
+    "M4367": f"{_TESTS}::test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running",
 })

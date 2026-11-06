@@ -375,8 +375,9 @@ bree revient jusqu'à ce que la copie soit refaite. Elle le dit au démarrage, e
 périmée d'une règle livrée »), et `glorfindel rules` aussi (`sudo-privilege-escalation` en `base`).
 Reprendre la copie dans le dépôt (le test `tests/unit/test_bench_routine.py` échoue déjà dans la
 PR qui change la base ; la note donne la nouvelle empreinte), puis relancer
-`make glorfindel-host-client-rules`. Une règle livrée qui n'existe plus : la copie tourne
-toujours, et c'est dit. Pour revenir à la règle livrée : retirer la règle de
+`make glorfindel-host-client-rules`. Une règle livrée qui n'existe plus, ou qui ne chargerait
+pas (`enabled: false` dans la release, ou nommée dans le `disable` de la couche de H0) : la copie
+tourne toujours, et c'est dit — jamais rien ne détecte plus sa technique. Pour revenir à la règle livrée : retirer la règle de
 `~/.glorfindel/client_rules.yaml` sur H0, puis `docker compose restart watch`.
 
 ### Migrer les règles approuvées vers la couche du client

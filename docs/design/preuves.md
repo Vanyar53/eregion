@@ -1001,7 +1001,8 @@ les trois sudo du cron de bree, et rien d'autre. Un mutant par propriété de l'
 l'élargit ; mesurés par `tests/unit/test_bench_routine.py`, tous attrapés (06/11), chacun par le
 test de sa propriété — une cible où le hasard ne joue pas, un seul tour (CI10a). La dérive de la
 copie (`base_sha256`, `_drift` de `glorfindel/detection_rules.py`) a ses mutants aussi, après la
-relecture : une copie périmée écartée, la règle livrée à sa place ; attrapés de même.
+relecture : une copie périmée écartée, la règle livrée à sa place — seulement si elle charge
+(seconde relecture : M4365–M4367) ; attrapés de même.
 
 | Mutant | Défaut réinjecté | Effet |
 |---|---|---|
@@ -1015,6 +1016,9 @@ relecture : une copie périmée écartée, la règle livrée à sa place ; attra
 | M4302 | la copie périmée dite mais gardée | la règle livrée corrigée ne tourne pas : moins de cartes |
 | M4303 | une copie dont la base n'existe plus retirée aussi | sa technique n'est plus détectée |
 | M4304 | l'empreinte de la requête seule | un autre champ de la règle livrée change sans dérive |
+| M4365 | copie périmée écartée malgré un `disable` du même nom | plus rien ne détecte la technique |
+| M4366 | copie périmée écartée malgré une règle livrée `enabled: false` | plus rien ne détecte la technique |
+| M4367 | la copie d'une règle livrée qui ne charge pas retirée | plus rien ne détecte la technique |
 
 ### Annatar et Gothmog exigent Glorfindel (V1)
 

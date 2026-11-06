@@ -485,11 +485,16 @@ def _drift(base_rules: dict[str, dict], client: dict) -> tuple[dict, list[str], 
     its place — more cards, never fewer. A copy keeps the old rule, and whatever the update
     brought to the base (a fix, a new form of line) would not reach it; what the copy set aside
     makes cards again until it is redone. A copy whose base rule is gone still runs (nothing
-    else would detect its technique), and is said. A client rule without a fingerprint is no
-    copy; a malformed fingerprint is `_invalid_client_entry`'s; a disabled copy disables."""
+    else would detect its technique), and is said; so does a stale copy whose shipped rule would
+    not load either — `enabled: false` in the base, or named in the layer's `disable` (set aside,
+    nothing would detect it). A client rule without a fingerprint is no copy; a malformed
+    fingerprint is `_invalid_client_entry`'s; a disabled copy disables."""
     rules = client.get("rules")
     if not isinstance(rules, list):
         return client, [], []
+    disable = client.get("disable")
+    # The names merge_layers will not load from the base (the same reading as its own).
+    off = {n for n in disable if isinstance(n, str) and n.strip()} if isinstance(disable, list) else set()
     kept: list = []
     names: list[str] = []
     notes: list[str] = []
@@ -506,6 +511,14 @@ def _drift(base_rules: dict[str, dict], client: dict) -> tuple[dict, list[str], 
             names.append(name)
             kept.append(entry)          # its base gone: the copy alone detects its technique
         elif (current := base_rule_sha256(base)) != sha:
+            if not base.get("enabled", True) or name in off:
+                # Set aside, nothing would detect its technique: the shipped rule does not load.
+                notes.append(f"règle du client « {name} » : la règle livrée a changé depuis la copie "
+                             "(dérive), mais la règle livrée ne tournerait pas (désactivée) — la copie "
+                             f"tourne toujours ; la relire, puis base_sha256: {current}")
+                names.append(name)
+                kept.append(entry)          # the shipped rule off: the copy alone detects its technique
+                continue
             notes.append(f"règle du client « {name} » : copie périmée ignorée — la règle livrée a changé "
                          "depuis la copie (dérive) ; la règle livrée tourne à sa place, et ce que la copie "
                          "écartait refait des cartes. Reprendre la copie sur la règle livrée, puis "

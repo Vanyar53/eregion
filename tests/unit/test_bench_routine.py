@@ -275,10 +275,11 @@ def test_the_same_line_on_gondolin_is_a_signal_on_gondolin():
 
 # ── Drift: the base changes, the stale copy is set aside — said, the shipped rule runs ─
 
-def _layer(tmp_path, **changes) -> Path:
-    rule = {**CLIENT[NAME], **changes}
+def _layer(tmp_path, disable: list | None = None, drop: tuple = (), **changes) -> Path:
+    rule = {k: v for k, v in {**CLIENT[NAME], **changes}.items() if k not in drop}
+    layer = {"rules": [rule], **({"disable": disable} if disable is not None else {})}
     path = tmp_path / "client_rules.yaml"
-    path.write_text(yaml.safe_dump({"rules": [rule]}, sort_keys=False, allow_unicode=True))
+    path.write_text(yaml.safe_dump(layer, sort_keys=False, allow_unicode=True))
     return path
 
 
@@ -333,6 +334,26 @@ def test_a_base_rule_gone_since_the_copy_keeps_the_copy_and_says_it(tmp_path):
     # Nothing else detects its technique: the copy runs.
     loaded = next(r for r in cfg.rules if r.name == NAME)
     assert loaded.layer == "client" and loaded.query == CLIENT[NAME]["query"]
+
+
+@pytest.mark.parametrize("off", ["disable", "shipped_disabled"])
+def test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running(tmp_path, off):
+    """Setting the copy aside must never leave its technique undetected: with the shipped rule
+    named in the layer's `disable`, or `enabled: false` in a release, the copy runs, and the drift
+    is said — never « la règle livrée tourne »."""
+    if off == "disable":
+        base, rule = _base_with(tmp_path, query=CHANGED_QUERY)
+        layer = _layer(tmp_path, disable=[NAME])
+    else:
+        base, rule = _base_with(tmp_path, enabled=False)
+        layer = _layer(tmp_path)
+    cfg = load_config(base, client_layer=layer)
+    [loaded] = [r for r in cfg.rules if r.name == NAME]
+    assert loaded.layer == "client" and loaded.query == CLIENT[NAME]["query"]
+    assert cfg.drifted == [NAME] and cfg.disabled_base == []
+    [note] = [n for n in cfg.notes if "dérive" in n]
+    assert "ne tournerait pas" in note and "tourne toujours" in note and "tourne à sa place" not in note
+    assert base_rule_sha256(rule) in note
 
 
 def test_a_client_rule_that_is_no_copy_says_no_drift(tmp_path):

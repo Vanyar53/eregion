@@ -458,10 +458,31 @@ rules:
           "MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/SECURITYRULES/DELETE")
       | extend CallerAppId = tostring(parse_json(Claims).appid),
                CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
-      // One row per operation, its latest line (Start, Accept, Success).
-      | summarize arg_max(TimeGenerated, *) by CorrelationId, OperationNameValue, _ResourceId
-      | where ActivityStatusValue !in~ ("Failure", "Failed")
-      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+      // A line that names its caller (its Caller, or ids in Claims), and who, the three as one.
+      | extend Named = isnotempty(Caller) or isnotempty(CallerAppId) or isnotempty(CallerObjectId),
+               CallerKey = strcat(Caller, "|", CallerAppId, "|", CallerObjectId)
+      // One row per operation: its latest line, how many of its lines succeeded, how many
+      // callers its lines name, and the caller they name. An operation that succeeded is read,
+      // whatever its latest line; one that only failed is not.
+      | summarize arg_max(TimeGenerated, *), Succeeded = countif(ActivityStatusValue in~ ("Success", "Succeeded")),
+          Callers = dcountif(CallerKey, Named),
+          NamedCaller = take_anyif(Caller, Named),
+          NamedCallerIp = take_anyif(CallerIpAddress, Named and isnotempty(CallerIpAddress)),
+          NamedCallerAppId = take_anyif(CallerAppId, Named),
+          NamedCallerObjectId = take_anyif(CallerObjectId, Named)
+          by CorrelationId, OperationNameValue, _ResourceId
+      | where Succeeded > 0 or ActivityStatusValue !in~ ("Failure", "Failed")
+      // A latest line that names no caller takes the caller its operation's lines name, the
+      // four columns from that caller's lines — only when they name one: a CorrelationId is
+      // the client's to choose, and two callers' ids are never mixed on one row (one of them
+      // Glorfindel's would set the other's write aside). Else the row stays as its latest
+      // line, naming no one; Callers says how many.
+      | extend Fill = not(Named) and Callers == 1
+      | extend Caller = iif(Fill, NamedCaller, Caller),
+               CallerIpAddress = iif(Fill, NamedCallerIp, CallerIpAddress),
+               CallerAppId = iif(Fill, NamedCallerAppId, CallerAppId),
+               CallerObjectId = iif(Fill, NamedCallerObjectId, CallerObjectId)
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Succeeded, Callers, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
 
   - name: role-assignment-write
@@ -481,9 +502,31 @@ rules:
       | where OperationNameValue =~ "MICROSOFT.AUTHORIZATION/ROLEASSIGNMENTS/WRITE"
       | extend CallerAppId = tostring(parse_json(Claims).appid),
                CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
-      | summarize arg_max(TimeGenerated, *) by CorrelationId, OperationNameValue, _ResourceId
-      | where ActivityStatusValue !in~ ("Failure", "Failed")
-      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+      // A line that names its caller (its Caller, or ids in Claims), and who, the three as one.
+      | extend Named = isnotempty(Caller) or isnotempty(CallerAppId) or isnotempty(CallerObjectId),
+               CallerKey = strcat(Caller, "|", CallerAppId, "|", CallerObjectId)
+      // One row per operation: its latest line, how many of its lines succeeded, how many
+      // callers its lines name, and the caller they name. An operation that succeeded is read,
+      // whatever its latest line; one that only failed is not.
+      | summarize arg_max(TimeGenerated, *), Succeeded = countif(ActivityStatusValue in~ ("Success", "Succeeded")),
+          Callers = dcountif(CallerKey, Named),
+          NamedCaller = take_anyif(Caller, Named),
+          NamedCallerIp = take_anyif(CallerIpAddress, Named and isnotempty(CallerIpAddress)),
+          NamedCallerAppId = take_anyif(CallerAppId, Named),
+          NamedCallerObjectId = take_anyif(CallerObjectId, Named)
+          by CorrelationId, OperationNameValue, _ResourceId
+      | where Succeeded > 0 or ActivityStatusValue !in~ ("Failure", "Failed")
+      // A latest line that names no caller takes the caller its operation's lines name, the
+      // four columns from that caller's lines — only when they name one: a CorrelationId is
+      // the client's to choose, and two callers' ids are never mixed on one row (one of them
+      // Glorfindel's would set the other's write aside). Else the row stays as its latest
+      // line, naming no one; Callers says how many.
+      | extend Fill = not(Named) and Callers == 1
+      | extend Caller = iif(Fill, NamedCaller, Caller),
+               CallerIpAddress = iif(Fill, NamedCallerIp, CallerIpAddress),
+               CallerAppId = iif(Fill, NamedCallerAppId, CallerAppId),
+               CallerObjectId = iif(Fill, NamedCallerObjectId, CallerObjectId)
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Succeeded, Callers, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
 
   - name: snapshot-by-unexpected-caller
@@ -510,9 +553,31 @@ rules:
           "MICROSOFT.COMPUTE/DISKS/BEGINGETACCESS/ACTION")
       | extend CallerAppId = tostring(parse_json(Claims).appid),
                CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
-      | summarize arg_max(TimeGenerated, *) by CorrelationId, OperationNameValue, _ResourceId
-      | where ActivityStatusValue !in~ ("Failure", "Failed")
-      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+      // A line that names its caller (its Caller, or ids in Claims), and who, the three as one.
+      | extend Named = isnotempty(Caller) or isnotempty(CallerAppId) or isnotempty(CallerObjectId),
+               CallerKey = strcat(Caller, "|", CallerAppId, "|", CallerObjectId)
+      // One row per operation: its latest line, how many of its lines succeeded, how many
+      // callers its lines name, and the caller they name. An operation that succeeded is read,
+      // whatever its latest line; one that only failed is not.
+      | summarize arg_max(TimeGenerated, *), Succeeded = countif(ActivityStatusValue in~ ("Success", "Succeeded")),
+          Callers = dcountif(CallerKey, Named),
+          NamedCaller = take_anyif(Caller, Named),
+          NamedCallerIp = take_anyif(CallerIpAddress, Named and isnotempty(CallerIpAddress)),
+          NamedCallerAppId = take_anyif(CallerAppId, Named),
+          NamedCallerObjectId = take_anyif(CallerObjectId, Named)
+          by CorrelationId, OperationNameValue, _ResourceId
+      | where Succeeded > 0 or ActivityStatusValue !in~ ("Failure", "Failed")
+      // A latest line that names no caller takes the caller its operation's lines name, the
+      // four columns from that caller's lines — only when they name one: a CorrelationId is
+      // the client's to choose, and two callers' ids are never mixed on one row (one of them
+      // Glorfindel's would set the other's write aside). Else the row stays as its latest
+      // line, naming no one; Callers says how many.
+      | extend Fill = not(Named) and Callers == 1
+      | extend Caller = iif(Fill, NamedCaller, Caller),
+               CallerIpAddress = iif(Fill, NamedCallerIp, CallerIpAddress),
+               CallerAppId = iif(Fill, NamedCallerAppId, CallerAppId),
+               CallerObjectId = iif(Fill, NamedCallerObjectId, CallerObjectId)
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Succeeded, Callers, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
 
   # La sœur de la règle des instantanés (AL2, #598) : les points de restauration. Mesuré au
@@ -534,6 +599,10 @@ rules:
   # ligne peut mêler leurs identifiants. L'identité de Glorfindel reste traitée par
   # l'adaptateur, sur les identifiants qu'elle porte, comme dans les autres règles : aucune de
   # ces opérations n'est à lui — quand l'un d'eux est le sien, la ligne reste, critique.
+  # Une opération qui a réussi est lue quelle que soit sa dernière ligne, comme dans les autres
+  # règles du journal d'activité (AL1d, #600), mais pas par leur forme commune : ses colonnes
+  # ne viennent que des lignes qui nomment un autre appelant (iif(OtherCaller, …)), et seuls
+  # comptent les succès qui ne peuvent pas être ceux d'Azure Backup.
   # RESTOREPOINTCOLLECTIONS/WRITE n'est pas lue : une collection seule ne contient rien, son
   # premier point de restauration fait la carte.
   - name: restorepoint-by-unexpected-caller
@@ -552,9 +621,12 @@ rules:
       stockage), une restauration ou une récupération de fichiers depuis le coffre (Recovery
       Services), ce qu'Azure Backup fait sous son identité — exclu : qui tient le coffre en
       tire les disques sans carte —, une opération dont aucune ligne ne nomme d'appelant,
-      une opération lue par sa dernière ligne, dont l'échec est écarté (limite connue de la
-      famille des règles du journal d'activité, suivie par un lot à part), ni rien sans le
-      journal d'activité dans le workspace.
+      ni rien sans le journal d'activité dans le workspace. Une opération qui a réussi est
+      lue quelle que soit sa dernière ligne, une qui n'a qu'échoué ne l'est pas (AL1d) ; seul
+      compte un succès qui ne peut pas être celui d'Azure Backup — sous le CorrelationId
+      repris d'une sauvegarde, un succès nu ne compte pas pour l'autre appelant, et la
+      dernière ligne d'Azure Backup ne vaut pour lui que si aucune de ses lignes n'a échoué :
+      son essai qui a échoué ne fait pas de carte, son Start ou son succès nu en fait une.
     enabled: true
     source: azure_activity
     ttp: T1578.001
@@ -575,20 +647,42 @@ rules:
       | extend AzureBackup = CallerAppId =~ "262044b1-e2ce-469f-a196-69ab7ada62d3" or Caller =~ "262044b1-e2ce-469f-a196-69ab7ada62d3"
       // A line that names someone else: a user, another application.
       | extend OtherCaller = not(AzureBackup) and (isnotempty(Caller) or isnotempty(CallerAppId) or isnotempty(CallerObjectId))
+      // Who, the three ids as one (Callers, below: how many other callers its lines name).
+      | extend CallerKey = strcat(Caller, "|", CallerAppId, "|", CallerObjectId)
       // One row per operation, its latest line. Kept when one of its lines names someone other
       // than Azure Backup — under a backup's own correlation id too, a client chooses it. A
       // line that names no one decides nothing: a backup's latest line may be bare, and its
       // Start line (Azure Backup's) may be out of the window or not yet in. Anyone else's Start
       // line names them (ID1-A9 shows each line): their card comes at the pass where it lands.
       // Named*: who else the operation's lines name, to carry on its row (below).
+      // *Succeeded, BackupLines: its lines that succeeded, and whose (AL1d, below).
       | summarize arg_max(TimeGenerated, *), OtherLines = countif(OtherCaller),
+            BackupLines = countif(AzureBackup),
+            Callers = dcountif(CallerKey, OtherCaller),
+            OtherSucceeded = countif(OtherCaller and ActivityStatusValue in~ ("Success", "Succeeded")),
+            AnySucceeded = countif(ActivityStatusValue in~ ("Success", "Succeeded")),
+            OtherFailures = countif(OtherCaller and ActivityStatusValue in~ ("Failure", "Failed")),
             NamedCaller = take_anyif(Caller, OtherCaller and isnotempty(Caller)),
             NamedAppId = take_anyif(CallerAppId, OtherCaller and isnotempty(CallerAppId)),
             NamedObjectId = take_anyif(CallerObjectId, OtherCaller and isnotempty(CallerObjectId)),
             NamedIp = take_anyif(CallerIpAddress, OtherCaller and isnotempty(CallerIpAddress))
           by CorrelationId, OperationNameValue, _ResourceId
       | where OtherLines > 0
-      | where ActivityStatusValue !in~ ("Failure", "Failed")
+      // An operation that succeeded is read, whatever its latest line; one that only failed
+      // is not (AL1d, #600). Only a success that cannot be Azure Backup's counts: a line that
+      // names someone else, or any line when none of the operation's names Azure Backup. Under
+      // a backup's correlation id taken up, a bare Success may be the backup's: it never counts
+      // as the other caller's — their operation is then read by its own success, or its
+      // latest line. (The backup's named line out of the window: its bare Success counts —
+      // a card too many, never one fewer.)
+      | extend Succeeded = iif(BackupLines > 0, OtherSucceeded, AnySucceeded)
+      // Read by its latest line otherwise. Azure Backup's latest line stands for the other
+      // caller only when none of their lines failed: under its correlation id, a backup's
+      // Success arrived last says nothing of a try that failed (no card) — but the other
+      // caller's Start, or their bare Success, behind it still makes one. A bare latest line,
+      // or a bare failure of theirs, may hide what the backup did: a card too many, never one
+      // fewer.
+      | where Succeeded > 0 or (ActivityStatusValue !in~ ("Failure", "Failed") and (not(AzureBackup) or OtherFailures == 0))
       // The row names the caller that decided it, and its address: its latest line's when that
       // line names someone else, else what the lines naming someone else carry (a bare latest
       // line, or Azure Backup's) — each column taken on one of those lines: with several other
@@ -598,7 +692,7 @@ rules:
                CallerAppId = iif(OtherCaller, CallerAppId, NamedAppId),
                CallerObjectId = iif(OtherCaller, CallerObjectId, NamedObjectId),
                CallerIpAddress = iif(OtherCaller, CallerIpAddress, NamedIp)
-      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Succeeded, Callers, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
 
   # Notre propre identité surveillée (SID1, #409). Le rôle de réponse tient runCommand pour
@@ -629,10 +723,29 @@ rules:
       | where OperationNameValue =~ "MICROSOFT.COMPUTE/VIRTUALMACHINES/RUNCOMMAND/ACTION"
       | extend CallerAppId = tostring(parse_json(Claims).appid),
                CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
-      // One row per operation, its latest line, and when its first line was written.
-      | summarize arg_max(TimeGenerated, *), Started = min(TimeGenerated) by CorrelationId, OperationNameValue, _ResourceId
+      // A line that names its caller (its Caller, or ids in Claims), and who, the three as one.
+      | extend Named = isnotempty(Caller) or isnotempty(CallerAppId) or isnotempty(CallerObjectId),
+               CallerKey = strcat(Caller, "|", CallerAppId, "|", CallerObjectId)
+      // One row per operation, its latest line, when its first line was written, how many
+      // callers its lines name, and the caller they name.
+      | summarize arg_max(TimeGenerated, *), Started = min(TimeGenerated),
+          Callers = dcountif(CallerKey, Named),
+          NamedCaller = take_anyif(Caller, Named),
+          NamedCallerIp = take_anyif(CallerIpAddress, Named and isnotempty(CallerIpAddress)),
+          NamedCallerAppId = take_anyif(CallerAppId, Named),
+          NamedCallerObjectId = take_anyif(CallerObjectId, Named)
+          by CorrelationId, OperationNameValue, _ResourceId
+      // A latest line that names no caller takes the caller its operation's lines name — only
+      // when they name one: under one CorrelationId (the client's to choose), another's Run
+      // Command never borrows Glorfindel's ids, nor its drain. Else the row names no one
+      // (caller_unreadable, critical).
+      | extend Fill = not(Named) and Callers == 1
+      | extend Caller = iif(Fill, NamedCaller, Caller),
+               CallerIpAddress = iif(Fill, NamedCallerIp, CallerIpAddress),
+               CallerAppId = iif(Fill, NamedCallerAppId, CallerAppId),
+               CallerObjectId = iif(Fill, NamedCallerObjectId, CallerObjectId)
       | extend WatchedCaller = "glorfindel"
-      | project TimeGenerated, Started, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+      | project TimeGenerated, Started, OperationNameValue, ActivityStatusValue, Callers, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId, WatchedCaller
 
   # ── Identités : les journaux d'Entra ID (AuditLogs, AADServicePrincipalSignInLogs, C2) ──

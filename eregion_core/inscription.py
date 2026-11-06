@@ -64,7 +64,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from eregion_core.never_target import NeverTarget
 from eregion_core.never_target import guid as _guid
@@ -94,6 +94,8 @@ class GuardResult:
     reason: str = ""
     zone: str = ""
     legacy: bool = False
+    # What a read said that the verdict must say too (IDI1p: no PIM license) — never a reason to admit.
+    notes: tuple[str, ...] = ()
 
 
 def _is_known_bench(bench: str) -> bool:
@@ -596,11 +598,12 @@ def identity_enrollment(identity: dict, rg_tags: dict | None, *, scope: Identity
 
 def check_identity(identity: dict, rg_tags: dict | None, *, scope: IdentityScope, token: dict,
                    kind: str, destructive: bool | None) -> GuardResult:
-    """Everything, for an identity: its enrollment by both keys, then its zone."""
+    """Everything, for an identity: its enrollment by both keys, then its zone — and what its read
+    noted (``read_notes``), said, never weighed."""
     enrolled = identity_enrollment(identity, rg_tags, scope=scope, token=token)
-    if not enrolled.allowed:
-        return enrolled
-    return check_zone(enrolled.zone, kind=kind, destructive=destructive)
+    if enrolled.allowed:
+        enrolled = check_zone(enrolled.zone, kind=kind, destructive=destructive)
+    return replace(enrolled, notes=read_notes(identity))
 
 
 # ── A test user of Entra ID (IDI1b, #573): the unit and the attribute ──────────────────
@@ -726,15 +729,66 @@ def user_enrollment(user: dict, unit: dict, *, scope: IdentityScope, token: dict
 
 def check_user(user: dict, unit: dict, *, scope: IdentityScope, token: dict, kind: str,
                destructive: bool | None) -> GuardResult:
-    """Everything, for a test user: its enrollment by both halves, then its zone."""
+    """Everything, for a test user: its enrollment by both halves, then its zone — and what its read
+    noted (``read_notes``), said, never weighed."""
     enrolled = user_enrollment(user, unit, scope=scope, token=token)
-    return check_zone(enrolled.zone, kind=kind, destructive=destructive) if enrolled.allowed else enrolled
+    verdict = check_zone(enrolled.zone, kind=kind, destructive=destructive) if enrolled.allowed else enrolled
+    return replace(verdict, notes=read_notes(user))
 
 
 GRAPH = "https://graph.microsoft.com"
 _GRAPH_SCOPE = f"{GRAPH}/.default"
 _GRAPH_V1 = f"{GRAPH}/v1.0"
 _SAFE_RG = re.compile(r"[A-Za-z0-9._()-]{1,90}")
+
+# ── A tenant without PIM (IDI1p, #618): one answer of Graph, on one read, read as « none » ──────
+# Measured on the bench's tenant, 06/11: without Entra ID P2 or ID Governance, Graph answers the read
+# of eligible role instances 400, AadPremiumLicenseRequired. Without that license no eligible role
+# can exist (Microsoft, « licensing fundamentals »: at its expiry, eligible assignments of Entra roles
+# are removed) — so that answer, and that one only, is an empty list, said in the verdict. Shared by
+# the three readers of eligible roles (IDI1's and IDI1b's guard here, IR1b's contract in Glorfindel's
+# adapter): any other failure still refuses.
+ELIGIBLE_ROLES_PATH = "/roleManagement/directory/roleEligibilityScheduleInstances"
+NO_PIM_LICENSE = "AadPremiumLicenseRequired"
+NO_PIM_LICENSE_NOTE = (f"eligible roles: none can exist, the tenant has no PIM license "
+                       f"(Graph: {NO_PIM_LICENSE})")
+READ_NOTES = frozenset({NO_PIM_LICENSE_NOTE})
+_GRAPH_CODE = re.compile(r"[A-Za-z_]{1,64}")
+
+
+def graph_error_code(response) -> str:
+    """The error code an answer of Graph names (``error.code`` of its JSON body), or "": data from
+    outside, never copied raw — ASCII letters and ``_`` only (``Authorization_RequestDenied``), at most
+    64 of them, else nothing."""
+    try:
+        body = response.json()
+    except Exception:
+        return ""
+    err = body.get("error") if isinstance(body, dict) else None
+    code = err.get("code") if isinstance(err, dict) else None
+    return code if isinstance(code, str) and _GRAPH_CODE.fullmatch(code) else ""
+
+
+def no_pim_license(path: str, status: int, code: str, *, page: int) -> bool:
+    """Is this refusal of Graph the tenant without PIM's, read as « no eligible role can exist »?
+    Only the exact answer — status 400, code ``AadPremiumLicenseRequired`` — on the first page of the
+    read of eligible role instances: another code, another status, another read, or a next page
+    after a first one read is a refusal."""
+    return page == 0 and path == ELIGIBLE_ROLES_PATH and status == 400 and code == NO_PIM_LICENSE
+
+
+def read_notes(read: dict) -> tuple[str, ...]:
+    """The notes a reader put on what it read, the known ones only (``READ_NOTES``)."""
+    notes = read.get("notes") if isinstance(read, dict) else None
+    return tuple(n for n in READ_NOTES if isinstance(notes, (list, tuple)) and n in notes)
+
+
+class GraphRefused(RuntimeError):
+    """An HTTP read refused: its status and its error code (filtered, ``graph_error_code``) said."""
+
+    def __init__(self, status: int, code: str, what: str):
+        self.status, self.code = status, code
+        super().__init__(f"HTTP {status}{' ' + code if code else ''} reading {what}")
 
 
 def token_claims(token: str) -> dict:
@@ -753,7 +807,9 @@ class GraphEnrollment:
     bench's group. Graph: the application, its principal (with its roles and scopes), what the
     principal owns, who holds a role on it, its memberships, its application permissions (each
     named by its resource), its directory roles active and eligible; ARM: the group's tags. Each
-    URL is built from an object id checked first. Any failure refuses: never enrolled by default."""
+    URL is built from an object id checked first. Any failure refuses: never enrolled by default —
+    but one answer, a tenant without PIM's to the read of eligible roles (``no_pim_license``): no
+    eligible role can exist there, none is read, and the verdict says so (IDI1p)."""
 
     MAX_PAGES = 10
 
@@ -772,14 +828,22 @@ class GraphEnrollment:
         import requests
         r = (self._get or requests.get)(url, headers=headers, params=params, timeout=15)
         if not r.ok:
-            raise RuntimeError(f"HTTP {r.status_code} reading {url.split('?')[0].rsplit('/', 1)[-1][:60]}")
+            raise GraphRefused(r.status_code, graph_error_code(r), url.split('?')[0].rsplit('/', 1)[-1][:60])
         return r.json()
 
-    def _pages(self, url: str, headers: dict, params: dict | None) -> list[dict]:
-        """Every item of a Graph listing; its next page in Graph only, read whole or refused."""
+    def _pages(self, url: str, headers: dict, params: dict | None, notes: list[str]) -> list[dict]:
+        """Every item of a Graph listing; its next page in Graph only, read whole or refused. A
+        tenant without PIM's answer to its first page (``no_pim_license``) is no item, noted."""
         out: list[dict] = []
-        for _ in range(self.MAX_PAGES):
-            body = self._read(url, headers, params)
+        for page in range(self.MAX_PAGES):
+            try:
+                body = self._read(url, headers, params)
+            except GraphRefused as e:
+                path = url.split("?")[0][len(_GRAPH_V1):] if url.startswith(_GRAPH_V1 + "/") else ""
+                if not no_pim_license(path, e.status, e.code, page=page):
+                    raise
+                notes.append(NO_PIM_LICENSE_NOTE)
+                return []
             out += [o for o in body.get("value") or [] if isinstance(o, dict)]
             url, params = str(body.get("@odata.nextLink") or ""), None
             if not url:
@@ -801,6 +865,7 @@ class GraphEnrollment:
         token = self._token(_GRAPH_SCOPE)
         claims = token_claims(token)
         g = {"Authorization": f"Bearer {token}"}
+        notes: list[str] = []
         app = self._read(f"{_GRAPH_V1}/applications/{oid}", g, {"$select": "id,appId,signInAudience,tags"})
         app_id = _guid(app.get("appId"))
         if not app_id:
@@ -811,13 +876,13 @@ class GraphEnrollment:
         if not sp_oid:
             raise RuntimeError("the service principal names no id")
         base = f"{_GRAPH_V1}/servicePrincipals/{sp_oid}"
-        owned = [str(o.get("id") or "") for o in self._pages(f"{base}/ownedObjects", g, {"$select": "id"})]
-        assigned_to = [str(o.get("id") or "") for o in self._pages(f"{base}/appRoleAssignedTo", g, None)]
-        member_of = [str(o.get("id") or "") for o in self._pages(f"{base}/transitiveMemberOf", g, {"$select": "id"})]
+        owned = [str(o.get("id") or "") for o in self._pages(f"{base}/ownedObjects", g, {"$select": "id"}, notes)]
+        assigned_to = [str(o.get("id") or "") for o in self._pages(f"{base}/appRoleAssignedTo", g, None, notes)]
+        member_of = [str(o.get("id") or "") for o in self._pages(f"{base}/transitiveMemberOf", g, {"$select": "id"}, notes)]
         # Its application permissions, each named by its resource's own list of roles.
         held = []
         names: dict[str, dict[str, str]] = {}
-        for a in self._pages(f"{base}/appRoleAssignments", g, None):
+        for a in self._pages(f"{base}/appRoleAssignments", g, None, notes):
             rid, role = _guid(a.get("resourceId")), _guid(a.get("appRoleId"))
             if not rid or not role:
                 raise RuntimeError("an application permission names no resource or role")
@@ -827,12 +892,12 @@ class GraphEnrollment:
             held.append({"appRoleId": role, "resourceId": rid, "value": names[rid].get(role, "")})
         # Its directory roles, active and eligible (PIM), at any scope.
         flt = {"$filter": f"principalId eq '{sp_oid}'"}
-        roles = self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleAssignments", g, flt)
-        roles += self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleEligibilityScheduleInstances", g, flt)
+        roles = self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleAssignments", g, flt, notes)
+        roles += self._pages(f"{_GRAPH_V1}{ELIGIBLE_ROLES_PATH}", g, flt, notes)
         arm = {"Authorization": f"Bearer {self._token(_ARM_SCOPE)}"}
         group = self._read(f"{ARM}/subscriptions/{sub}/resourceGroups/{rg}", arm, {"api-version": _RG_API})
         identity = {"application": app, "service_principal": sp, "owned": owned, "assigned_to": assigned_to,
-                    "member_of": member_of, "app_roles_held": held, "directory_roles": roles}
+                    "member_of": member_of, "app_roles_held": held, "directory_roles": roles, "notes": notes}
         return identity, group.get("tags") or {}, claims
 
     def check(self, app_object_id: str, *, kind: str, destructive: bool | None) -> GuardResult:
@@ -864,23 +929,25 @@ class GraphEnrollment:
         token = self._token(_GRAPH_SCOPE)
         claims = token_claims(token)
         g = {"Authorization": f"Bearer {token}"}
+        notes: list[str] = []
         user = self._read(f"{_GRAPH_V1}/users/{oid}", g, {"$select": "id,userType,customSecurityAttributes"})
         if _guid(user.get("id")) != oid:
             raise RuntimeError("Graph answered for another user")
         base = f"{_GRAPH_V1}/users/{oid}"
         member_of = [{"id": str(o.get("id") or ""), "@odata.type": str(o.get("@odata.type") or "")}
-                     for o in self._pages(f"{base}/transitiveMemberOf", g, {"$select": "id"})]
-        owned = [str(o.get("id") or "") for o in self._pages(f"{base}/ownedObjects", g, {"$select": "id"})]
-        held = self._pages(f"{base}/appRoleAssignments", g, None)
+                     for o in self._pages(f"{base}/transitiveMemberOf", g, {"$select": "id"}, notes)]
+        owned = [str(o.get("id") or "") for o in self._pages(f"{base}/ownedObjects", g, {"$select": "id"}, notes)]
+        held = self._pages(f"{base}/appRoleAssignments", g, None, notes)
         by_user = {"$filter": f"principalId eq '{oid}'"}
-        roles = [*self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleAssignments", g, by_user),
-                 *self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleEligibilityScheduleInstances", g, by_user)]
+        roles = [*self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleAssignments", g, by_user, notes),
+                 *self._pages(f"{_GRAPH_V1}{ELIGIBLE_ROLES_PATH}", g, by_user, notes)]
         unit_url = f"{_GRAPH_V1}/directory/administrativeUnits/{unit_id}"
         unit = self._read(unit_url, g, {"$select": "id,isMemberManagementRestricted,membershipType"})
-        members = [str(o.get("id") or "") for o in self._pages(f"{unit_url}/members", g, {"$select": "id"})]
+        members = [str(o.get("id") or "") for o in self._pages(f"{unit_url}/members", g, {"$select": "id"}, notes)]
         out = {"id": user.get("id"), "userType": user.get("userType"),
                "customSecurityAttributes": user.get("customSecurityAttributes"),
-               "member_of": member_of, "owned": owned, "app_roles_held": held, "directory_roles": roles}
+               "member_of": member_of, "owned": owned, "app_roles_held": held, "directory_roles": roles,
+               "notes": notes}
         return out, {"id": unit.get("id"), "isMemberManagementRestricted": unit.get("isMemberManagementRestricted"),
                      "membershipType": unit.get("membershipType"), "members": members}, claims
 
@@ -919,13 +986,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  refused — {why}")
         return 1
     identity, rg_tags, claims = read
-    allowed = False
+    allowed, notes = False, ()
     for destructive in (False, True):
         v = judge(identity, rg_tags, scope=reader.scope, token=claims,
                   kind="technique", destructive=destructive)
         what = "destructive" if destructive else "non-destructive"
         print(f"  {what} technique: " + (f"allowed (zone {v.zone})" if v.allowed else f"refused — {v.reason}"))
-        allowed = allowed or (v.allowed and not destructive)
+        allowed, notes = allowed or (v.allowed and not destructive), v.notes
+    for note in notes:
+        print(f"  note — {note}")
     return 0 if allowed else 1
 
 

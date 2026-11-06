@@ -47,7 +47,9 @@ Hypotheses (§5 of the design, to measure on the bench's tenant): the rights its
 rights and for those of what it owns: role assignments, eligible role instances (PIM),
 memberships, app role assignments; any read it does not allow fails, and the executor stays
 passive — if Directory Readers does not read PIM's instances, the contract never arms, and a read
-right is to be added after the measure); ``wids`` carries the tenant-wide roles only — so User
+right is to be added after the measure; a tenant without PIM's license answers that read 400
+``AadPremiumLicenseRequired``, measured 06/11 by IDI1's guard: no eligible role can exist there, the
+read gives none, and the verdict says so, ``Verdict.notes`` — IDI1p, that one answer only); ``wids`` carries the tenant-wide roles only — so User
 Administrator or Attribute Assignment Reader seen there is held at the tenant, beyond. The template
 ids of the built-in roles below are those of Microsoft's « Microsoft Entra built-in roles ».
 
@@ -61,7 +63,13 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from eregion_core.inscription import privilege_refusal, token_claims
+from eregion_core.inscription import (
+    ELIGIBLE_ROLES_PATH,
+    NO_PIM_LICENSE_NOTE,
+    no_pim_license,
+    privilege_refusal,
+    token_claims,
+)
 from eregion_core.never_target import NeverTarget, guid
 from eregion_core.orodruin import APP_DEFAULT_WIDS
 
@@ -149,6 +157,8 @@ class Verdict:
     missing: tuple[dict, ...] = ()
     # The admitted rights it holds, by name: what its verbs may use.
     held: frozenset[str] = field(default_factory=frozenset)
+    # What its reads said that the verdict says too (IDI1p: no PIM license) — never weighed.
+    notes: tuple[str, ...] = ()
 
     @property
     def armed(self) -> bool:
@@ -327,9 +337,18 @@ def assess_owned(owned: list, decl: Declared, oid: str, never: NeverTarget,
 def read(reader, oid: str, deadline: float | None = None) -> dict:
     """Its permissions, its roles active and eligible, what it owns — read, never written. Raises
     ``Unreadable`` (a right missing, an error, a delay) or ValueError (an answer not a list); the
-    caller takes any failure for passive."""
+    caller takes any failure for passive — but a tenant without PIM's one answer to the read of
+    eligible roles (``no_pim_license``, IDI1p): none can exist there, none is read, it is noted."""
+    notes: set[str] = set()
+
     def listed(path, params=None):
-        got = reader.list(path, params, deadline)
+        try:
+            got = reader.list(path, params, deadline)
+        except Unreadable as e:
+            if not no_pim_license(path, e.status, e.code, page=e.page):
+                raise
+            notes.add(NO_PIM_LICENSE_NOTE)
+            return []
         if not isinstance(got, list):
             raise ValueError(f"{path.split('?')[0].rsplit('/', 1)[-1]} not given by Graph")
         return got
@@ -354,7 +373,7 @@ def read(reader, oid: str, deadline: float | None = None) -> dict:
         refused: read without $expand, as IDI1), its memberships, its application permissions."""
         flt = {"$filter": f"principalId eq '{principal}'"}
         return {"roles": listed("/roleManagement/directory/roleAssignments", {**flt, "$expand": "roleDefinition"}),
-                "eligible": listed("/roleManagement/directory/roleEligibilityScheduleInstances", flt),
+                "eligible": listed(ELIGIBLE_ROLES_PATH, flt),
                 "member_of": listed(f"/servicePrincipals/{principal}/transitiveMemberOf", {"$select": "id"}),
                 "assignments": listed(f"/servicePrincipals/{principal}/appRoleAssignments")}
 
@@ -391,7 +410,7 @@ def read(reader, oid: str, deadline: float | None = None) -> dict:
             "assigned_to": listed(f"/servicePrincipals/{principal}/appRoleAssignedTo")}
     return {"assignments": own["assignments"], "resources": resources, "active": own["roles"],
             "eligible": own["eligible"], "member_of": own["member_of"], "owned": owned,
-            "privileges": privileges}
+            "privileges": privileges, "notes": tuple(sorted(notes))}
 
 
 def assess(claims: dict, reader, *, env=None, never: NeverTarget | None = None) -> Verdict:
@@ -415,7 +434,7 @@ def assess(claims: dict, reader, *, env=None, never: NeverTarget | None = None) 
     # A right is held when both its token and its assignments say so: one of them alone, the
     # token is older than the assignment, or the other way round.
     held = (token_held & assigned) | roles
-    return Verdict(PASSIVE if missing else ARMED, tuple(missing), frozenset(held))
+    return Verdict(PASSIVE if missing else ARMED, tuple(missing), frozenset(held), got["notes"])
 
 
 def executor_credential(env=None):

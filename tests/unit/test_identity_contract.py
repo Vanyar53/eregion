@@ -8,11 +8,14 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from eregion_core.inscription import no_pim_license
 from eregion_core.never_target import NeverTarget
 from glorfindel.providers.azure import identity_contract as ic
+from glorfindel.providers.azure.graph import GraphReader, Unreadable
 from glorfindel.response.policy import IDENTITY_ACTIONS
 
 from .fake_graph import FakeGraph
@@ -558,3 +561,132 @@ def test_the_executor_is_never_a_target():
     never = NeverTarget.from_env({"EREGION_OPERATOR_OBJECT_ID": OPERATOR, ic.CLIENT_ENV: CLIENT})
     assert never.covers(CLIENT) and not never.refusal()
     assert NeverTarget.from_env({"EREGION_OPERATOR_OBJECT_ID": OPERATOR, ic.CLIENT_ENV: "typo"}).refusal()
+
+
+# ── A tenant without PIM (IDI1p, #618): one exact answer of Graph reads as « no eligible role » ──
+
+ELIGIBLE = "/roleManagement/directory/roleEligibilityScheduleInstances"
+NOTE = "eligible roles: none can exist, the tenant has no PIM license (Graph: AadPremiumLicenseRequired)"
+
+
+def _no_license(status=400, code="AadPremiumLicenseRequired", page=0) -> Unreadable:
+    """What GraphReader raises when Graph answers so (tested on the reader below)."""
+    return Unreadable(f"Graph a répondu {status} {code}".strip(), "error", status=status, code=code, page=page)
+
+
+def test_a_tenant_without_pim_has_no_eligible_role_and_the_contract_says_so(monkeypatch):
+    """Its own eligible read and its owned principal's answer « no license »: armed, said once (M4476)."""
+    g = _graph()
+    g.refuse[ELIGIBLE] = _no_license()
+    v = _assess(g)
+    assert v.armed and v.missing == () and v.notes == (NOTE,)
+    assert sum(1 for c in g.calls if c[1] == ELIGIBLE) == 2      # itself, and the principal it owns
+    assert _assess().notes == ()
+    # Never a reason to arm: beyond the contract stays passive, the note said.
+    g = _graph()
+    g.refuse[ELIGIBLE] = _no_license()
+    g.role_assignments.append(_role(GA, "/"))
+    v = _assess(g)
+    assert not v.armed and ic.BEYOND in _codes(v) and v.notes == (NOTE,)
+    # The CLI says it.
+    from click.testing import CliRunner
+
+    from glorfindel.cli import cli
+    g = _graph()
+    g.refuse[ELIGIBLE] = _no_license()
+    monkeypatch.setattr(ic, "check", lambda: _assess(g))
+    r = CliRunner().invoke(cli, ["identity-contract"])
+    assert r.exit_code == 0 and f"note — {NOTE}" in r.output
+
+
+@pytest.mark.parametrize("path, answer", [
+    (ELIGIBLE, _no_license(code="BadRequest")),                        # another code (M4470)
+    (ELIGIBLE, _no_license(code="aadPremiumLicenseRequired")),         # compared exactly
+    (ELIGIBLE, _no_license(code="")),                                  # a code not said (no JSON, filtered)
+    (ELIGIBLE, _no_license(status=403)),                               # another status (M4471)
+    (ELIGIBLE, _no_license(status=0)),                                 # no answer at all
+    (ELIGIBLE, _no_license(page=1)),                                   # a next page (M4473)
+    (ELIGIBLE, Unreadable("Graph a répondu 400", "error")),            # nothing known of the answer
+    ("/roleManagement/directory/roleAssignments", _no_license()),     # another read (M4472)
+    (f"/servicePrincipals/{OID}/transitiveMemberOf", _no_license()),
+    (f"/servicePrincipals/{OID}/appRoleAssignments", _no_license()),
+    (f"/servicePrincipals/{OID}/ownedObjects", _no_license()),
+    (f"/servicePrincipals/{ENROLLED_SP}/appRoleAssignedTo", _no_license()),
+])
+def test_any_other_answer_leaves_it_passive(path, answer):
+    g = _graph()
+    g.refuse[path] = answer
+    v = _assess(g)
+    assert not v.armed and _codes(v) == {ic.UNREADABLE} and v.notes == ()
+    assert str(answer) in v.reasons()
+
+
+class _Resp:
+    def __init__(self, status, body=None):
+        self.status_code, self._body = status, body
+
+    def json(self):
+        if isinstance(self._body, Exception):
+            raise self._body
+        return self._body
+
+
+class _Session:
+    def __init__(self, *answers):
+        self.answers = list(answers)
+
+    def get(self, url, headers=None, params=None, timeout=None, allow_redirects=True):
+        return self.answers.pop(0)
+
+
+def _reader(*answers) -> GraphReader:
+    return GraphReader(credential=SimpleNamespace(get_token=lambda scope: SimpleNamespace(token="t")),
+                       session=_Session(*answers))
+
+
+NO_LICENSE_BODY = {"error": {"code": "AadPremiumLicenseRequired", "message": "The tenant needs to have "
+                             "Microsoft Entra ID P2 or Microsoft Entra ID Governance license.", "innerError": {}}}
+
+
+def test_graph_s_reader_says_the_status_the_code_and_the_page_of_a_refusal():
+    """The reader says Graph's answer (M4478) and on which page of a list (M4474)."""
+    with pytest.raises(Unreadable) as exc:
+        _reader(_Resp(400, NO_LICENSE_BODY)).list(ELIGIBLE)
+    e = exc.value
+    assert (e.status, e.code, e.page, e.kind) == (400, "AadPremiumLicenseRequired", 0, "error")
+    assert str(e) == "Graph a répondu 400 AadPremiumLicenseRequired"
+    nxt = f"https://graph.microsoft.com/v1.0{ELIGIBLE}?$skiptoken=2"
+    with pytest.raises(Unreadable) as exc:
+        _reader(_Resp(200, {"value": [], "@odata.nextLink": nxt}), _Resp(400, NO_LICENSE_BODY)).list(ELIGIBLE)
+    assert (exc.value.status, exc.value.code, exc.value.page) == (400, "AadPremiumLicenseRequired", 1)
+    with pytest.raises(Unreadable) as exc:
+        _reader(_Resp(403, {"error": {"code": "Forbidden"}})).get(f"/servicePrincipals/{OID}")
+    assert exc.value.kind == "right" and str(exc.value) == "droit absent sur Graph (403 Forbidden)"
+
+
+@pytest.mark.parametrize("body, code", [
+    (ValueError("no JSON"), ""), (["x"], ""), ({"error": "AadPremiumLicenseRequired"}, ""),
+    ({"error": {"code": "Bad<script>"}}, ""), ({"error": {"code": "A" * 65}}, ""),
+    ({"error": {"code": 400}}, ""), ({"error": {"code": "Bad\nForged"}}, ""),
+    ({"error": {"code": "Authorization RequestDenied"}}, ""), ({"error": {"code": "Request-Denied"}}, ""),
+    ({"error": {"code": "Accès_refusé"}}, ""), ({"error": {"code": "_" * 65}}, ""),
+    ({"error": {"code": "A" * 64}}, "A" * 64),
+    ({"error": {"code": "Authorization_RequestDenied"}}, "Authorization_RequestDenied"),
+])
+def test_graph_s_reader_says_a_code_filtered_never_raw(body, code):
+    """Data from outside: ASCII letters and « _ » only, at most 64, else nothing (M4479)."""
+    with pytest.raises(Unreadable) as exc:
+        _reader(_Resp(400, body)).list(ELIGIBLE)
+    assert exc.value.code == code and str(exc.value) == f"Graph a répondu 400{' ' + code if code else ''}"
+
+
+def test_through_graph_s_reader_the_exact_answer_is_none_and_a_next_page_is_not():
+    """End to end on the reader: the eligible read's first page « no license » is none; a next page
+    answering so is a refusal, even on the same path."""
+    with pytest.raises(Unreadable) as exc:
+        _reader(_Resp(400, NO_LICENSE_BODY)).list(ELIGIBLE)
+    assert no_pim_license(ELIGIBLE, exc.value.status, exc.value.code, page=exc.value.page)
+    nxt = f"https://graph.microsoft.com/v1.0{ELIGIBLE}"
+    with pytest.raises(Unreadable) as exc:
+        _reader(_Resp(200, {"value": [], "@odata.nextLink": nxt}), _Resp(400, NO_LICENSE_BODY)).list(ELIGIBLE)
+    assert not no_pim_license(ELIGIBLE, exc.value.status, exc.value.code, page=exc.value.page)

@@ -48,8 +48,11 @@ MUTANTS = [
      _OPS + 'RETRIEVESASURIS/ACTION",\n', ""),
 
     # ── a failure makes no card: its latest line read ──
+    # (re-anchored by AL1d, #600: an operation that succeeded is read whatever its latest line)
     ("M4287", "failures kept — an operation refused makes a card (AL2)", RULES,
-     _KEEP + '      | where ActivityStatusValue !in~ ("Failure", "Failed")\n', _KEEP),
+     '      | where Succeeded > 0 or (ActivityStatusValue !in~ ("Failure", "Failed") '
+     'and (not(AzureBackup) or OtherFailures == 0))\n',
+     '      | where Succeeded > 0 or not(AzureBackup)\n'),
 
     # ── the card names the operation and the resource ──
     ("M4288", "the card loses its resource — _ResourceId no longer projected (AL2)", RULES,

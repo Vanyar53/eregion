@@ -90,7 +90,7 @@ MUTANTS = [
      "               \"EREGION_IDENTITY_EXECUTOR_CLIENT_ID\")\n",
      "STRICT_ENVS = (OPERATOR_ENV, PROTECTED_ENV, \"ANNATAR_AZURE_CLIENT_ID\", \"GLORFINDEL_AZURE_CLIENT_ID\")\n"),
     ("M4154", "its eligible roles never read (IR1b r1)", IC,
-     "                \"eligible\": listed(\"/roleManagement/directory/roleEligibilityScheduleInstances\", flt),\n",
+     "                \"eligible\": listed(ELIGIBLE_ROLES_PATH, flt),\n",
      "                \"eligible\": [],\n"),
     # Relecture 2 (05/11): M4165–M4169 — what it owns judged by IDI1's privilege_refusal itself.
     ("M4165", "owning an identity that holds a read permission accepted: Mail.Read, every mailbox (IR1b r2)", IC,

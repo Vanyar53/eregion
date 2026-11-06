@@ -181,6 +181,17 @@
             }
           }
         },
+        "graph_probe": {
+          "description": "R2 (Stratus, #79): a read-only Microsoft Graph check of the initial state, run before detonate and after cleanup (annatar/engines/stratus.py). Held to a GET of a Graph v1.0 read path — the probe can only read the directory, never change it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "read"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "read": { "type": "string", "pattern": "^/v1\\.0/", "minLength": 6 },
+            "expect_absent": { "type": "boolean" }
+          }
+        },
         "revert": {
           "description": "VM3 (#548): the scenario's own return after an atomic's cleanup — the files the upstream test leaves in a temporary directory, removed (annatar/engines/atomic.py, revert_commands), each step only once the probe it names (requires_probe, VM3b) holds again after the cleanup. The vendored file is never edited. A scenario's revert other than its entry's makes the run unknown, so destructive (SEC5, V-19).",
           "type": "array",

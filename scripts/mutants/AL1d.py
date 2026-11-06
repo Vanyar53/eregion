@@ -5,9 +5,10 @@ tests/unit/test_activity_operation_read.py (the shipped queries run as written o
 through tests/unit/kql_subset.py, then the detector and the RulePoller). M4490–M4493, after
 AL2's merge: the same reading in its sister rule on restore points, where only a success that
 cannot be Azure Backup's counts — measured by tests/unit/test_restore_points.py. M4494,
-M4500–M4504, after the 5.5 review: a bare latest line takes its operation's caller only when
+M4500–M4506, after the 5.5 reviews: a bare latest line takes its operation's caller only when
 its lines name one (a CorrelationId is the client's to choose), a backup's Success arrived last
-stands for no one else, and a success under several callers is not said to have taken effect."""
+stands for no one else's failure (only for a try of theirs that did not fail), and a success
+under several callers is not said to have taken effect."""
 RULES = "glorfindel/rules/azure/detection_rules.yaml"
 AGENT = "glorfindel/agent.py"
 SUBSET = "tests/unit/kql_subset.py"
@@ -86,7 +87,9 @@ MUTANTS = [
 _RP_TESTS = "tests/unit/test_restore_points.py"
 _RP_SUCCEEDED = "      | extend Succeeded = iif(BackupLines > 0, OtherSucceeded, AnySucceeded)\n"
 _RP_KEEP = ('      | where Succeeded > 0 or (ActivityStatusValue !in~ ("Failure", "Failed") '
-            'and not(AzureBackup))\n')
+            'and (not(AzureBackup) or OtherFailures == 0))\n')
+_RP_FAILURES = ('            OtherFailures = countif(OtherCaller and ActivityStatusValue in~ '
+                '("Failure", "Failed")),\n')
 _RP_OTHER_OK = ('            OtherSucceeded = countif(OtherCaller and ActivityStatusValue in~ '
                 '("Success", "Succeeded")),\n')
 _RP_PROJECT = ("               CallerIpAddress = iif(OtherCaller, CallerIpAddress, NamedIp)\n"
@@ -96,7 +99,8 @@ _RP_PROJECT = ("               CallerIpAddress = iif(OtherCaller, CallerIpAddres
 MUTANTS += [
     ("M4490", "restorepoint-by-unexpected-caller reads an operation by its latest line only: one that "
               "succeeded is not read when its latest line failed (AL1d)", RULES,
-     _RP_KEEP, '      | where ActivityStatusValue !in~ ("Failure", "Failed") and not(AzureBackup)\n'),
+     _RP_KEEP, '      | where ActivityStatusValue !in~ ("Failure", "Failed") '
+               'and (not(AzureBackup) or OtherFailures == 0)\n'),
     ("M4491", "restorepoint-by-unexpected-caller counts a bare success under a backup's correlation id: "
               "the backup's Success taken for the other caller's, whose try only failed (AL1d)", RULES,
      _RP_SUCCEEDED, "      | extend Succeeded = AnySucceeded\n"),
@@ -126,6 +130,12 @@ MUTANTS += [
     ("M4503", "restorepoint-by-unexpected-caller reads Azure Backup's Success, arrived last, as the "
               "other caller's, whose try only failed — a card « (Success) » (AL1d)", RULES,
      _RP_KEEP, _KEEP),
+    ("M4505", "restorepoint-by-unexpected-caller never reads Azure Backup's latest line for another "
+              "caller: their Start and bare Success under the backup's correlation id make no card (AL1d)",
+     RULES, _RP_KEEP, _RP_KEEP.replace(" or OtherFailures == 0)", ")")),
+    ("M4506", "restorepoint-by-unexpected-caller counts every line of the other caller as a failure: "
+              "their Start alone, behind the backup's line, makes no card (AL1d)", RULES,
+     _RP_FAILURES, "            OtherFailures = countif(OtherCaller),\n"),
     ("M4504", "the card of an operation whose lines name several callers says a success took effect: "
               "it may be another's (AL1d)", AGENT,
      "        if _named_callers(row) > 1:\n"
@@ -134,4 +144,5 @@ MUTANTS += [
      "            what += (\" Statut lu à sa dernière ligne ; une de ses lignes a réussi, mais elle \"\n"),
 ]
 TESTS = {**{f"M{n}": _TESTS for n in range(4380, 4390)}, **{f"M{n}": _RP_TESTS for n in range(4490, 4494)},
-         **{m: _TESTS for m in ("M4494", "M4500", "M4501", "M4502", "M4504")}, "M4503": _RP_TESTS}
+         **{m: _TESTS for m in ("M4494", "M4500", "M4501", "M4502", "M4504")}, "M4503": _RP_TESTS,
+         "M4505": _RP_TESTS, "M4506": _RP_TESTS}

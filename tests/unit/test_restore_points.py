@@ -374,6 +374,33 @@ def test_a_backup_s_success_arrived_last_never_stands_for_another_s_failure(tabl
     assert _cards(table) == []
 
 
+@pytest.mark.parametrize("where", ["claims", "caller"])
+@pytest.mark.parametrize("theirs", ["start_then_bare_success", "start_only"])
+def test_another_s_try_that_did_not_fail_behind_a_backup_s_line_makes_a_card(table, where, theirs):
+    """Under a backup's correlation id, Azure Backup's lines arrived last: the other caller's
+    Start (then a bare Success, or nothing yet) has its card — none of their lines failed, so
+    the backup's line stands for them; a backup's id hides no one (relecture 5.5 n°2)."""
+    mine = [_line(SAS, "Start", corr="b-s", minutes_ago=6.0)]
+    if theirs == "start_then_bare_success":
+        mine.append(_line(SAS, "Success", corr="b-s", minutes_ago=5.9, caller="", claims=False))
+    table += [*mine, *[{**line, "TimeGenerated": NOW - timedelta(minutes=m)}
+                       for line, m in zip(_backup(SAS, "b-s", where), (2.0, 1.9))]]
+    [sig] = _cards(table)
+    row = sig["raw_signal"]["first_result_row"]
+    assert row["Caller"] == HUMAN
+    assert AZURE_BACKUP not in (row.get("CallerAppId") or "", row.get("Caller") or "")
+
+
+def test_a_bare_failure_of_theirs_behind_a_backup_s_line_still_makes_a_card(table):
+    """The limit, said: their failure names no one — it may be anyone's; the backup's Success,
+    the latest, is read: a card too many, never one fewer."""
+    table += [_line(SAS, "Start", corr="b-s", minutes_ago=6.0),
+              _line(SAS, "Failure", corr="b-s", minutes_ago=5.9, caller="", claims=False),
+              *[{**line, "TimeGenerated": NOW - timedelta(minutes=m)}
+                for line, m in zip(_backup(SAS, "b-s", "claims"), (2.0, 1.9))]]
+    assert len(_rows(table)) == 1
+
+
 def test_a_bare_latest_line_under_a_backup_s_id_still_makes_a_card(table):
     """The limit, said: Azure Backup's Success arrived last and bare may be the backup's or
     the other caller's — the row is kept (a card too many, never one fewer)."""
@@ -455,10 +482,6 @@ def test_the_card_gives_the_named_caller_s_address(table, latest):
             else dict(caller="", appid=AZURE_BACKUP))
     table += [_line(SAS, "Success", corr="c-ip", minutes_ago=4.9, ip=other_ip, **last),
               _line(SAS, "Start", corr="c-ip", caller=HUMAN, minutes_ago=5.0, ip=human_ip)]
-    if latest == "azure_backup":
-        # Azure Backup's line, the latest, never stands for the human's try (AL1d): their own
-        # success does.
-        table.append(_line(SAS, "Success", corr="c-ip", caller=HUMAN, minutes_ago=4.95, ip=human_ip))
     [sig] = _cards(table)
     row = sig["raw_signal"]["first_result_row"]
     assert (row["Caller"], row["CallerIpAddress"]) == (HUMAN, human_ip)

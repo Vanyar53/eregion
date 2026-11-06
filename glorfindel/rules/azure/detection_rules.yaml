@@ -624,7 +624,9 @@ rules:
       ni rien sans le journal d'activité dans le workspace. Une opération qui a réussi est
       lue quelle que soit sa dernière ligne, une qui n'a qu'échoué ne l'est pas (AL1d) ; seul
       compte un succès qui ne peut pas être celui d'Azure Backup — sous le CorrelationId
-      repris d'une sauvegarde, un succès nu ne compte pas pour l'autre appelant.
+      repris d'une sauvegarde, un succès nu ne compte pas pour l'autre appelant, et la
+      dernière ligne d'Azure Backup ne vaut pour lui que si aucune de ses lignes n'a échoué :
+      son essai qui a échoué ne fait pas de carte, son Start ou son succès nu en fait une.
     enabled: true
     source: azure_activity
     ttp: T1578.001
@@ -659,6 +661,7 @@ rules:
             Callers = dcountif(CallerKey, OtherCaller),
             OtherSucceeded = countif(OtherCaller and ActivityStatusValue in~ ("Success", "Succeeded")),
             AnySucceeded = countif(ActivityStatusValue in~ ("Success", "Succeeded")),
+            OtherFailures = countif(OtherCaller and ActivityStatusValue in~ ("Failure", "Failed")),
             NamedCaller = take_anyif(Caller, OtherCaller and isnotempty(Caller)),
             NamedAppId = take_anyif(CallerAppId, OtherCaller and isnotempty(CallerAppId)),
             NamedObjectId = take_anyif(CallerObjectId, OtherCaller and isnotempty(CallerObjectId)),
@@ -673,11 +676,13 @@ rules:
       // latest line. (The backup's named line out of the window: its bare Success counts —
       // a card too many, never one fewer.)
       | extend Succeeded = iif(BackupLines > 0, OtherSucceeded, AnySucceeded)
-      // Read by its latest line otherwise — never by Azure Backup's: under its correlation id,
-      // a backup's Success arrived last says nothing of the other caller's try (a bare latest
-      // line may still be the backup's: a card too many, never one fewer; the other caller's
-      // Start alone, behind the backup's line, waits for their success).
-      | where Succeeded > 0 or (ActivityStatusValue !in~ ("Failure", "Failed") and not(AzureBackup))
+      // Read by its latest line otherwise. Azure Backup's latest line stands for the other
+      // caller only when none of their lines failed: under its correlation id, a backup's
+      // Success arrived last says nothing of a try that failed (no card) — but the other
+      // caller's Start, or their bare Success, behind it still makes one. A bare latest line,
+      // or a bare failure of theirs, may hide what the backup did: a card too many, never one
+      // fewer.
+      | where Succeeded > 0 or (ActivityStatusValue !in~ ("Failure", "Failed") and (not(AzureBackup) or OtherFailures == 0))
       // The row names the caller that decided it, and its address: its latest line's when that
       // line names someone else, else what the lines naming someone else carry (a bare latest
       // line, or Azure Backup's) — each column taken on one of those lines: with several other

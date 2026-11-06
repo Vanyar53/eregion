@@ -409,8 +409,10 @@ mais à l'identique : un Orodruin compromis pourrait le changer, et il n'en a pa
 attaquer (§7, ce qui reste ouvert).
 
 Le permis ne remplace pas l'armement local : il le confirme. Root sur Orodruin peut toujours écrire
-l'armement ; il ne peut pas recréer un permis que le kill a supprimé sans l'identité de
-l'opérateur, ou celle d'Orodruin que le kill a révoquée.
+l'armement. Entre le kill et `make orodruin-lock`, l'identité d'Orodruin est révoquée : elle ne
+peut pas recréer le permis. Après `make orodruin-lock`, elle peut de nouveau écrire le canal : seul
+le code (`If-Match`, et son mutant) l'empêche de recréer un permis supprimé. Un Orodruin compromis
+le pourrait, et n'en a pas besoin (§7).
 
 ---
 
@@ -524,10 +526,18 @@ D'où :
   75 s au plus, sous les 90 s de `docker stop`. Puis seulement, s'il le faut, `kill`. Le fil fini,
   le `launch` du drill lève : le runner marque le fil `failed` et saute la suite, et
   `scheduled_drill` publie l'occurrence `stopped` ;
-- autre choix, équivalent : `TINI_KILL_PROCESS_GROUP=1`, pour que tini envoie le signal à tout le
-  groupe, plus la même attente sans lever ;
-- **le même gestionnaire dans `annatar wire`** : SIGTERM y lève, sa fenêtre se ferme, le nettoyage
-  de l'atomic part (un changement côté Annatar, dit à sa session) ;
+- **hors d'un fil** (la relecture de V1, l'attente du Heartbeat, le `POST` de démarrage, les
+  lectures), il n'y a aucun enfant à attendre : le gestionnaire lève là, ou `scheduled_drill`
+  s'arrête au prochain point de contrôle (entre deux lectures, avant le démarrage, avant la
+  demande). Le démarrage déjà envoyé n'est pas défait. Dans les deux cas, `stopped` est publié dans
+  `drill.json` ;
+- **le même gestionnaire dans `annatar wire`**, **à un coup** : au premier SIGTERM, il remet
+  `SIG_IGN` puis lève ; sa fenêtre se ferme, le nettoyage de l'atomic part, et un second signal ne
+  l'interrompt pas en plein `finally` (un changement côté Annatar, dit à sa session) ;
+- autre choix, **qui n'est pas équivalent** : `TINI_KILL_PROCESS_GROUP=1`, pour que tini envoie le
+  signal à tout le groupe. Le fil le recevrait alors deux fois, de tini et du relais. Dans cette
+  variante, `scheduled_drill` ne relaie pas et attend seulement ; le gestionnaire à un coup
+  d'`annatar wire` reste nécessaire ;
 - **la fenêtre du fil ouverte au plus juste** : `max_duration_s` = le temps que le runner laisse au
   fil (`EREGION_MAX_RUN_S`, qu'il lui passe déjà), plus 5 min de marge, au lieu des 2 h. Un fil tué
   par SIGKILL ne laisse donc gondolin « exercise » qu'au plus 30 + 5 + 15 min ;
@@ -539,9 +549,10 @@ seule Run Command à la fois sur une VM, et ses reprises vont jusqu'à 315 s : u
 l'atomic peut laisser le nettoyage à rejouer, et le compte créé sur gondolin. Le statut le dit, et
 la sonde de départ de l'occurrence suivante le voit (`user-absent`).
 
-**La fenêtre d'exercice** est celle d'aujourd'hui :
+**La fenêtre d'exercice** est celle d'aujourd'hui, au plus juste :
 - ouverte avant le premier appel, fermée dans un `finally` ;
-- bornée (`MAX_DURATION_S`), avec 15 min de grâce ;
+- bornée par le temps restant du fil plus 5 min (ci-dessus), avec 15 min de grâce ;
+  `MAX_DURATION_S` reste le plafond que la watch applique à la lecture (`window_refusal`) ;
 - elle porte l'identifiant de la demande, et rien de ce que le drill attend.
 
 **L'arrêt d'urgence.** Aujourd'hui, `make orodruin-kill` (`infra/orodruin/kill.py`) révoque
@@ -642,13 +653,21 @@ permis.
 | `stopped` | le service arrêté à `RuntimeMaxSec` | oui |
 | `not_run` | le drill armé (ci-dessous), et aucun statut pour l'occurrence 2 h après son heure ; ou `drill.json` vieux de plus de 8 jours (« Orodruin silent ») | **oui, avec mention** |
 | `rearm_expected` | `drill.json` ou le permis disent une empreinte qui n'est pas celle de la copie de H0 (une release a changé le drill, son heure peut-être) ; ou `drill.json` dit `armed` sans permis dans le canal (expiré) | oui, sans mention : « réarmement attendu » |
+| `self_disarmed` | le permis est dans le canal, mais `drill.json` dit `disarmed` | oui, avec mention : « permis présent, Orodruin se dit désarmé » |
+| `channel_unread` | le dernier tirage n'a pas pu lister le canal : l'état du permis est inconnu | oui, sans mention : « canal illisible ». Ni `not_run` ni `rearm_expected` |
 
 **L'alarme d'absence** (`not_run`) vit chez l'observateur. Orodruin éteint ne peut pas dire qu'il
 n'a pas tourné. H0 ne l'arme que si **tout** concorde :
+- le dernier tirage a pu lister le canal ; sinon l'état du permis est inconnu, et H0 dit « canal
+  illisible » sans armer ni `not_run` ni `rearm_expected` ;
 - le permis est dans la liste du canal, à son dernier tirage ;
 - `drill.json` dit `armed` ;
 - l'empreinte du permis et celle de `drill.json` sont celles de **la copie du drill de H0**, dont il
   tire l'heure prévue.
+
+Ce qu'H0 croit d'Orodruin, ici, est borné : `drill.json` à `armed`, écrit par Orodruin, est une
+des conditions. Il ne peut qu'armer l'alarme, jamais la taire seul : un permis présent avec un
+`drill.json` qui se dit `disarmed` est lui-même une alerte (`self_disarmed`).
 
 Un drill jamais armé, désarmé par Jonathan ou tué n'alerte pas. Après une release qui change le
 drill (son heure comprise), les empreintes ne concordent plus : pas de `not_run` à une heure que
@@ -831,9 +850,10 @@ attaque. Aucune session n'arme, ne déclenche ni ne réarme le drill. La ligne �
 ## 7. Le modèle de menace : une frontière de plus (proposée)
 
 _Proposée ici, pas encore écrite dans [`modele-de-menace.md`](modele-de-menace.md). Le lot de code
-l'y porte, en §8 du tableau des frontières, avec ses tests._
+l'y porte, en §9 du tableau des frontières (la §8 est celle de la session Banc, BRO1), avec ses
+tests._
 
-**8. Le minuteur d'Orodruin.** Jusqu'ici, chaque attaque sur le banc partait d'un geste humain : une
+**9. Le minuteur d'Orodruin.** Jusqu'ici, chaque attaque sur le banc partait d'un geste humain : une
 commande, une demande portée par SSH. Le minuteur en lance une sans geste à chaque fois.
 - **De confiance** : l'opérateur qui arme ; l'image vérifiée ; l'hôte (root).
 - **Ce qui traverse** : trois entrées décident (l'heure, l'armement, le drill de l'image). Ce qui
@@ -1020,8 +1040,9 @@ Une à la fois, l'option recommandée d'abord.
 7. **Le calendrier : public, ou dans l'armement ?**
    - **Recommandé : public**, dans le `schedule` du drill livré, et le risque dit au modèle de menace
      (ligne D, impact faible : le banc seul, environ une heure par semaine). H0 tire l'heure prévue de
-     sa propre copie du drill, et l'armement du permis que l'opérateur écrit (§2.4) : l'alarme
-     d'absence tient sans rien croire d'Orodruin.
+     sa propre copie du drill, et l'armement du permis que l'opérateur écrit (§2.4). Orodruin ne
+     peut qu'armer l'alarme d'absence (son `drill.json` à `armed`), jamais la taire seul : un permis
+     présent avec un `drill.json` désarmé alerte (§4.2).
    - Autre choix : l'heure donnée à l'armement (`AT=…`), hors du dépôt. Elle ne serait plus publique ;
      le permis la porterait, et H0 la lirait là, toujours sans croire Orodruin. Mais l'heure ne serait
      plus relue en PR, et la Logic App devrait la recevoir à chaque armement.

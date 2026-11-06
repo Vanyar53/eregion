@@ -23,4 +23,6 @@
 ## Model and review
 
 <!-- Work done with Claude Code only: which model did it ("Opus 5.5", or "Opus 5.5 + fallback"),
-     and for a fallback, the Opus 5.5 review verdict. See docs/elrond.md. -->
+     and for a fallback, the Opus 5.5 review verdict — or, when a safeguard stopped that review too,
+     "review 4.8 (5.5 not obtained, <verdict>)": merged only on Jonathan's word for this PR.
+     See docs/elrond.md and docs/sessions.md. -->

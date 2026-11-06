@@ -277,7 +277,9 @@ class H0:
         # docker: v0.3.1 runs.
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
-        (bin_dir / "docker").write_text(FAKE_DOCKER.replace("#!PYTHON", f"#!{sys.executable}"))
+        # CI10a (L14): `-S`, no site — the fake needs the standard library only, and the file
+        # starts it about 4 300 times: some 3 ms each.
+        (bin_dir / "docker").write_text(FAKE_DOCKER.replace("#!PYTHON", f"#!{sys.executable} -S"))
         (bin_dir / "docker").chmod(0o755)
         self.clock = tmp_path / "clock" / "clock.py"
         self.clock.parent.mkdir()

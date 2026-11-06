@@ -1,0 +1,709 @@
+{
+ "about": "CI10a (#580): each mutant whose target is a heavy file whole, on the fastest tests of that file that catch it. Written by: python scripts/mutation_check.py --narrow FILE",
+ "mutants": {
+  "M1002": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_host_deployed_before_h1_can_still_go_back tests/unit/test_host_cd.py::test_no_way_back_no_switch"
+  },
+  "M1003": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_two_refused_candidates_then_a_sick_release_still_go_back tests/unit/test_host_cd.py::test_after_a_green_health_the_old_images_go_and_the_one_before_stays"
+  },
+  "M1004": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_no_way_back_no_switch"
+  },
+  "M1005": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_tag_off_main_is_refused_said_and_not_tried_again"
+  },
+  "M1006": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_required_check_listed_twice_holds_on_its_worst_run[twice0-True] tests/unit/test_host_cd.py::test_a_required_check_listed_twice_holds_on_its_worst_run[twice1-True]"
+  },
+  "M1007": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_required_check_listed_twice_holds_on_its_worst_run[twice2-False] tests/unit/test_host_cd.py::test_a_required_check_listed_twice_holds_on_its_worst_run[twice3-False]"
+  },
+  "M1008": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_commit_before_the_floors_is_older tests/unit/test_host_cd.py::test_a_higher_version_on_an_older_commit_is_refused"
+  },
+  "M1009": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_check_says_what_the_harness_did_not_prove tests/unit/test_host_cd.py::test_the_attestation_is_verified_offline"
+  },
+  "M1010": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_new_lock_without_a_matching_attestation_is_refused"
+  },
+  "M1011": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_h0s_own_model_is_the_one_attested"
+  },
+  "M1012": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_wrong_draw_at_the_gate_is_overconfident tests/unit/test_host_cd.py::test_overconfidence_the_reference_does_not_have_is_refused"
+  },
+  "M1013": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_check_says_a_refusal_without_remembering_it tests/unit/test_host_cd.py::test_the_config_refusal_says_what_a3_said_in_the_journal_only"
+  },
+  "M1015": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_switch_taken_up_after_a_cut_compares_with_what_was_checked_before tests/unit/test_host_cd.py::test_a_pass_cut_after_its_switch_is_taken_up[True]"
+  },
+  "M1016": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_tag_off_main_is_refused_said_and_not_tried_again tests/unit/test_host_cd.py::test_an_older_release_is_refused_said_once_and_never_deployed"
+  },
+  "M1017": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_one_pass_at_a_time_and_none_during_a_deployment_by_hand"
+  },
+  "M1018": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_an_agent_whose_origin_is_lost_says_it_once_without_the_mention[side] tests/unit/test_host_cd.py::test_an_agent_whose_origin_is_lost_says_it_once_without_the_mention[None]"
+  },
+  "M1019": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_pass_taken_up_asks_a_beat_of_the_watch_that_runs tests/unit/test_host_cd.py::test_a_heartbeat_from_before_the_switch_is_not_health"
+  },
+  "M1050": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_watch_gone_after_a_cut_compose_is_put_back_not_superseded tests/unit/test_host_cd.py::test_a_pass_cut_after_its_switch_is_taken_up[False]"
+  },
+  "M1051": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_moved_tag_is_refused"
+  },
+  "M1052": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_switch_interrupted_twice_is_refused_and_said"
+  },
+  "M1053": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_release_older_than_the_agent_never_asks_to_reinstall_it"
+  },
+  "M1054": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_installation_writes_the_commit_it_installs_from"
+  },
+  "M1055": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_newer_release_with_the_same_agent_says_nothing"
+  },
+  "M1056": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_an_agent_whose_origin_is_lost_says_it_once_without_the_mention[HEAD]"
+  },
+  "M1134": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_rules_run_once_the_watch_is_healthy_even_at_the_last_look tests/unit/test_host_cd.py::test_a_switch_taken_up_after_a_cut_compares_with_what_was_checked_before"
+  },
+  "M1135": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_commands_json_is_what_the_cd_reads tests/unit/test_host_cd.py::test_a_switch_taken_up_after_a_cut_compares_with_what_was_checked_before"
+  },
+  "M1136": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_commands_json_is_what_the_cd_reads tests/unit/test_host_cd.py::test_an_error_that_may_pass_keeps_the_release[service-503-unproven]"
+  },
+  "M1137": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_scrub_keeps_what_is_no_host tests/unit/test_host_cd.py::test_what_a_rule_says_is_escaped_for_discord"
+  },
+  "M1138": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_scrub_keeps_what_is_no_host tests/unit/test_host_cd.py::test_what_a_rule_says_is_escaped_for_discord"
+  },
+  "M1139": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_rules_check_fits_in_what_is_left_of_the_health[40.0] tests/unit/test_host_cd.py::test_the_rules_check_fits_in_what_is_left_of_the_health[3.0]"
+  },
+  "M1160": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_release_dry_run_says_what_it_would_refuse tests/unit/test_release.py::test_a_refused_dry_run_still_says_the_roadmaps_line"
+  },
+  "M1161": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_release_refuses_and_writes_nothing"
+  },
+  "M1162": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_release_refuses_and_writes_nothing"
+  },
+  "M1163": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_release_refuses_and_writes_nothing"
+  },
+  "M1165": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_release_dry_run_shows_the_cut_and_writes_nothing tests/unit/test_release.py::test_without_fragments_the_cut_is_as_before"
+  },
+  "M1166": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_no_path_publishes_in_the_code tests/unit/test_release.py::test_release_draft_creates_a_draft_on_main_s_full_sha_with_the_changelog_s_section"
+  },
+  "M1167": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_the_gate_green_on_the_pr_head_passes_a_squash_merge_of_the_same_tree tests/unit/test_release.py::test_release_draft_creates_a_draft_on_main_s_full_sha_with_the_changelog_s_section"
+  },
+  "M1168": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_release_dry_run_says_what_it_would_refuse tests/unit/test_release.py::test_release_dry_run_shows_the_cut_and_writes_nothing"
+  },
+  "M1169": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_a_webhook_that_fails_to_read_touches_nothing tests/unit/test_release.py::test_the_draft_is_on_the_board_and_pinged_then_both_go_when_published"
+  },
+  "M1430": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_a_commit_that_fails_leaves_staged_files_the_way_back_drops tests/unit/test_release.py::test_a_git_rm_that_fails_says_it_whole_and_how_to_go_on"
+  },
+  "M1431": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_release_refuses_and_writes_nothing tests/unit/test_release.py::test_release_draft_refuses_and_creates_nothing"
+  },
+  "M1432": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_another_release_s_ping_is_not_this_one_s tests/unit/test_release.py::test_ids_in_the_notes_never_delete_another_message"
+  },
+  "M1433": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_a_published_release_s_ping_already_gone_is_no_error tests/unit/test_release.py::test_ids_in_the_notes_never_delete_another_message"
+  },
+  "M1434": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_the_ping_is_looked_for_once_a_minute_at_most tests/unit/test_release.py::test_the_line_notify_yml_took_off_never_comes_back"
+  },
+  "M1435": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_a_draft_made_again_replaces_the_stale_link_and_ping"
+  },
+  "M1436": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_the_agents_webhook_is_given_to_release_events_only"
+  },
+  "M1437": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_a_commit_that_fails_leaves_staged_files_the_way_back_drops tests/unit/test_release.py::test_a_push_that_fails_says_what_is_left_and_how_to_go_back"
+  },
+  "M1438": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_a_pull_request_that_fails_says_what_is_left_and_how_to_go_on"
+  },
+  "M1439": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_the_ping_is_looked_for_once_a_minute_at_most"
+  },
+  "M1470": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_no_path_publishes_in_the_code"
+  },
+  "M1501": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_an_error_that_may_pass_keeps_the_release[service-503-error] tests/unit/test_host_cd.py::test_an_error_that_may_pass_keeps_the_release[other-Exception-error]"
+  },
+  "M1507": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_reference_with_an_error_that_may_pass_rolls_nothing_back tests/unit/test_host_cd.py::test_a_reference_without_the_command_compares_nothing_and_rolls_nothing_back"
+  },
+  "M1508": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_new_rule_broken_in_the_release_rolls_back tests/unit/test_host_cd.py::test_what_a_rule_says_is_escaped_for_discord"
+  },
+  "M1509": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_last_look_comes_after_the_check tests/unit/test_host_cd.py::test_a_pass_cut_after_its_switch_is_taken_up[False]"
+  },
+  "M1510": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_rules_without_an_answer_are_said_never_a_rollback tests/unit/test_host_cd.py::test_what_a_rule_says_is_escaped_for_discord"
+  },
+  "M1511": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_last_look_comes_after_the_check"
+  },
+  "M1513": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_full_words_go_to_the_journal_only"
+  },
+  "M1514": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_code_2_that_is_no_missing_command_is_said_in_orange"
+  },
+  "M1515": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_rules_settings_stay_within_what_the_command_accepts[env1-want1] tests/unit/test_host_cd.py::test_the_rules_settings_stay_within_what_the_command_accepts[env0-want0]"
+  },
+  "M1517": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_rule_broken_before_as_after_is_said_with_the_mention_never_a_rollback tests/unit/test_host_cd.py::test_a_reference_without_the_command_compares_nothing_and_rolls_nothing_back"
+  },
+  "M1518": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_check_that_proves_nothing_where_the_reference_was_checked_rolls_back"
+  },
+  "M1544": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_a_failing_agents_webhook_never_keeps_the_releases_card tests/unit/test_release.py::test_a_release_s_story_on_releases_the_draft_then_the_publication"
+  },
+  "M1549": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_the_draft_is_on_the_board_and_pinged_then_both_go_when_published tests/unit/test_release.py::test_a_release_s_story_on_releases_the_draft_then_the_publication"
+  },
+  "M1564": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_the_allow_list_sees_a_path_that_would_publish"
+  },
+  "M1565": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_the_allow_list_sees_a_path_that_would_publish"
+  },
+  "M1566": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_the_http_check_reads_a_method_in_one_word"
+  },
+  "M1573": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_way_back_is_never_judged_on_the_read_only_probe tests/unit/test_host_cd.py::test_the_way_back_is_not_judged_on_the_left_releases_last_beat"
+  },
+  "M1574": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_way_back_is_never_judged_on_the_read_only_probe tests/unit/test_host_cd.py::test_a_read_only_error_that_ran_before_the_switch_is_no_regression"
+  },
+  "M1650": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_tag_the_registry_does_not_give_as_published_is_unverified tests/unit/test_published_image.py::test_a_digest_header_that_is_no_digest_is_never_quoted"
+  },
+  "M1651": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_manifest_read_by_its_digest_must_be_that_digest"
+  },
+  "M1652": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_cosign_is_asked_for_every_claim_of_the_publishing_workflow tests/unit/test_published_image.py::test_an_image_signed_by_another_signer_is_unverified"
+  },
+  "M1653": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_cosign_is_asked_for_every_claim_of_the_publishing_workflow tests/unit/test_published_image.py::test_an_image_signed_by_another_signer_is_unverified"
+  },
+  "M1654": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_cosign_is_asked_for_every_claim_of_the_publishing_workflow"
+  },
+  "M1655": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_cosign_that_could_not_reach_sigstore_proves_nothing_either_way[timeout] tests/unit/test_published_image.py::test_an_image_signed_by_another_signer_is_unverified"
+  },
+  "M1656": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_signature_over_another_digest_is_unverified"
+  },
+  "M1657": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_provenance_of_two_commits_is_unverified"
+  },
+  "M1658": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_provenance_that_says_otherwise_is_unverified[st7-runner]"
+  },
+  "M1659": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_provenance_that_says_otherwise_is_unverified"
+  },
+  "M1660": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_cosign_that_is_not_the_pinned_one_is_never_run[missing] tests/unit/test_published_image.py::test_a_cosign_that_is_not_the_pinned_one_is_never_run[altered]"
+  },
+  "M1661": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_cosign_is_installed_only_under_its_pinned_sha256"
+  },
+  "M1662": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_an_image_whose_labels_name_another_commit_or_version_is_removed_and_unverified[labels0]"
+  },
+  "M1663": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_anything_else_is_refused tests/unit/test_published_image.py::test_a_ref_off_main_is_refused_nothing_pushed"
+  },
+  "M1664": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_an_image_read_back_otherwise_is_refused tests/unit/test_published_image.py::test_an_image_loaded_that_is_not_the_one_verified_is_removed_and_nothing_changes"
+  },
+  "M1665": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_digest_that_moved_since_the_release_was_first_seen_is_refused"
+  },
+  "M1666": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_required_checks_are_the_ones_docs_sessions_lists tests/unit/test_host_cd.py::test_the_dry_run_shows_what_holds_and_what_is_only_said"
+  },
+  "M1667": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_failed_preflight_leaves_what_runs_untouched"
+  },
+  "M1668": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_an_image_signed_for_another_repository_is_refused tests/unit/test_host_cd.py::test_a_private_package_is_refused_at_once_never_waited_for"
+  },
+  "M1670": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_an_incomplete_or_foreign_attestation_is_refused tests/unit/test_host_cd.py::test_a_new_lock_without_a_matching_attestation_is_refused"
+  },
+  "M1672": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_broken_integration_is_refused_whatever_the_reference"
+  },
+  "M1673": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_an_incomplete_or_foreign_attestation_is_refused tests/unit/test_host_cd.py::test_a_new_lock_without_a_matching_attestation_is_refused"
+  },
+  "M1674": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_an_incomplete_or_foreign_attestation_is_refused tests/unit/test_host_cd.py::test_a_new_lock_without_a_matching_attestation_is_refused"
+  },
+  "M1675": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_net_regression_is_refused_by_name"
+  },
+  "M1676": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_new_overconfidence_on_two_cases_is_refused_one_is_said tests/unit/test_host_cd.py::test_a_cautious_case_losing_two_draws_is_refused"
+  },
+  "M1678": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_new_overconfidence_on_two_cases_is_refused_one_is_said"
+  },
+  "M1679": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_case_gaining_two_overconfident_draws_is_refused tests/unit/test_host_cd.py::test_overconfidence_the_reference_does_not_have_is_refused"
+  },
+  "M1680": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_decision_steered_on_the_candidate_only_is_refused_even_once"
+  },
+  "M1681": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_draws_lost_count_where_the_reference_varied_and_a_gain_buys_nothing"
+  },
+  "M1682": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_an_incomplete_or_foreign_attestation_is_refused tests/unit/test_host_cd.py::test_a_new_lock_without_a_matching_attestation_is_refused"
+  },
+  "M1684": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_an_incomplete_or_foreign_attestation_is_refused"
+  },
+  "M1685": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_an_incomplete_or_foreign_attestation_is_refused"
+  },
+  "M1686": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_code_changed_with_the_lock_is_said_on_deploy[eregion_core/llm_call.py] tests/unit/test_host_cd.py::test_the_code_changed_with_the_lock_is_said_on_deploy[glorfindel/agent.py]"
+  },
+  "M1690": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_private_or_absent_package_is_refused_at_its_token[False] tests/unit/test_published_image.py::test_a_tag_the_registry_does_not_give_as_published_is_unverified"
+  },
+  "M1691": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_cosign_that_could_not_reach_sigstore_proves_nothing_either_way[timeout] tests/unit/test_published_image.py::test_what_cosign_says_of_an_absent_or_other_signature_is_a_refusal"
+  },
+  "M1692": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_what_cosign_says_of_an_absent_or_other_signature_is_a_refusal tests/unit/test_published_image.py::test_an_image_signed_by_another_signer_is_unverified"
+  },
+  "M1693": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_cosign_that_could_not_reach_sigstore_proves_nothing_either_way[timeout]"
+  },
+  "M1694": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_an_image_attested_but_never_signed_is_unverified"
+  },
+  "M1695": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_registry_or_sigstore_out_of_reach_an_hour_long_is_refused_and_said"
+  },
+  "M1696": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_release_without_the_publishing_job_waits_an_hour_then_is_refused_never_built tests/unit/test_host_cd.py::test_the_main_ci_job_is_waited_for_an_hour_then_refused"
+  },
+  "M1697": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_digest_header_that_is_no_digest_is_never_quoted"
+  },
+  "M1698": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_orodruin_gets_the_published_image_verified_here_never_one_built_here tests/unit/test_published_image.py::test_an_image_loaded_that_is_not_the_one_verified_is_removed_and_nothing_changes"
+  },
+  "M1699": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_an_image_loaded_that_is_not_the_one_verified_is_removed_and_nothing_changes tests/unit/test_published_image.py::test_an_image_whose_config_the_store_loses_is_refused_incoming_removed"
+  },
+  "M1700": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_draws_lost_over_several_cases_add_up[3-True] tests/unit/test_host_cd.py::test_draws_lost_count_where_the_reference_varied_and_a_gain_buys_nothing"
+  },
+  "M1701": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_draws_lost_count_where_the_reference_varied_and_a_gain_buys_nothing tests/unit/test_host_cd.py::test_draws_lost_over_several_cases_add_up[3-True]"
+  },
+  "M1702": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_draws_lost_count_where_the_reference_varied_and_a_gain_buys_nothing"
+  },
+  "M1703": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_cautious_case_losing_two_draws_is_refused tests/unit/test_host_cd.py::test_the_reviews_adversarial_attestations[B3]"
+  },
+  "M1704": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_case_that_acts_losing_two_draws_is_refused tests/unit/test_host_cd.py::test_a_cautious_case_losing_two_draws_is_refused"
+  },
+  "M1705": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_cautious_case_losing_two_draws_is_refused tests/unit/test_host_cd.py::test_the_reviews_adversarial_attestations[C2]"
+  },
+  "M1706": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_wrong_draw_at_the_gate_is_overconfident"
+  },
+  "M1707": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_case_that_acts_losing_two_draws_is_refused tests/unit/test_host_cd.py::test_a_cautious_case_losing_two_draws_is_refused"
+  },
+  "M1708": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_release_that_changes_the_code_too_says_what_is_not_measured tests/unit/test_host_cd.py::test_the_code_changed_with_the_lock_is_said_on_deploy[glorfindel/agent.py]"
+  },
+  "M1709": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_what_the_harness_did_not_prove_is_said_once"
+  },
+  "M1710": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_new_lock_without_a_matching_attestation_is_refused"
+  },
+  "M1711": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_without_what_runs_the_reference_cannot_be_checked"
+  },
+  "M1718": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_case_gaining_two_overconfident_draws_is_refused tests/unit/test_host_cd.py::test_a_wrong_draw_at_the_gate_is_overconfident"
+  },
+  "M1719": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_release_that_changes_the_code_too_says_what_is_not_measured tests/unit/test_host_cd.py::test_noise_on_both_sides_is_said_not_refused"
+  },
+  "M1720": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_case_that_varies_on_the_candidate_only_is_said_not_refused tests/unit/test_host_cd.py::test_draws_lost_over_several_cases_add_up[2-False]"
+  },
+  "M1721": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_draws_lost_count_where_the_reference_varied_and_a_gain_buys_nothing tests/unit/test_host_cd.py::test_a_case_that_varies_on_the_candidate_only_is_said_not_refused"
+  },
+  "M1722": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_code_changed_with_the_lock_is_said_on_deploy[eregion_core/llm_call.py]"
+  },
+  "M2693": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_release_dry_run_shows_the_roadmaps_line_and_writes_nothing tests/unit/test_release.py::test_release_sets_its_versions_line_to_draft_in_the_roadmap"
+  },
+  "M2694": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_release_dry_run_shows_the_roadmaps_line_and_writes_nothing tests/unit/test_release.py::test_release_sets_its_versions_line_to_draft_in_the_roadmap"
+  },
+  "M2695": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_without_its_line_the_roadmap_is_left_to_the_orchestre"
+  },
+  "M2698": {
+   "whole": "tests/unit/test_release.py",
+   "tests": "tests/unit/test_release.py::test_a_job_re_run_its_last_attempt_stands[failure-success-True-False-False] tests/unit/test_release.py::test_a_job_that_blocks_not_green_refuses_its_total_green_or_not"
+  },
+  "M3425": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_the_passphrase_is_never_passed_by_the_environment"
+  },
+  "M3427": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_the_key_is_drawn_only_at_a_terminal_and_never_under_the_repository"
+  },
+  "M3428": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_the_key_is_drawn_only_at_a_terminal_and_never_under_the_repository tests/unit/test_published_image.py::test_the_check_says_an_image_absent_or_unreadable_too[<lambda>-illisible]"
+  },
+  "M3429": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_signing_is_offline_and_keeps_a_bundle_without_certificate"
+  },
+  "M3450": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_layer_altered_in_the_registry_is_refused_by_its_sha256 tests/unit/test_published_image.py::test_a_blob_altered_or_missing_stops_everything_before_anything_is_sent"
+  },
+  "M3451": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_blob_longer_or_shorter_than_its_descriptor_is_refused"
+  },
+  "M3452": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_size_out_of_bounds_is_refused_before_a_byte_is_fetched[config] tests/unit/test_published_image.py::test_a_size_out_of_bounds_is_refused_before_a_byte_is_fetched[layer]"
+  },
+  "M3453": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_manifest_that_is_not_one_of_ours_is_refused_before_a_byte_is_fetched"
+  },
+  "M3454": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_manifest_that_is_not_one_of_ours_is_refused_before_a_byte_is_fetched"
+  },
+  "M3455": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_an_image_read_back_otherwise_is_refused tests/unit/test_published_image.py::test_an_image_without_its_config_reads_back_without_layers_nor_user_and_is_refused[partial1]"
+  },
+  "M3456": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_an_image_without_its_config_reads_back_without_layers_nor_user_and_is_refused[partial0] tests/unit/test_published_image.py::test_an_image_without_its_config_reads_back_without_layers_nor_user_and_is_refused[partial1]"
+  },
+  "M3457": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_config_that_says_otherwise_is_refused"
+  },
+  "M3458": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_config_that_says_otherwise_is_refused"
+  },
+  "M3459": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_the_registrys_token_never_follows_a_manifest_redirected_to_another_host tests/unit/test_published_image.py::test_the_registrys_token_never_follows_a_redirect_to_another_host"
+  },
+  "M3470": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_orodruin_gets_the_published_image_verified_here_never_one_built_here tests/unit/test_published_image.py::test_the_control_run_takes_nothing_from_the_host_and_reaches_nothing"
+  },
+  "M3471": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_the_control_run_takes_nothing_from_the_host_and_reaches_nothing tests/unit/test_published_image.py::test_an_older_image_is_replaced_by_the_latest_release_verified"
+  },
+  "M3472": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_the_control_run_takes_nothing_from_the_host_and_reaches_nothing"
+  },
+  "M3474": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_the_control_run_takes_nothing_from_the_host_and_reaches_nothing"
+  },
+  "M3475": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_control_run_that_hangs_is_cut_at_its_bound_and_its_container_taken_off"
+  },
+  "M3476": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_control_run_that_hangs_is_cut_at_its_bound_and_its_container_taken_off"
+  },
+  "M3477": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_orodruin_gets_the_published_image_verified_here_never_one_built_here tests/unit/test_published_image.py::test_an_image_loaded_that_is_not_the_one_verified_is_removed_and_nothing_changes"
+  },
+  "M3478": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_control_run_that_fails_is_refused_its_cause_said tests/unit/test_published_image.py::test_a_layer_lost_after_the_load_is_refused_by_the_control_run[classic]"
+  },
+  "M3479": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_check_container_left_by_a_push_before_is_taken_off_first"
+  },
+  "M3520": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_bound_that_is_no_number_of_seconds_sends_nothing[00] tests/unit/test_published_image.py::test_a_bound_that_is_no_number_of_seconds_sends_nothing[000]"
+  },
+  "M3521": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_the_control_run_takes_nothing_from_the_host_and_reaches_nothing"
+  },
+  "M3522": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_bound_that_is_no_number_of_seconds_sends_nothing tests/unit/test_published_image.py::test_what_the_update_needs_is_checked_before_the_vm_starts"
+  },
+  "M3523": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_the_control_run_takes_nothing_from_the_host_and_reaches_nothing tests/unit/test_published_image.py::test_a_control_run_that_hangs_is_cut_at_its_bound_and_its_container_taken_off"
+  },
+  "M3524": {
+   "whole": "tests/unit/test_published_image.py",
+   "tests": "tests/unit/test_published_image.py::test_a_bound_that_is_no_number_of_seconds_sends_nothing tests/unit/test_published_image.py::test_a_bound_that_is_no_number_of_seconds_sends_nothing[-5]"
+  },
+  "M3610": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_check_name_is_said_without_a_mention_a_link_or_markdown tests/unit/test_host_cd.py::test_macos_cancelled_or_queued_without_a_runner_never_holds_a_release[macos0]"
+  },
+  "M3611": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_macos_cancelled_or_queued_without_a_runner_never_holds_a_release[macos1] tests/unit/test_host_cd.py::test_a_check_not_required_still_running_never_delays_the_release"
+  },
+  "M3612": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_required_check_listed_twice_holds_on_its_worst_run[twice0-True] tests/unit/test_host_cd.py::test_a_required_check_listed_twice_holds_on_its_worst_run[twice1-True]"
+  },
+  "M3613": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_check_with_a_neighbouring_name_never_passes_for_a_required_one tests/unit/test_host_cd.py::test_a_required_check_absent_is_waited_for_an_hour_then_refused"
+  },
+  "M3614": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_check_not_required_red_is_said_once_per_tag_never_holding_h0 tests/unit/test_host_cd.py::test_macos_cancelled_or_queued_without_a_runner_never_holds_a_release[macos2]"
+  },
+  "M3615": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_check_not_required_red_is_said_once_per_tag_never_holding_h0"
+  },
+  "M3616": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_macos_cancelled_or_queued_without_a_runner_never_holds_a_release[macos2] tests/unit/test_host_cd.py::test_macos_cancelled_or_queued_without_a_runner_never_holds_a_release[macos3]"
+  },
+  "M3617": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_required_checks_are_the_ones_docs_sessions_lists tests/unit/test_host_cd.py::test_the_dry_run_refuses_a_required_check_red_and_says_the_others_only"
+  },
+  "M3618": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_main_ci_job_is_waited_for_an_hour_then_refused tests/unit/test_host_cd.py::test_another_apps_green_never_stands_for_a_required_job_its_red_still_holds"
+  },
+  "M3619": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_the_dry_run_shows_what_holds_and_what_is_only_said"
+  },
+  "M3640": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_check_name_is_said_without_a_mention_a_link_or_markdown"
+  },
+  "M3641": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_required_check_completed_without_a_green_conclusion_is_refused_never_taken_for_green"
+  },
+  "M3642": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_required_check_listed_twice_holds_on_its_worst_run[twice3-False] tests/unit/test_host_cd.py::test_another_apps_green_never_stands_for_a_required_job_its_red_still_holds"
+  },
+  "M3643": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_another_apps_green_never_stands_for_a_required_job_its_red_still_holds"
+  },
+  "M3644": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_another_apps_green_never_stands_for_a_required_job_its_red_still_holds"
+  },
+  "M3645": {
+   "whole": "tests/unit/test_host_cd.py",
+   "tests": "tests/unit/test_host_cd.py::test_a_required_check_on_the_second_page_counts[False] tests/unit/test_host_cd.py::test_a_required_check_on_the_second_page_counts[True]"
+  }
+ }
+}

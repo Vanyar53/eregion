@@ -29,8 +29,8 @@ MUTANTS = [
      '            "seconds": {mid: round(seconds[mid], 1) for mid in sorted(seconds)},\n', ""),
     ("M3795", "a shard's --json without its targets' unmutated runs: their weight guessed for ever (CI6d)",
      HARNESS,
-     '            "targets": {t: round(ran[t][1], 1) for t in sorted(ran)}}, indent=1)',
-     '            "targets": {}}, indent=1)'),
+     '            "targets": {r: round(ran[r][1], 1) for r in sorted(ran)},\n',
+     '            "targets": {},\n'),
     ("M3796", "the durations take the last run read, not the smallest measure: a slow runner's shard weighs "
               "twice (CI6d)", HARNESS,
      "                        new[kind][key] = min(s, new[kind].get(key, s))\n",
@@ -43,8 +43,8 @@ MUTANTS = [
      "            if budget != DURATIONS_BUDGET:\n", "            if False:\n"),
     ("M3799", "a shard's mutants measured in the list's order: a 20 min one started last makes the tail (CI6d)",
      HARNESS,
-     "            measured = list(pool.map(timed, heaviest_first(todo, mutant_cost, key=lambda m: m[0])))\n",
-     "            measured = list(pool.map(timed, todo))\n"),
+     "        work = heaviest_first([(\"run\", r) for r in baselines] + [(\"mutant\", m[0]) for m in todo], cost)\n",
+     "        work = [(\"run\", r) for r in baselines] + [(\"mutant\", m[0]) for m in todo]\n"),
 ]
 _ENTRY = f"{_SH}test_an_entry_that_is_not_a_duration_is_left_out"
 MUTANTS += [

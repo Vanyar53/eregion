@@ -2746,13 +2746,70 @@ Ce qui change :
   (0, qui veut dire « non mesuré », plus d'un jour — 86 400 s —, une valeur non finie ou hors des
   flottants), est écartée et dite avec le nom du fichier : l'estimation la remplace, jamais une
   exception qui arrête la tranche. `--plan 0` est refusé comme un mauvais `--shard`.
-- **Dans une tranche**, les runs non mutés puis les mutants partent du plus lourd au plus léger : un
-  mutant de 20 min lancé en dernier faisait la queue de la tranche.
+- **Dans une tranche**, les runs non mutés et les mutants partent du plus lourd au plus léger, dans un
+  seul pool depuis CI10a : un mutant de 20 min lancé en dernier faisait la queue de la tranche, et le
+  plus long run non muté retenait les quatre workers avant le premier mutant.
 - **`python scripts/mutation_check.py --plan 14`** dit le temps estimé de chaque tranche, sans rien
   mesurer (`--control --plan 2` pour le jeu de contrôle).
 
-**Sa durée : environ 41 minutes estimées sur un runner ordinaire**, celle de sa tranche de mutants la
-plus lourde, telle que ce fichier la découpe aujourd'hui (05/11, sur les durées mesurées ;
+**La porte, côté harnais : sans le travail en double** (CI10a, #580, l'étude CI9 prise en entier par
+Jonathan le 05/11). Chaque mutant reste mesuré à chaque release, sur l'arbre publié, à 500
+séquences, et aucun n'est retiré (`docs/design/preuves.md`, « Chaque mutant mesuré, sans le travail en
+double »). Ce qui change dans le harnais :
+- **Un tour là où le hasard ne joue pas.** `--rounds 2` reste le nombre de tours d'une cible où le
+  hasard joue : un fichier qui importe Hypothesis (les machines, les tests de propriétés), une course
+  (`test_locks.py`, `test_exercise.py`), un test qui démarre un thread ou un processus, un mutant
+  `TIMING`. Toute autre cible a un tour, puisque le second rejouait le même test sur le même code. Le
+  jeu de contrôle garde ses tours d'office.
+- **Les mutants du CD sur leurs tests.** Les 96 mutants dont la cible était
+  `tests/unit/test_host_cd.py` entier sont mesurés contre ses tests qui les attrapent : les deux plus
+  rapides, mesurés le 05/11 par `python scripts/mutation_check.py --narrow tests/unit/test_host_cd.py
+  --rounds 2 --jobs 4` (un run du fichier entier sans `-x` par mutant, puis deux tours de la cible
+  resserrée), gardés dans `scripts/mutants/narrowed.json`. Les 96 sont resserrés : chacun est attrapé
+  par 1 à 26 tests du fichier (médiane 2 ; 37 par un seul, pour qui rien ne change). Douze ne l'étaient d'abord par aucun nœud lisible : leur test est
+  paramétré par un document JSON, dont l'id a des espaces, et une cible se coupe sur les espaces. Ils
+  ont donc pour cible ce test entier, tous ses paramètres. Le même principe vaut pour les deux autres
+  fichiers lourds, mesurés le même jour : 29 des 30 mutants de `tests/unit/test_release.py` (M1164
+  n'est attrapé que par une erreur d'indentation à la collecte : il garde le fichier entier) et les 51
+  de `tests/unit/test_published_image.py`. M1014 garde sa cible. On relance `--narrow` quand `scripts/mutant_anchors.py` dit qu'une entrée ne
+  s'applique plus, ou qu'un nouveau lot ajoute des mutants sur un fichier entier lourd.
+- **`--skip-machine-baseline`** : la tranche ne refait plus le run non muté des machines
+  d'invariants, et dit combien de cibles l'ont perdu ; le reste de chaque cible tourne encore. Le job
+  `invariants` de la porte fait déjà tourner toute la suite à 2 000 séquences sur le même arbre (un
+  test le vérifie avant que le drapeau soit passé). La porte le passe (câblé par CI10b) ; le lundi et
+  un run local non.
+- **`--machines`** mesure les seuls mutants dont la cible fait tourner une machine (un fichier qui
+  définit une `RuleBasedStateMachine`), avec `--shard` et `--json` ; `--total DIR --machines` juge
+  ceux-là seuls, et refuse une tranche mesurée autrement. Le jeu de contrôle garde sa sélection.
+- **Un seul pool** par tranche, pour ses runs non mutés et ses mutants, du plus lourd au plus léger.
+- **`--update-durations`** prend chaque mesure comme l'arbre la fait aujourd'hui : ramenée à ses tours
+  d'aujourd'hui, écartée si elle a été faite sur une autre cible (un mutant resserré attend la mesure
+  de la prochaine porte, et l'estimation le pèse d'ici là). Le JSON d'une tranche dit, pour chaque
+  mutant, sa cible et ses tours (`mutant_targets`, `mutant_rounds`).
+- Le faux `docker` de `test_host_cd.py` démarre en `python -S`, puisqu'il ne lit que la bibliothèque
+  standard. Mesuré le 05/11 : un lancement passe de 17,8 à 14,3 ms (médiane de 200), et le fichier le
+  lance environ 4 300 fois. Le fichier entier passe vert dans les deux cas (292 tests) ; sur un poste
+  chargé, son gain total reste sous le bruit.
+
+**Le gain, dans le modèle du harnais** (`--plan`, durées des trois portes du 05/11 ramenées aux cibles
+et aux tours d'aujourd'hui ; un mutant resserré sans mesure pèse l'estimation, 13 s ; avant : 3 141 mutants, après : 3 274, `origin/main` fusionné) :
+
+| | Avant CI10a | Après, sans `--skip-machine-baseline` | Après, avec (la porte) |
+|---|---|---|---|
+| `--plan 14`, la tranche la plus lourde | 39,6 min | 25,5 min | **17,9 min** |
+| `--plan 10` | 50,9 min | 35,3 min | 25,0 min |
+| Travail des tranches de mutants | ~34 h de runner (CI9) | 23,0 h | 16,6 h |
+| `--control --plan 2` | ~31 min | 24,3 min | 23,3 min |
+
+Le seul pool (L4) gagne de 1 à 3 min par tranche dans le modèle : 19,9 → 17,9 min à 14 tranches,
+25,9 → 25,0 à 10. Le modèle est optimiste d'un facteur 1,2 à 1,3 (CI9 : 42,5 min prévues, 54
+mesurées pour la 0.5.6) : la tranche la plus lourde devrait mesurer de 22 à 23 min. Le job
+`invariants` (de 22 à 36 min) devient le chemin de la porte ; le scinder, comme ramener la porte à 10
+tranches, est l'affaire de CI10b.
+
+**Sa durée avant CI10a : environ 41 minutes estimées sur un runner ordinaire** (après CI10a, le
+tableau ci-dessus), celle de sa tranche de mutants la plus lourde, telle que ce fichier la découpait
+alors (05/11, sur les durées mesurées ;
 avant CI6d, 60 et 73 min mesurées). L'estimation reprend les mesures des deux runs (la plus petite de
 chaque mutant), et les runs non mutés chronométrés un par un sur un poste, ramenés à un runner par un
 facteur ajusté sur les débuts de tranche des 32 journaux (écart type de 2,9 min). Ses parties tournent

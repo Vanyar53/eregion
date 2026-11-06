@@ -1,0 +1,40 @@
+# Stratus Red Team — pinned binary + embedded warmup assets (R2)
+#
+# Source    : https://github.com/DataDog/stratus-red-team
+# Version   : v2.38.0   (released 2026-11-04)
+# License   : Apache-2.0 — https://github.com/DataDog/stratus-red-team/blob/main/LICENSE
+#
+# We do NOT vendor the binary in the repository (it is a large, per-platform Go binary): it is
+# staged into the Orodruin image and pinned. The adapter (annatar/engines/stratus.py) reads the
+# staged binary and checks its sha256 against the `stratus` line below BEFORE any phase runs, at
+# every run (SEC5, like annatar/atomics/PIN) — a binary that is not the pinned one runs nothing.
+# `annatar run` never fetches Stratus; Orodruin has no Internet egress.
+#
+# ── The binary the adapter execs ──────────────────────────────────────────────────────
+# sha256 of the `stratus` binary extracted from stratus-red-team_Linux_x86_64.tar.gz v2.38.0.
+# This is the value checked at run time (BINARY_LABEL = "stratus").
+#   376ceff19c170194f6adbc2f883e8b5658e99a13cb1057f0ab118524411d57bb  stratus
+#
+# ── Provenance (verified against the release's published checksums.txt) ─────────────────
+# The upstream archive the binary is extracted from — its sha256 is the one DataDog publishes
+# in the v2.38.0 `checksums.txt` asset. Recorded so the staging step can verify the download
+# before extraction; the adapter checks the extracted binary above, which is what it execs.
+#   2f0a971c7d8f5fb32a598f70b79c954d7aee72740d352947a78d348b00fb09a3  stratus-red-team_Linux_x86_64.tar.gz
+#
+# ── Embedded warmup assets (Orodruin has no Internet) ───────────────────────────────────
+# Stratus's `warmup` provisions a technique's prerequisites with Terraform. Left to itself it
+# would download, on first run, the Terraform binary and the azurerm/azuread provider plugins
+# (docs/design/orodruin-contract.md forbids that egress). Both are staged into the image and
+# the adapter points Stratus at them offline (annatar/engines/stratus.py::airgap_env):
+#   - Terraform (the exact version Stratus auto-installs, pkg/stratus/runner/terraform.go:
+#     TerraformVersion = "1.3.10"), pre-installed under the run-scoped HOME so Stratus finds it
+#     and never downloads one. sha256 of the upstream zip (releases.hashicorp.com):
+#       2e3931c3db6999cdd4c7e55227cb877c6946d1f52923d7d057036d2827311402  terraform_1.3.10_linux_amd64.zip
+#   - the azurerm / azuread provider plugins each technique's lockfile pins, staged into a
+#     filesystem mirror (TF_CLI_CONFIG_FILE) + plugin cache (TF_PLUGIN_CACHE_DIR) so
+#     `terraform init` installs from disk, never the registry. Their sha256 are the ones in
+#     each technique's `.terraform.lock.hcl`, recorded by the staging step (make stratus-stage,
+#     annatar/stratus/README.md) — not invented here.
+#
+# To update Stratus: bump the version + date above, re-read the new release's checksums.txt,
+# replace the `stratus` and archive sha256, re-stage the assets, and run the harness (ID1).

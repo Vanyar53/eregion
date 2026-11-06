@@ -181,6 +181,23 @@ class Engine:
                 console.print(f"[red]Refused:[/red] {probe_error}")
                 return RunOutcome(run_id, "unknown", error=f"atomic: {probe_error}", refused=True)
 
+        # The Stratus engine's pure checks run BEFORE anything is armed or opened too (R2):
+        # a technique off the closed allow-list, or a binary that is not the pinned one, must
+        # never arm a contract or open an exercise window. The verified technique is carried in.
+        stratus_resolved = None
+        if scenario.engine == "stratus":
+            from annatar.engines.stratus import StratusError
+            from annatar.engines.stratus import resolve as stratus_resolve
+            from annatar.executors.stratus_host import staged_layout
+
+            try:
+                stratus_resolved = stratus_resolve(
+                    scenario.engine_ref, binary_path=staged_layout().binary
+                )
+            except StratusError as e:
+                console.print(f"[red]Stratus unresolved:[/red] {e}")
+                return RunOutcome(run_id, "unknown", error=f"stratus: {e}", refused=True)
+
         # Orodruin (eregion_core/orodruin.py): the contract before the target is even read.
         # Passive → the run touches nothing and says why.
         verdict, session = arm(run_id, "annatar", request=self.request)
@@ -209,6 +226,21 @@ class Engine:
                 )
                 console.print(f"[red]Refused:[/red] {reason}")
                 return RunOutcome(run_id, "unknown", error=f"cap: {reason}", refused=True)
+
+        # Stratus (R2) attacks the Azure control plane, not a VM: it runs its own cycle from
+        # the armed contract, with its own control-plane guard and window — never the VM
+        # executor, the VM preflight or the VM target guard below.
+        if scenario.engine == "stratus":
+            from annatar.engines.stratus import PHASES
+
+            available = session.max_injections - session.calls
+            needed = len(PHASES)   # the four phases are four injector calls; the Graph probes
+            if available < needed:  # are read-only (declared), never counted against the cap
+                reason = (f"cap of {session.max_injections} calls ({session.calls} used): this "
+                          "stratus technique needs 4 (warmup, detonate, revert, cleanup)")
+                console.print(f"[red]Refused:[/red] {reason}")
+                return RunOutcome(run_id, "unknown", error=f"cap: {reason}", refused=True)
+            return self._run_stratus(scenario, run_id, session, stratus_resolved)
 
         executor, collector = self._get_executor_collector(scenario, session)
 
@@ -659,6 +691,184 @@ class Engine:
         report.save()
         return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
 
+    def _run_stratus(self, scenario, run_id: str, session, resolved, executor=None) -> RunOutcome:
+        """Run a Stratus Red Team technique on the enrolled control plane (R2). The bench group
+        is guarded (enrolled, its zone allowing this technique, destructive as the catalog says)
+        — Stratus provisions inside it during warmup — then the cycle runs inside an exercise
+        window. ``executor`` is injected by the tests (a fake Stratus); otherwise a real one is
+        built. The real bench measurement of control-plane detection is ID1 (#281)."""
+        import os
+
+        from annatar.executors.stratus_host import StratusExecutor
+
+        sub = scenario.target.get("subscription_id") or os.environ.get("AZURE_SUBSCRIPTION_ID")
+        rg = scenario.target.get("resource_group")
+        if not sub or not rg:
+            why = "stratus target needs a subscription_id and a resource_group (the bench group)"
+            console.print(f"[red]Safety check failed:[/red] {why}")
+            return RunOutcome(run_id, "unknown", error=f"safety: {why}", refused=True)
+        rg_scope = f"/subscriptions/{sub}/resourceGroups/{rg}"
+
+        destructive, lie = scenario_destructive(scenario)
+        if lie:
+            console.print(f"[red]Safety check failed:[/red] {lie}")
+            return RunOutcome(run_id, "unknown", error=f"safety: {lie}", refused=True)
+
+        if executor is None:
+            executor = StratusExecutor(resolved, session, target=rg_scope, dry_run=self.dry_run)
+
+        # Control-plane enrollment guard: the bench group's tags, read through ARM.
+        try:
+            rg_tags = executor.resource_group_tags(sub, rg)
+        except Exception as e:
+            why = f"the bench group's enrollment could not be read ({type(e).__name__}: {e})"
+            console.print(f"[red]Safety check failed:[/red] {why}")
+            return RunOutcome(run_id, "unknown", error=f"safety: {why}", refused=True)
+        guard = check_target(rg_scope, rg_tags, {}, kind="technique", destructive=destructive)
+        if not guard.allowed:
+            console.print(f"[red]Control-plane safety check failed:[/red] {guard.reason}")
+            return RunOutcome(run_id, "unknown",
+                              error=f"safety: {guard.reason} (control plane)", refused=True)
+        if guard.zone == "production" and self.without_glorfindel:
+            console.print(f"[red]Control-plane safety check failed:[/red] "
+                          f"{NO_WITHOUT_IN_PRODUCTION}")
+            return RunOutcome(run_id, "unknown", error=f"safety: {NO_WITHOUT_IN_PRODUCTION}",
+                              refused=True)
+
+        open_window(run_id, injector="annatar",
+                    kind="technique", experiment=f"{scenario.mitre} {scenario.name}",
+                    targets=[rg_scope], destructive=destructive, request=self.request)
+        try:
+            return self._run_stratus_cycle(scenario, executor, run_id, resolved)
+        finally:
+            close_window(run_id, injector="annatar")
+            if self.publish_report:
+                carry_run(run_id, RUNS_DIR)
+
+    def _run_stratus_cycle(self, scenario, executor, run_id: str, resolved) -> RunOutcome:
+        """The four phases of the Stratus cycle, from the armed contract: warmup (prerequisites),
+        a read-only Graph probe of the initial state, detonate (then ``attack_started``), revert
+        (best effort — not every technique supports it), cleanup (ALWAYS, even when detonate
+        raised — warmup created the prerequisites), then a read-only Graph probe of the return.
+        Every phase is journaled by the executor; the probes are declared reads, never counted.
+
+        Control-plane detection (the Azure Activity Log, azure_activity/AL1) is measured at ID1
+        (#281): ``attack_started`` is emitted here so that measurement has its T0; R2 does not
+        wait on the result, so the detection stays ``unknown`` (said in the report)."""
+        emitter = SignalEmitter(
+            run_id=run_id, scenario_name=scenario.name, scenario_mitre=scenario.mitre,
+            target=scenario.target, resource_id=executor.target,
+        )
+        checks: dict = {}
+        metrics = {
+            "engine": "stratus",
+            "engine_ref": resolved.technique_id,
+            "stratus_binary_sha256": resolved.binary_digest,
+            **run_report.identity("technique", "annatar", scenario.mitre, executor.target),
+            **({"request": self.request} if self.request else {}),
+        }
+        metrics.update(watch_gate.without_metrics(self.without_glorfindel))
+        T0 = time.time()
+        attack_error = None
+        warmed = False
+        restored = None
+        try:
+            lost = self._watch_lost()
+            if lost:
+                return self._lost(run_id, lost)
+            console.print("[cyan]->[/cyan] Warmup (prerequisites)...")
+            executor.warmup()
+            checks["warmup"] = "PASS"
+            warmed = True
+
+            # Initial state before detonate — read-only Graph probe (None when none declared).
+            before = executor.probe_initial_state("before")
+            if before is False:
+                checks["initial_state_before"] = "FAIL"
+                attack_error = ("initial state not clean before detonate (the read-only Graph "
+                                "probe found the technique's objects present) — not detonated")
+                console.print(f"[red]{attack_error}[/red]")
+            elif before is True:
+                checks["initial_state_before"] = "PASS"
+
+            if attack_error is None:
+                lost = self._watch_lost()
+                if lost:
+                    return self._lost(run_id, lost)
+                console.print(f"[cyan]->[/cyan] Detonate {resolved.technique_id}...")
+                executor.detonate()
+                checks["detonate"] = "PASS"
+                if scenario.detection:
+                    detection_timeout_s = self._parse_duration(
+                        scenario.detection.get("timeout", "300s"))
+                    emitter.emit(event="attack_started", raw_signal={
+                        "attack_time": T0, "detection_timeout_s": detection_timeout_s,
+                        "detection_max_s": self._parse_duration(
+                            scenario.detection.get("time_max", "9999s"))})
+                    metrics["attack_time"] = T0
+                    console.print("[cyan]->[/cyan] Signal 'attack_started' emitted.")
+        except Exception as e:
+            checks["detonate"] = checks.get("detonate") or "ERROR"
+            console.print(f"[red]Stratus detonate failed:[/red] {type(e).__name__}: {e}")
+            raise
+        finally:
+            if warmed:
+                # revert best effort; cleanup ALWAYS destroys the prerequisites, even when
+                # detonate raised (warmup created them). Each guarded, so the report is saved.
+                try:
+                    console.print("[cyan]->[/cyan] Revert (detonation)...")
+                    executor.revert()
+                    checks["revert"] = "PASS"
+                except Exception as e:
+                    checks["revert"] = "SKIPPED"
+                    console.print(f"[yellow]Revert not applied:[/yellow] {e}")
+                try:
+                    console.print("[cyan]->[/cyan] Cleanup (prerequisites)...")
+                    executor.cleanup()
+                    checks["cleanup"] = "PASS"
+                except Exception as e:
+                    checks["cleanup"] = "ERROR"
+                    console.print(f"[red]Cleanup failed:[/red] {e}")
+                try:
+                    after = executor.probe_initial_state("after")
+                    if after is not None:
+                        restored = after
+                        checks["initial_state_after"] = "PASS" if after else "FAIL"
+                        metrics["initial_state_restored"] = after
+                except Exception as e:
+                    checks["initial_state_after"] = "ERROR"
+                    console.print(f"[red]After-probe failed:[/red] {e}")
+            if checks.get("cleanup") != "PASS" or restored is False:
+                self._stratus_recovery_hint(resolved)
+            # Control-plane detection is ID1 (#281): not waited on here.
+            metrics["detection"] = "unknown"
+            metrics["detection_note"] = \
+                "control-plane detection (azure_activity) measured at ID1 (#281)"
+            overall = "PASS" if checks and all("PASS" in v for v in checks.values()) else "FAIL"
+            report = RunReport(scenario=scenario.name, run_id=run_id, mitre=scenario.mitre,
+                               result=overall, metrics=metrics, thresholds={}, checks=checks)
+            path = report.save()
+            report.render()
+            console.print(f"\n[dim]Report saved: {path}[/dim]")
+
+        if attack_error:
+            return RunOutcome(run_id, "unknown", error=attack_error)
+        if checks.get("cleanup") != "PASS":
+            return RunOutcome(run_id, "unknown",
+                              error="cleanup did not pass — prerequisites may remain")
+        if restored is False:
+            return RunOutcome(run_id, "unknown", error="initial state not restored after cleanup")
+        return RunOutcome(run_id, "unknown")
+
+    @staticmethod
+    def _stratus_recovery_hint(resolved) -> None:
+        """The control plane may be dirty (cleanup failed, or the return left unverified) — show
+        the operator Stratus's own cleanup, to run by hand from Orodruin."""
+        console.print(
+            "[yellow]The control plane may be dirty — run Stratus's cleanup by hand from "
+            f"Orodruin:[/yellow]\n  [bold]stratus cleanup {resolved.technique_id}[/bold]"
+        )
+
     def _run_revert(self, executor, revert, resolved) -> str:
         """Each revert step of the scenario (VM3), in order: PASS, or ERROR at the first that
         raises (the rest are not run — the after-probes say what is left). VM3b: a step runs
@@ -743,6 +953,20 @@ class Engine:
                     f"  probe   : {p.get('name')} — "
                     f"{resolved.substitute(p.get('verify', ''))} (expect {p.get('expect')})"
                 )
+        elif scenario.engine == "stratus":
+            from annatar.engines.stratus import StratusError, describe
+
+            try:
+                info = describe(scenario.engine_ref)
+            except StratusError as e:
+                console.print(f"  [red]stratus unresolved:[/red] {e}")
+                return
+            console.print(f"  Stratus : {info['name']} ({info['technique_id']})")
+            console.print(f"  cycle   : {' -> '.join(info['phases'])} (each a journaled call)")
+            if info["graph_probe"]:
+                probe = info["graph_probe"]
+                console.print(f"  probe   : {probe.name} — GET {probe.read} "
+                              f"(read-only, expect_absent={probe.expect_absent})")
         else:
             for i, step in enumerate(scenario.steps, 1):
                 console.print(f"  {i}. [{step.get('action')}] {step.get('name', '')}")

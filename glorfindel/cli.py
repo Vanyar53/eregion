@@ -1134,6 +1134,12 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                               f"couche du client[/bold red] — sa technique n'est plus détectée "
                               f"([dim]{det_cfg.client_file}[/dim]) ; si ce n'est pas voulu, la "
                               f"réactiver.")
+            # WL1: a client rule copied from a shipped one that changed (or went) since — stale.
+            for name in det_cfg.drifted:
+                console.print(f"[bold red]⚠ Règle du client « {_esc_markup(name)} » : copie périmée "
+                              f"d'une règle livrée[/bold red] — la base a changé depuis la copie (la "
+                              f"note ci-dessus dit laquelle tourne) ; reprendre la copie dans "
+                              f"[dim]{det_cfg.client_file}[/dim].")
         except Exception as exc:
             console.print(f"[yellow]⚠ Could not load rules: {exc}[/yellow]")
 
@@ -2474,6 +2480,10 @@ def rules_cmd(ctx: click.Context, rules_file: str | None) -> None:
     for name in cfg.disabled_base:
         console.print(f"[bold red]⚠ Règle livrée « {_esc_markup(name)} » désactivée par la couche du "
                       "client[/bold red] — sa technique n'est plus détectée.")
+    for name in cfg.drifted:            # WL1: a stale copy of a shipped rule
+        console.print(f"[bold red]⚠ Règle du client « {_esc_markup(name)} » : copie périmée d'une règle "
+                      "livrée[/bold red] — la base a changé depuis la copie (la note ci-dessus dit "
+                      "laquelle tourne).")
 
 
 @rules_cmd.command("check")

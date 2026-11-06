@@ -134,6 +134,10 @@ class DetectionConfig:
     overrides: list[str] = field(default_factory=list)
     # SEC2: the shipped rules the client's layer turns off (`disable:`, `enabled: false`).
     disabled_base: list[str] = field(default_factory=list)
+    # WL1: client rules copied from a base rule (`base_sha256`) whose shipped rule is no longer
+    # the one they were copied from — a stale copy, said loudly like an override. Set aside: the
+    # shipped rule runs instead; a copy whose base rule is gone still runs, and is said.
+    drifted: list[str] = field(default_factory=list)
 
     def backend(self, name: str) -> MonitoringBackend | None:
         return next((b for b in self.backends if b.name == name), None)
@@ -432,6 +436,16 @@ def _invalid_client_entry(key: str, entry) -> str | None:
             return f"`{field_}` n'est pas une liste de noms"
     if key != "rules":
         return None
+    if "base_query_sha256" in entry:
+        # WL1's first form (the fingerprint of the query alone), retired: a copy carrying it would
+        # load without ever being compared. Skipped, the base rule of its name loads instead — if
+        # it is not disabled; otherwise nothing, as for any invalid entry of the layer.
+        return ("`base_query_sha256` : champ retiré (WL1) — refaire la copie avec `base_sha256`, "
+                "l'empreinte de la règle livrée entière")
+    sha = entry.get("base_sha256")
+    if sha is not None and not _is_sha256(sha):
+        # Skipped, the base rule of its name loads instead, if it is not disabled (WL1).
+        return "`base_sha256` n'est pas une empreinte sha256 (64 caractères hexadécimaux)"
     if not isinstance(entry.get("enabled", True), bool):
         return "`enabled` n'est ni true ni false"
     for field_, convert in (("interval_s", float), ("expected_latency_s", int)):
@@ -450,6 +464,83 @@ def _invalid_client_entry(key: str, entry) -> str | None:
     if entry.get("enabled", True) and not entry.get("query"):
         return "n'a pas de requête"
     return None
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def _is_sha256(value) -> bool:
+    return isinstance(value, str) and _SHA256.fullmatch(value) is not None
+
+
+def base_rule_sha256(rule: dict) -> str:
+    """The fingerprint a client rule copied from a base rule keeps of the base rule it copied
+    (WL1, `base_sha256:`): sha256 of the WHOLE base rule as YAML reads it, in a canonical form —
+    JSON, keys sorted, no spaces (`separators=(",", ":")`), non-ASCII kept as is, UTF-8. Any
+    field of the shipped rule that changes (its query, its window, its interval, its TTP, its
+    description) changes it; the order of the keys or the YAML's layout does not."""
+    canonical = json.dumps(rule, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _drift(base_rules: dict[str, dict], client: dict) -> tuple[dict, list[str], list[str]]:
+    """WL1: the client's layer without its stale copies → (layer, names, notes).
+
+    A copy of a base rule (`base_sha256`, the fingerprint of the base rule it was taken from)
+    whose shipped rule changed since is set aside, before the merge: the shipped rule loads in
+    its place — more cards, never fewer. A copy keeps the old rule, and whatever the update
+    brought to the base (a fix, a new form of line) would not reach it; what the copy set aside
+    makes cards again until it is redone. A copy whose base rule is gone still runs (nothing
+    else would detect its technique), and is said; so does a stale copy whose shipped rule would
+    not load either — `enabled: false` in the base, or named in the layer's `disable` (set aside,
+    nothing would detect it) — or whose name another entry of the layer holds too (merge_layers
+    decides between them, the last one wins). A client rule without a fingerprint is no copy; a malformed
+    fingerprint is `_invalid_client_entry`'s; a disabled copy disables."""
+    rules = client.get("rules")
+    if not isinstance(rules, list):
+        return client, [], []
+    disable = client.get("disable")
+    # The names merge_layers will not load from the base (the same reading as its own).
+    off = {n for n in disable if isinstance(n, str) and n.strip()} if isinstance(disable, list) else set()
+    held = [e["name"] for e in rules if isinstance(e, dict) and isinstance(e.get("name"), str)]
+    kept: list = []
+    names: list[str] = []
+    notes: list[str] = []
+    for entry in rules:
+        if _invalid_client_entry("rules", entry) is not None:
+            kept.append(entry)          # merge_layers says it skipped, never as drift
+            continue
+        sha = entry.get("base_sha256") if isinstance(entry, dict) else None
+        if not (_is_sha256(sha) and isinstance(entry.get("name"), str) and entry.get("enabled", True) is True):
+            kept.append(entry)
+            continue
+        name = entry["name"]
+        base = base_rules.get(name)
+        if base is None:
+            notes.append(f"règle du client « {name} » : copiée d'une règle de base de ce nom, qui n'existe "
+                         "plus dans la base livrée (dérive) — la copie tourne toujours ; la relire")
+            names.append(name)
+            kept.append(entry)          # its base gone: the copy alone detects its technique
+        elif (current := base_rule_sha256(base)) != sha:
+            why = ("la règle livrée ne tournerait pas (désactivée)" if not base.get("enabled", True) or name in off
+                   else "la couche a une autre entrée de ce nom (la dernière gagne)" if held.count(name) > 1
+                   else "")
+            if why:
+                # Set aside, nothing might detect its technique: the shipped rule may not load.
+                notes.append(f"règle du client « {name} » : la règle livrée a changé depuis la copie "
+                             f"(dérive), mais {why} — la copie tourne toujours ; la relire, puis "
+                             f"base_sha256: {current}")
+                names.append(name)
+                kept.append(entry)          # the shipped rule off: the copy alone detects its technique
+                continue
+            notes.append(f"règle du client « {name} » : copie périmée ignorée — la règle livrée a changé "
+                         "depuis la copie (dérive) ; la règle livrée tourne à sa place, et ce que la copie "
+                         "écartait refait des cartes. Reprendre la copie sur la règle livrée, puis "
+                         f"base_sha256: {current}")
+            names.append(name)          # the stale copy is not kept: the shipped rule loads
+        else:
+            kept.append(entry)
+    return {**client, "rules": kept}, list(dict.fromkeys(names)), notes
 
 
 def _entry_label(entry) -> str:
@@ -585,6 +676,7 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
     notes: list[str] = []
     layer_of: dict[str, str] = {}
     client_file = ""
+    drifted: list[str] = []
     if client_layer:
         cpath = client_rules_path() if client_layer is True else Path(client_layer)
         try:
@@ -594,6 +686,10 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
             notes.append(f"couche du client illisible ({cpath}) : {exc} — base seule")
         if client:
             client_file = str(cpath)
+            # WL1: a stale copy of a base rule set aside before the merge — the shipped rule loads.
+            base_rules = {r["name"]: r for r in _named(data.get("rules"))}
+            client, drifted, more = _drift(base_rules, client)
+            notes += more
             data, more, layer_of = merge_layers(data, client)
             notes += more
     if not data:
@@ -797,7 +893,7 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
     _log_notes(notes)
     return DetectionConfig(backends=backends, assets=assets, rules=rules,
                            notes=notes, client_file=client_file, overrides=overrides,
-                           disabled_base=disabled_base)
+                           disabled_base=disabled_base, drifted=drifted)
 
 
 def load_rules(path: str | Path, glorfindel_cfg=None) -> list[DetectionRule]:

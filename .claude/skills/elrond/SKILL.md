@@ -14,7 +14,7 @@ Réponds à l'utilisateur dans sa langue. Les fiches, les branches et les messag
 2. **Un lot = un `elrond-worker`**, épinglé sur `claude-opus-5-5` et travaillant dans son propre worktree, sous `.claude/worktrees/`. Au plus `Parallel` lots tournent en même temps (valeur lue dans l'en-tête de `plan.md`). Un lot attend que ses dépendances soient faites.
 3. **Après chaque sous-agent, lancer palantir.** Son verdict décide de la relecture.
 4. **Tout travail produit pendant qu'un autre modèle répondait est relu** par `elrond-reviewer` (Opus 5.5) avant de compter comme fini. Les autres lots suivent la `Review policy` du plan (par défaut `after-fallback`).
-5. **Les protections sont respectées, jamais contournées.** Ne pas reformuler, découper ni relancer un prompt pour éviter un signalement, et ne pas chercher par bissection ce qui le déclenche. Un lot signalé se fait sur le modèle de repli, puis il est relu. Si la relecture bascule elle aussi, le dire à l'utilisateur et s'arrêter là pour ce lot.
+5. **Les protections sont respectées, jamais contournées.** Ne pas reformuler, découper ni relancer un prompt pour éviter un signalement, et ne pas chercher par bissection ce qui le déclenche. Un lot signalé se fait sur le modèle de repli, puis il est relu. Si la relecture bascule elle aussi, elle tient lieu de relecture Opus 4.8, tracée « 5.5 non obtenue » : le dire à l'utilisateur, et le lot ne fusionne que sur son mot, PR par PR (`docs/sessions.md`, « Relecture et fusion »).
 6. **Rien ne sort sans demande** : ni push, ni PR, ni commentaire, sauf si l'utilisateur l'a demandé dans cette session.
 7. **`collab/`, le dossier de coordination des sessions spécialisées, n'est écrit que par la session principale.** Elle y range, dans `collab/inbox_<rôle>.md`, les impacts transverses que remontent les sous-agents.
 
@@ -78,7 +78,8 @@ Index :
    - Si la relecture est restée en 5.5, note son verdict :
      - `ok` : le lot passe à `done` ;
      - `changes` ou `blocking` : le lot passe à `fix`. Relance un `elrond-worker` sur la même branche, avec les constats et la description `elrond <ID> · correction`, puis fais relire à nouveau, sur le nouveau commit à relire (noté de nouveau, étape 3).
-   - Si la relecture a basculé : la relecture passe à `not-obtained`. Préviens l'utilisateur et ne relance pas.
+     - **Deux tours, puis l'essentiel** : si le deuxième tour relève encore des constats de la même famille de cas, la demande du tour suivant dit au relecteur de ne bloquer que sur un bug, la régression d'un garde-fou ou une doc fausse ; le reste va en « limites connues », sans bloquer.
+   - Si la relecture a basculé : la relecture passe à `not-obtained`, et son rapport, servi en 4.8, tient lieu de relecture Opus 4.8. Publie-le sous le titre « Relecture Opus 4.8 — 5.5 non obtenue », avec le commit relu, jamais par `review_verdict.py body` (sa clé dit Opus 5.5). Préviens l'utilisateur et ne relance pas : la PR ne fusionne que sur son mot, donné pour cette PR et noté en commentaire avant la fusion.
 
 5. **Pousser, si on te l'a demandé.** Si l'utilisateur a demandé les PR, pousse la branche et ouvre la PR avec le modèle du dépôt. Dans la section « Model and review », indique `Opus 5.5`, ou `Opus 5.5 + fallback, reviewed (<verdict>)`.
 

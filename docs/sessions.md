@@ -142,6 +142,21 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
      `$reviewed` (un push après la relecture : une autre relecture), ou si le dernier verdict publié
      pour ce commit n'est pas `ok`. Le verdict est **tracé**, pas authentifié : il dit qui l'a publié
      (l'App), pas qu'un relecteur l'a rendu.
+   - **Deux tours, puis l'essentiel** (décision de Jonathan du 06/11). Quand un deuxième tour de relecture
+     relève encore des constats de la même famille de cas, la relecture suivante ne bloque plus que sur
+     trois choses : un bug, la régression d'un garde-fou ou une doc fausse. Le reste va en « limites
+     connues », dans la doc du lot et dans le rapport, sans bloquer. La demande de relecture le dit au
+     relecteur, avec le numéro du tour.
+   - **Quand une protection arrête Opus 5.5** (décision de Jonathan du 06/11). Le travail se fait sur le
+     modèle de repli, Opus 4.8, puis une relecture Opus 5.5 est tentée. Si elle est arrêtée aussi, la
+     relecture servie en 4.8 tient lieu de relecture, tracée comme telle :
+     - son rapport se publie en commentaire sous le titre « Relecture Opus 4.8 — 5.5 non obtenue », avec
+       le commit relu, et jamais par `review_verdict.py body`, dont la clé dit Opus 5.5 ;
+     - `check` échoue donc, et c'est voulu : la PR ne fusionne que sur le mot de Jonathan, donné pour
+       cette PR et jamais pour une série, noté en commentaire sur la PR avant la fusion
+       (`gh pr merge <n> --squash --match-head-commit "$reviewed"`) ;
+     - aucune protection n'est contournée : un prompt n'est ni reformulé, ni découpé, ni relancé pour
+       l'éviter (`docs/elrond.md`).
    - Une CI rouge sans lien avec ta PR se dit à l'Orchestre. Pas de saut ni de `xfail` sans lot.
 7. **Après.**
    - Mets à jour ton status (`collab/<rôle>_status.md`).

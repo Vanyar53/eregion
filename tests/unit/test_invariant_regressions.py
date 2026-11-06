@@ -7130,6 +7130,8 @@ def test_a_reset_refused_by_azure_names_the_rule_it_leaves(monkeypatch):
     lifts the VM, the turned allow with it (the code reads the VM's NICs as its own, `own_ips`,
     `mates`). Not the case of the identifier: the canonical id fails the same.
 
-    The oracle now asks of such a rule its name in the outcome — « gardée » only of a rule kept for
-    another VM (_held_for_itself). M4413: a refused delete said without its rule's name."""
+    The oracle now asks of such a rule its name in `failed`, by its error, a whole name — « gardée » only
+    of a rule kept for another VM (_held_for_itself). M4413: a refused delete said without its rule's name;
+    M4414: a refused delete said done, in `deleted` (survives the oracle's first version, which took the
+    name in any list)."""
     _replay(monkeypatch, _I3K_NET, *_I3K_STEPS)

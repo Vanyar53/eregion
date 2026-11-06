@@ -429,10 +429,16 @@ L'oracle se trompait, pas le reset. La casse de l'identifiant n'y est pour rien 
 comme retenant une règle retournée pour une autre VM. C'était Db--01 elle-même. L'oracle demandait donc
 « gardée » d'une règle que rien ne garde : le reset lève la VM, la règle retournée avec elle, et le code lit
 les cartes de la VM comme les siennes (`own_ips`, `mates`). Désormais, une telle règle (`_held_for_itself`)
-doit être nommée dans le résultat ; « gardée » reste exigé d'une règle gardée pour une autre VM (M1962
-tient cette moitié). M4413 (une suppression refusée dite sans le nom de sa règle) est attrapé par la
-séquence figée : la machine tire trop rarement ensemble un 403, un échange d'adresse entre deux cartes et
-une règle retournée.
+doit être nommée dans `failed`, par son erreur, et nulle part ailleurs ; « gardée » reste exigé d'une
+règle gardée pour une autre VM (M1962 tient cette moitié). Un nom se lit en mot entier :
+`…-db-nic-0-0d0228` n'est pas trouvé dans `…-db-nic-0-0d0228-out`.
+
+La relecture a sondé la première version de cet oracle, qui acceptait le nom dans n'importe quelle liste
+du résultat. Le mensonge passait : une suppression refusée rangée dans `deleted`, quand une autre refusée
+garde `swept_partial`. Aucun autre invariant ne lit `deleted`. M4414 réinjecte ce mensonge : il survit à
+l'ancien oracle et l'oracle corrigé l'attrape. M4413 (une suppression refusée dite sans le nom de sa
+règle) et M4414 sont attrapés par la séquence figée : la machine tire trop rarement ensemble un 403, un
+échange d'adresse entre deux cartes et une règle retournée.
 
 ### Chaque mutant mesuré, sans le travail en double (CI10a)
 

@@ -6,7 +6,7 @@ import json
 import os
 import threading
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +21,9 @@ class Incident:
     actions_taken: list      # [{action, timestamp, outcome_status}]
     signals_count: int
     state: str               # "active" | "resolved"
+    # What a detection on this VM confirmed (B3a, #609: `agent.confirmed_facts`) — never
+    # shown to the model; a row written before B3a has none.
+    confirmed: list = field(default_factory=list)
 
 
 class IncidentRegistry:
@@ -84,6 +87,21 @@ class IncidentRegistry:
             )
             self._write_all(rows + [inc])
             return inc
+
+    def confirm(self, resource_id: str, facts: list[str]) -> Incident | None:
+        """Add what a detection confirmed on this VM to its active incident (B3a, #609).
+        Returns the incident, or None when the VM has no active one (nothing to add to)."""
+        with self._locked():
+            rows = self._load_all()
+            active = self._find_active(resource_id, rows)
+            if active is None:
+                return None
+            have = active.confirmed if isinstance(active.confirmed, list) else []
+            new = [f for f in facts if f not in have]
+            if new:
+                active.confirmed = have + new
+                self._write_all(rows)
+            return active
 
     def record_action(
         self,

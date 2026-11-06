@@ -151,10 +151,72 @@ function _restoreFailure(e) {
   if (!f) return '';
   return `<div class="esc-context" style="color:var(--red)" title="${_attr(f.at)}">✗ Restore refused or failed: ${_attr(f.error)}</div>`;
 }
-function _anchorNote(e, vmName) {
-  if (!_isAnchored(e) || e.escalation_type === 'unattributed_signal') return '';
-  return `<div class="esc-context" title="The detection does not name this VM: the card is only filed on it">⚓ filed on ${_attr(vmName)}, not about it</div>`;
+// AL1c (#597): what a card of the control plane or of an identity is about — its `target`, read
+// by the watch in the row (glorfindel/card_target.py): an NSG and the VMs it covers, a disk's VM,
+// a role's scope, the group, the control plane as a whole, an identity. A card from before AL1c
+// has none: it stays on the VM it was anchored on, and says so.
+const _TARGET_KINDS = { vm: 'VM', nsg: 'NSG', resource_group: 'resource group',
+  control_plane: 'the control plane', identity: 'identity' };
+function _targetOf(e) {
+  const t = e && e.target;
+  return (t && typeof t === 'object' && Object.prototype.hasOwnProperty.call(_TARGET_KINDS, t.kind)) ? t : null;
 }
+// Every identity card on one tile, never a VM's (the bot's one thread, the same way).
+// A tile of its own — the identities', a group's, the control plane's — is named with a « : »,
+// which no VM's name holds: never one tile with a VM of the same name (review, AL1c).
+const _IDENTITY_TILE = 'entra:identities';
+function _isIdentityCard(e) { const t = _targetOf(e); return !!t && t.kind === 'identity'; }
+function _isIdentityId(rid) { return /^entra:/.test(rid || ''); }
+// The tile of its own a card is filed on (its name), or '' for a VM's or an NSG's.
+function _ownTile(e) {
+  const t = _targetOf(e);
+  if (!t) return '';
+  if (t.kind === 'identity') return _IDENTITY_TILE;
+  if (t.kind === 'resource_group') return 'group:' + String(e.resource_id || '').toLowerCase();
+  if (t.kind === 'control_plane') return 'plane:control';
+  return '';
+}
+// The cards a tile shows: its own; on the identities' tile, every identity card; on a VM's, the
+// cards about an NSG that covers it too. A card on a tile of its own is on that tile only —
+// never matched by the last segment of its id.
+function _onTile(e, r) {
+  if (r.kind === 'identity') return _isIdentityCard(e);
+  if (_isIdentityCard(e)) return false;
+  const own = _ownTile(e);
+  if (own || r.kind) return own === r.vm_name;
+  return e.resource_id === r.resource_id || e.resource_id.split('/').pop() === r.vm_name
+    || (!r.is_nsg && !r.is_cluster && _coversVm(e, r.resource_id));
+}
+let _tiles = new Map();   // vm_name → the tile rendered (renderInfra): what a modal of it shows
+// A card about an NSG is shown on each VM it covers, the same card (one Ack).
+function _coversVm(e, rid) {
+  const t = _targetOf(e);
+  const id = String(rid || '').toLowerCase();
+  return !!t && t.kind === 'nsg' && Array.isArray(t.vms) && !!id
+    && t.vms.some(v => String(v).toLowerCase() === id);
+}
+const _VMS_SHOWN = 8;
+function _targetNote(e, vmName) {
+  const t = _targetOf(e);
+  if (t) {
+    const named = t.kind === 'control_plane' ? '' : ' ' + _attr(t.name || '?');
+    const kind = t.kind === 'identity' ? _attr(t.identity_type || 'identity') : _TARGET_KINDS[t.kind];
+    const via = t.via ? ` · ${_attr(t.via)}` : '';
+    // The VMs an NSG covers: named up to _VMS_SHOWN, the rest counted (the bot's way).
+    const vms = Array.isArray(t.vm_names) ? t.vm_names : [];
+    const more = vms.length > _VMS_SHOWN ? ` and ${vms.length - _VMS_SHOWN} more` : '';
+    const covers = vms.length
+      ? ` · covers ${vms.slice(0, _VMS_SHOWN).map(v => _attr(v)).join(', ')}${more}` : '';
+    const limit = t.limit
+      ? `<div class="esc-context" style="color:var(--dim)" title="What the row, and Azure, could not say">limit: ${_attr(t.limit)}</div>` : '';
+    return `<div class="esc-context" title="What the detection is about, read in its row">🎯 about ${kind}${named}${via}${covers}</div>${limit}`;
+  }
+  if (!_isAnchored(e) || e.escalation_type === 'unattributed_signal') return '';
+  // Filed before AL1c: on the first VM online, or on the VM itself (a role on the VM, a signal of
+  // `respond`) — the card cannot tell which.
+  return `<div class="esc-context" title="${_attr(_FILED_BEFORE)}">⚓ filed on ${_attr(vmName)}, may not be about it</div>`;
+}
+const _FILED_BEFORE = 'Filed before AL1c, without its target: the detection may not be about this VM';
 function escTitle(e) {
   // Real remediation action → its label; otherwise a readable type title.
   if (e.action && ACTION_LABELS[e.action]) return ACTION_LABELS[e.action];
@@ -546,7 +608,8 @@ function _renderEscGroup(group) {
   const ruleButtons = isRule ? `
     <button class="action ok" ${_on('click', 'doApproveRule', e.proposal_id, e.id)} style="font-size:9px;padding:2px 7px">✓ Approve</button>
     <button class="action" ${_on('click', 'doRejectRule', e.proposal_id, e.id)} style="font-size:9px;padding:2px 7px;color:var(--red)">✗ Reject</button>` : '';
-  const vmName = e.resource_id.split('/').pop();
+  // A card on a tile of its own opens that tile's cards (AL1c); a VM's, its VM's.
+  const vmName = _ownTile(e) || e.resource_id.split('/').pop();
   const countBadge = count > 1
     ? `<span style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;
                     background:color-mix(in srgb,var(--purple) 15%,transparent);
@@ -600,7 +663,7 @@ function _renderEscGroup(group) {
       <span style="color:var(--blue);font-size:10px;margin-left:auto;padding-top:1px;flex-shrink:0">▸ details</span>
     </div>
     ${ctxParts ? `<div class="esc-context">${ctxParts}</div>` : ''}
-    ${_anchorNote(e, vmName)}
+    ${_targetNote(e, vmName)}
     ${_restoreFailure(e)}
     <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap" ${_on('click', 'stop')}>${actionBtns}${verdictBtns}</div>
   </div>`;
@@ -812,6 +875,18 @@ function renderInfra() {
   });
   vmEscs.forEach(e => {
     if (_isLocalState(e.resource_id)) return;
+    // AL1c: an identity card is on the identities' tile; a card about a group or the control
+    // plane as a whole on a tile of its own — never a VM's, whatever its name.
+    const own = _ownTile(e);
+    if (own) {
+      const t = _targetOf(e);
+      if (!resourceMap.has(own))
+        resourceMap.set(own, t.kind === 'identity'
+          ? { resource_id: _IDENTITY_TILE, vm_name: own, label: 'Entra ID — identities', states: [], kind: 'identity' }
+          : { resource_id: e.resource_id, vm_name: own, states: [], kind: t.kind,
+              label: t.kind === 'control_plane' ? 'the control plane' : (t.name || e.resource_id.split('/').pop()) });
+      return;
+    }
     // An escalation on an AKS node (e.g. a stale posture_gap) folds into its cluster —
     // it must not spawn a bare node card. Actionable node states come via `resources`.
     const parentId = _clusterKey(e.resource_id, '');
@@ -826,24 +901,24 @@ function renderInfra() {
   // What Glorfindel closed itself in the last day keeps its tile, VM or NSG.
   (_state.handled || []).forEach(h => {
     const name = (h.resource_id || '').split('/').pop();
-    if (name && !_isLocalState(h.resource_id) && !_clusterKey(h.resource_id, '') && ![...resourceMap.values()].some(r => r.vm_name === name))
+    if (name && !_isLocalState(h.resource_id) && !_isIdentityId(h.resource_id) && !_clusterKey(h.resource_id, '') && ![...resourceMap.values()].some(r => r.vm_name === name))
       resourceMap.set(h.resource_id, { resource_id: h.resource_id, vm_name: name, states: [],
                                        is_nsg: _isNsgId(h.resource_id) });
   });
+  _tiles = new Map([...resourceMap.values()].map(r => [r.vm_name, r]));
 
   // Card name set (deduped exactly like the rendered cards) — RECOVER uses this as the
   // "unprotected" denominator so the count always matches what the operator sees on
   // screen (e.g. an AKS cluster = one card, not its N node heartbeats).
   _cardVmNames = new Set(
-    [...resourceMap.values()].filter(r => !r.is_nsg)   // an NSG is backed up by no vault
+    [...resourceMap.values()].filter(r => !r.is_nsg && !r.kind)   // an NSG, a group, an identity: no vault
       .map(r => (r.vm_name || '').toLowerCase()).filter(Boolean));
 
   // Auto-expand VMs with active incidents, unless user explicitly collapsed them
   // When incident clears, reset the collapsed preference so next incident re-expands
   [...resourceMap.values()].forEach(r => {
     const hasIncident = (r.states||[]).length > 0
-      || vmEscs.some(e => e.resource_id === r.resource_id
-           || e.resource_id.split('/').pop() === r.vm_name);
+      || vmEscs.some(e => _onTile(e, r));
     if (hasIncident && !_collapsedVms.has(r.vm_name)) _expandedVms.add(r.vm_name);
     if (!hasIncident) _collapsedVms.delete(r.vm_name); // allow re-expand on next incident; don't force-collapse user-expanded clean cards
   });
@@ -882,7 +957,7 @@ function renderInfra() {
               const r = [...resourceMap.values()].find(r => r.vm_name === vmName);
               if (r) return r.is_cluster
                 ? _renderClusterNode(r, slotIdx)
-                : r.is_nsg
+                : (r.is_nsg || r.kind)
                 ? _renderNsgNode(r, vmEscs, slotIdx)
                 : _renderAssetNode(r, vmEscs, detEscs, restoreByVm, slotIdx);
             }
@@ -1333,11 +1408,15 @@ function _handledLines(resource_id, name) {
 }
 
 // A card on an NSG (I1F: a quarantine altered; A3: an orphan rule no VM holds): an NSG
-// tile — its cards, nothing a VM has (mode, backup, snapshot, heartbeat).
+// tile — its cards, nothing a VM has (mode, backup, snapshot, heartbeat). AL1c: the same tile
+// for a card about a resource group, the control plane as a whole, or the identities.
+const _TILE_BADGES = { nsg: ['🛡', 'NSG'], resource_group: ['▦', 'GROUP'],
+  control_plane: ['☁', 'CONTROL PLANE'], identity: ['🪪', 'IDENTITIES'] };
 function _renderNsgNode(resource, vmEscs, slotIdx = 0) {
   const { resource_id, vm_name } = resource;
-  const myEscs = vmEscs.filter(e =>
-    e.resource_id === resource_id || e.resource_id.split('/').pop() === vm_name);
+  const badge = _TILE_BADGES[resource.kind] || _TILE_BADGES.nsg;
+  const shown = resource.label || vm_name;
+  const myEscs = vmEscs.filter(e => _onTile(e, resource));
   const isExpanded = _expandedVms.has(vm_name);
   const rg = (/\/resourcegroups\/([^/]+)/i.exec(resource_id || '') || [])[1] || '';
   const dot = `<span style="color:${myEscs.length ? 'var(--purple)' : 'var(--green)'};font-size:10px">●</span>`;
@@ -1348,7 +1427,7 @@ function _renderNsgNode(resource, vmEscs, slotIdx = 0) {
     ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
         ${_groupEscs(myEscs).map(_renderEscGroup).join('')}</div>` : '';
   return `<div class="node-asset ${myEscs.length ? 's-incident' : 's-clean'} ${isExpanded ? 'expanded' : ''}"
-    id="asset-${_attr(vm_name)}" data-kind="nsg"
+    id="asset-${_attr(vm_name)}" data-kind="${_attr(resource.kind || 'nsg')}"
     draggable="true"
     ${_on('dragstart', 'dragVm', vm_name)}
     ${_on('dragend', 'dragEnd')}
@@ -1358,8 +1437,8 @@ function _renderNsgNode(resource, vmEscs, slotIdx = 0) {
     <div class="node-asset-header" ${_on('click', 'toggleAsset', vm_name)}>
       <div style="display:flex;align-items:center;gap:6px">
         ${dot}
-        <span class="node-asset-name" title="${_attr(resource_id)}">🛡 ${_attr(vm_name)}</span>
-        <span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--orange) 14%,transparent);color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 35%,var(--border));letter-spacing:.5px;flex-shrink:0">NSG</span>
+        <span class="node-asset-name" title="${_attr(resource_id)}">${badge[0]} ${_attr(shown)}</span>
+        <span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--orange) 14%,transparent);color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 35%,var(--border));letter-spacing:.5px;flex-shrink:0">${badge[1]}</span>
         <span style="color:var(--dim);font-size:9px;margin-left:auto;flex-shrink:0">${isExpanded ? '▾' : '▸'}</span>
       </div>
       <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
@@ -1382,8 +1461,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const isIsolated  = states.some(s => s.type === 'isolated');
   const isBlocked   = states.some(s => s.type === 'blocked');
   const restoreInfo = restoreByVm[vm_name];
-  const myEscs      = vmEscs.filter(e =>
-    e.resource_id === resource_id || e.resource_id.split('/').pop() === vm_name);
+  const myEscs      = vmEscs.filter(e => _onTile(e, resource));
   const myDetEscs   = (detEscs||[]).filter(e =>
     e.resource_id === resource_id || e.resource_id.split('/').pop() === vm_name);
   const totalEscs   = myEscs.length + myDetEscs.length;
@@ -1841,6 +1919,12 @@ function _drawTopologyEdges() {
       if (nbNsg) lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, 'var(--orange)', '', 1.5, 0.4));
       return;
     }
+    // AL1c: a group, the control plane, the identities — detected, never protected nor restored.
+    if (el.dataset.kind) {
+      const det = detectBackends.length ? pt(document.getElementById(`nb-${detectBackends[0].name}`)) : null;
+      if (det) lines.push(bezier(det.x, det.bottom, asset.x, asset.top, 'var(--blue)', '', 1.5, 0.3));
+      return;
+    }
 
     // DETECT → VM  (via the monitoring backend that discovered it)
     const disc = discovered.find(d => d.name === vmName);
@@ -1876,7 +1960,7 @@ function _drawTopologyEdges() {
 
   // Incident edges: modules → assets with active escalations (brighter, dashed)
   escalations.forEach(e => {
-    const vm    = e.resource_id.split('/').pop();
+    const vm    = _ownTile(e) || e.resource_id.split('/').pop();
     const asset = pt(document.getElementById(`asset-${vm}`));
     if (!asset) return;
     const color = e.action === 'restore_from_backup'          ? 'var(--cyan)'
@@ -2285,8 +2369,14 @@ function renderToJudge() {
     // A detection-only card recommends nothing: its title says what was detected.
     const what = (c.action ? actionLabelVerb(c.action) : escTitle(c)) + target + pct;
     const why = c.explanation || c.reason || '';
-    const vm = (c.resource_id || '').split('/').pop();
-    const anchored = _isAnchored(c);
+    // AL1c: a card of the control plane or of an identity names what it is about, never a VM it
+    // was anchored on; one from before AL1c keeps its ⚓, and says it may not be about that VM
+    // (on the first VM online, or on the VM itself: the card cannot tell which).
+    const t = _targetOf(c);
+    const vm = t ? (t.kind === 'control_plane' ? _TARGET_KINDS[t.kind]
+      : (t.kind === 'identity' ? (t.identity_type || 'identity') : _TARGET_KINDS[t.kind]) + ' ' + (t.name || '?'))
+      : (c.resource_id || '').split('/').pop();
+    const anchored = !t && _isAnchored(c);
     const times = c.occurrences > 1 ? ` · ${Number(c.occurrences)}×` : '';
     const id = _attr(c.id);
     return `<div class="judge-item${disruptive ? ' disruptive' : ''}${c.id === _focusCard ? ' focus' : ''}" id="judge-${id}">
@@ -2295,7 +2385,7 @@ function renderToJudge() {
         <span style="flex:1"></span>
         <span class="judge-ts">${c.first_seen ? _relTime(c.first_seen) : ''}${times}</span>
       </div>
-      <div class="judge-why" style="-webkit-line-clamp:1;color:var(--text)" title="${anchored ? 'The detection does not name this VM: the card is only filed on it' : _attr(c.resource_id || '')}">${anchored ? '⚓ ' : ''}${_attr(vm)}${c.rule_name ? ` · rule ${_attr(c.rule_name)}` : ''}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}${c.severity === 'critical' ? ' · <b style="color:var(--red)">critical</b>' : ''}</div>
+      <div class="judge-why" style="-webkit-line-clamp:1;color:var(--text)" title="${anchored ? _attr(_DETECTION_ONLY.has(c.escalation_type) ? _FILED_BEFORE : 'The detection does not name this VM: the card is only filed on it') : _attr((t && t.limit) || c.resource_id || '')}">${anchored ? '⚓ ' : (t ? '🎯 ' : '')}${_attr(vm)}${c.rule_name ? ` · rule ${_attr(c.rule_name)}` : ''}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}${c.severity === 'critical' ? ' · <b style="color:var(--red)">critical</b>' : ''}</div>
       ${c.exercise ? `<div class="judge-why" style="-webkit-line-clamp:1;color:var(--blue)" title="An injector's exercise window covered this VM at that time. A window is the injectors' claim: check the run before trusting it.">⚑ exercise${c.exercise_run ? ` · run <a href="/runs/${encodeURIComponent(c.exercise_run)}">${_attr(c.exercise_run)}</a> — check the run ▸` : ' — check the run'}</div>` : ''}
       ${c.recurrence ? `<div class="judge-why" style="-webkit-line-clamp:1;color:var(--yellow)" title="An earlier card on the same IP: in observation nothing is blocked, so a scanner comes back">↻ same IP seen ${_attr(c.recurrence.previous)}× in 7 days — last ${c.recurrence.last_seen ? _relTime(c.recurrence.last_seen) : ''}${c.recurrence.last_verdict ? ', judged ' + _attr(c.recurrence.last_verdict) : ''}</div>` : ''}
       <div class="judge-why" title="${_attr(why)}">${_attr(why)}</div>
@@ -2987,7 +3077,7 @@ async function verifyIdentity(escId) {
     if (checks.length > before) {
       const last = checks[checks.length - 1];
       toast('Verify: ' + (_CHECK_WORDS[last.verdict] || last.verdict), 6000);
-      const vm = (e.resource_id || '').split('/').pop();
+      const vm = _ownTile(e) || (e.resource_id || '').split('/').pop();
       if (document.getElementById('modal').classList.contains('open') && vm) showEscModal(vm);
       return;
     }
@@ -2996,14 +3086,16 @@ async function verifyIdentity(escId) {
 }
 
 function showEscModal(vmName) {
-  const escs = Object.values(_escById).filter(e =>
-    e.resource_id.split('/').pop() === vmName ||
-    e.resource_id === vmName);
+  // A tile's cards, as the tile shows them (AL1c: the identities' tile, an NSG's card on a VM it
+  // covers); a card's own resource otherwise.
+  const tile = _tiles.get(vmName);
+  const escs = Object.values(_escById).filter(e => tile ? _onTile(e, tile) :
+    (e.resource_id.split('/').pop() === vmName || e.resource_id === vmName));
   if (!escs.length) { toast('No active escalations for ' + vmName); return; }
 
   const groups = _groupEscs(escs);
   document.getElementById('modal-title').textContent =
-    `Escalations — ${vmName} (${groups.length}${groups.length < escs.length ? `, ${escs.length} total` : ''})`;
+    `Escalations — ${(tile && tile.label) || vmName} (${groups.length}${groups.length < escs.length ? `, ${escs.length} total` : ''})`;
   document.getElementById('modal-cmd').style.display = 'none';
   document.getElementById('modal-cancel').style.display = 'none';
 
@@ -3062,7 +3154,7 @@ function showEscModal(vmName) {
         <span style="margin-left:auto;display:flex;gap:6px">${modalBtns}</span>
       </div>
       ${ctx ? `<div style="color:var(--dim);font-size:10px;margin-bottom:6px">${ctx}</div>` : ''}
-      ${_anchorNote(e, vmName)}
+      ${_targetNote(e, vmName)}
       <div style="color:var(--text);font-size:11px;line-height:1.6">${_attr(e.reason || '')}</div>
       ${query}${steps}
     </div>`;

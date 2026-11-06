@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "infra" / "glorfindel-host"))
 import host_client_rules  # noqa: E402
 
-from glorfindel.detection_rules import shipped_rules_path  # noqa: E402
+from glorfindel.detection_rules import load_config, shipped_rules_path  # noqa: E402
 
 BENCH = ROOT / "infra" / "glorfindel-host" / "client_rules.bench.yaml"
 NAME = "sudo-privilege-escalation"
@@ -145,6 +145,22 @@ def test_a_stale_copy_of_the_base_is_refused_before_anything_is_sent(tmp_path):
     assert res.returncode != 0 and "dérive" in res.stderr
     assert not any(c.startswith(("scp", "docker")) for c in calls)
     assert not (home / ".glorfindel" / "client_rules.yaml").exists()
+
+
+@needs_tools
+@pytest.mark.parametrize("h0", [{"disable": [NAME]}, {"rules": [{"name": NAME, "enabled": False}]}])
+def test_a_disable_of_the_same_name_on_h0_does_not_stop_the_pushed_rule(tmp_path, h0):
+    """WL1 (review): `disable: [<name>]` on H0 drops the BASE rule of that name only; the pushed
+    rule is a client rule, and it loads in its place (`merge_layers`). A rule of that name
+    `enabled: false` is replaced by the push. Either way the target does not lie: what it says
+    pushed is what the watch runs — nothing to refuse."""
+    layer = _h0_layer(tmp_path / "h0", h0)
+    res, _, _ = _make(tmp_path)
+    assert res.returncode == 0, res.stdout + res.stderr
+    cfg = load_config(shipped_rules_path(), client_layer=layer)
+    [rule] = [r for r in cfg.rules if r.name == NAME]
+    assert rule.layer == "client" and rule.query == yaml.safe_load(BENCH.read_text())["rules"][0]["query"]
+    assert cfg.overrides == [NAME] and cfg.disabled_base == [] and cfg.drifted == []
 
 
 def test_the_target_waits_on_the_host_key_check():

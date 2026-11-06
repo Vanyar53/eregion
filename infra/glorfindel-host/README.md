@@ -355,6 +355,11 @@ make glorfindel-host-client-rules
 - **Relue avant d'être envoyée**, comme la watch la lira, sur la base du checkout du poste : une
   règle que la watch ignorerait, ou une copie dont la règle livrée a changé ou n'existe plus
   (dérive), et rien n'est envoyé. Une couche de H0 illisible : rien n'est envoyé non plus.
+- **Un `disable` du même nom sur H0 n'arrête pas la règle poussée** : `disable` ne retire que la
+  règle **de base** de ce nom ; la règle poussée, une règle du client, charge à sa place (la note
+  « règle de base … désactivée par la couche du client » le dit, `glorfindel rules` la montre en
+  `client`). Une règle de ce nom `enabled: false` sur H0 est remplacée par la poussée. Mesuré
+  contre le faux H0 (`test_a_disable_of_the_same_name_on_h0_does_not_stop_the_pushed_rule`).
 - **Mise en place sous le verrou** de la couche (celui que prennent la watch, la console et la
   CLI), par un renommage, seulement si elle n'a pas changé depuis la lecture. Une règle approuvée
   entre-temps : rien n'est remplacé (« a changé pendant le push »), relancer.

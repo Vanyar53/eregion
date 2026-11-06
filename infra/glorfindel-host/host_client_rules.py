@@ -19,6 +19,10 @@ take to write it).
   copy of a base rule whose shipped rule changed since, or is gone (``base_sha256``: drift; the
   watch would set the copy aside and run the shipped rule) — read against the base of this
   checkout, the one the watch of the same release ships.
+- **Not refused**: a name H0's layer lists under ``disable``. Only the base rule of that name is
+  not loaded; the pushed rule, a client rule, loads in its place (``merge_layers``), and the
+  watch's note says the base rule is disabled — measured by
+  ``test_a_disable_of_the_same_name_on_h0_does_not_stop_the_pushed_rule``.
 
 Runs on the operator's machine, from the checkout: the glorfindel of this checkout is imported,
 whatever is installed in the environment.

@@ -13,12 +13,15 @@ RulePoller — no Azure, no model. What is held:
     ingested alone make no card — anyone else's card comes at the pass where their line lands;
   - the same operations by a human, or by any other principal, make a card — under a
     backup's own correlation id too (a client chooses it);
-  - a failure makes none — the operation's latest line is read;
+  - a failure alone makes none; an operation that succeeded makes one, whatever its
+    latest line (AL1d, #600) — a success that may be Azure Backup's never counts as
+    another caller's;
   - RETRIEVESASURIS alone makes one; so does a disk restore point's download access;
   - the card names the operation and the resource, and the caller that decided it — a bare
     latest line, or Azure Backup's, takes the caller another line names;
   - Glorfindel's identity on a restore point is kept, critical — its latest line bare too;
-  - the snapshot rule does not change.
+  - the snapshot rule is not extended to restore points: its sha256 is held (AL1d changed
+    it since, to read an operation that succeeded — the digest follows).
 """
 from __future__ import annotations
 
@@ -317,6 +320,109 @@ def test_a_failure_makes_no_card(table, status):
     assert _cards(table) == []
 
 
+# ── an operation that succeeded: a card, whatever its latest line (AL1d, #600) ──
+
+@pytest.mark.parametrize("success", ["named", "bare"])
+@pytest.mark.parametrize("statuses", [("Start", "Success", "Failure"), ("Started", "succeeded", "Failed")])
+def test_an_operation_that_succeeded_makes_a_card_whatever_its_latest_line(table, success, statuses):
+    """A human's operation, a line that succeeded (naming them, or bare), then a failure as
+    its latest line: it took effect — a card, naming the human, that says so."""
+    start, ok, failed = statuses
+    table += [_line(SAS, start, corr="c-ok", minutes_ago=5.0),
+              _line(SAS, ok, corr="c-ok", minutes_ago=4.9,
+                    **({} if success == "named" else dict(caller="", claims=False))),
+              _line(SAS, failed, corr="c-ok", minutes_ago=4.8)]
+    [sig] = _cards(table)
+    row = sig["raw_signal"]["first_result_row"]
+    assert (row["ActivityStatusValue"], row["Succeeded"], row["Caller"]) == (failed, 1, HUMAN)
+    from glorfindel.agent import _control_plane_text
+    what, _ = _control_plane_text(sig)
+    assert "une de ses lignes a réussi" in what and "a pris effet" in what
+
+
+def test_a_bare_failure_after_a_success_names_the_caller(table):
+    """Its latest line, the failure, names no one: the row names whoever its lines name."""
+    table += [_line(SAS, "Start", corr="c-bf", minutes_ago=5.0, ip="198.51.100.23"),
+              _line(SAS, "Success", corr="c-bf", minutes_ago=4.9, caller="", claims=False),
+              _line(SAS, "Failure", corr="c-bf", minutes_ago=4.8, caller="", claims=False, ip="")]
+    [row] = _rows(table)
+    assert (row["Caller"], row["CallerIpAddress"], row["Succeeded"]) == (HUMAN, "198.51.100.23", 1)
+
+
+@pytest.mark.parametrize("where", ["claims", "caller", "start_only"])
+def test_a_backup_s_success_never_counts_as_another_caller_s(table, where):
+    """A backup's correlation id taken up by someone whose own try failed, on the same restore
+    point: the operation holds Azure Backup's Success (naming it, or bare) and the other
+    caller's failure as its latest line. That Success may be the backup's: the other caller's
+    try only failed — no card."""
+    table += [*_backup(SAS, "b-s", where),
+              _line(SAS, "Start", corr="b-s", minutes_ago=2.0),
+              _line(SAS, "Failure", corr="b-s", minutes_ago=1.9)]
+    assert _rows(table) == []
+    assert _cards(table) == []
+
+
+@pytest.mark.parametrize("where", ["claims", "caller"])
+def test_a_backup_s_success_arrived_last_never_stands_for_another_s_failure(table, where):
+    """The same, Azure Backup's lines the latest: its Success, naming it, says nothing of the
+    other caller's try, which only failed — no card (relecture 5.5 of AL1d)."""
+    table += [_line(SAS, "Start", corr="b-s", minutes_ago=6.0),
+              _line(SAS, "Failure", corr="b-s", minutes_ago=5.9),
+              *[{**line, "TimeGenerated": NOW - timedelta(minutes=m)}
+                for line, m in zip(_backup(SAS, "b-s", where), (2.0, 1.9))]]
+    assert _rows(table) == []
+    assert _cards(table) == []
+
+
+@pytest.mark.parametrize("where", ["claims", "caller"])
+@pytest.mark.parametrize("theirs", ["start_then_bare_success", "start_only"])
+def test_another_s_try_that_did_not_fail_behind_a_backup_s_line_makes_a_card(table, where, theirs):
+    """Under a backup's correlation id, Azure Backup's lines arrived last: the other caller's
+    Start (then a bare Success, or nothing yet) has its card — none of their lines failed, so
+    the backup's line stands for them; a backup's id hides no one (relecture 5.5 n°2)."""
+    mine = [_line(SAS, "Start", corr="b-s", minutes_ago=6.0)]
+    if theirs == "start_then_bare_success":
+        mine.append(_line(SAS, "Success", corr="b-s", minutes_ago=5.9, caller="", claims=False))
+    table += [*mine, *[{**line, "TimeGenerated": NOW - timedelta(minutes=m)}
+                       for line, m in zip(_backup(SAS, "b-s", where), (2.0, 1.9))]]
+    [sig] = _cards(table)
+    row = sig["raw_signal"]["first_result_row"]
+    assert row["Caller"] == HUMAN
+    assert AZURE_BACKUP not in (row.get("CallerAppId") or "", row.get("Caller") or "")
+
+
+def test_a_bare_failure_of_theirs_behind_a_backup_s_line_still_makes_a_card(table):
+    """The limit, said: their failure names no one — it may be anyone's; the backup's Success,
+    the latest, is read: a card too many, never one fewer."""
+    table += [_line(SAS, "Start", corr="b-s", minutes_ago=6.0),
+              _line(SAS, "Failure", corr="b-s", minutes_ago=5.9, caller="", claims=False),
+              *[{**line, "TimeGenerated": NOW - timedelta(minutes=m)}
+                for line, m in zip(_backup(SAS, "b-s", "claims"), (2.0, 1.9))]]
+    assert len(_rows(table)) == 1
+
+
+def test_a_bare_latest_line_under_a_backup_s_id_still_makes_a_card(table):
+    """The limit, said: Azure Backup's Success arrived last and bare may be the backup's or
+    the other caller's — the row is kept (a card too many, never one fewer)."""
+    table += [_line(SAS, "Start", corr="b-s", minutes_ago=6.0),
+              _line(SAS, "Failure", corr="b-s", minutes_ago=5.9),
+              *[{**line, "TimeGenerated": NOW - timedelta(minutes=m)}
+                for line, m in zip(_backup(SAS, "b-s", "start_only"), (2.0, 1.9))]]
+    [row] = _rows(table)
+    assert (row["ActivityStatusValue"], row["Succeeded"], row["Caller"]) == ("Success", 0, HUMAN)
+
+
+def test_a_backup_s_correlation_id_with_the_other_caller_s_own_success_makes_a_card(table):
+    """The same, but the other caller's own line succeeded (it names them): it took effect."""
+    table += [*_backup(SAS, "b-s", "start_only"),
+              _line(SAS, "Start", corr="b-s", minutes_ago=2.0),
+              _line(SAS, "Success", corr="b-s", minutes_ago=1.95),
+              _line(SAS, "Failure", corr="b-s", minutes_ago=1.9, caller="", claims=False)]
+    [sig] = _cards(table)
+    row = sig["raw_signal"]["first_result_row"]
+    assert (row["ActivityStatusValue"], row["Succeeded"], row["Caller"]) == ("Failure", 1, HUMAN)
+
+
 # ── what it does not read ─────────────────────────────────────────────────────
 
 def test_a_collection_alone_or_a_deletion_is_not_read(table):
@@ -429,9 +535,12 @@ def test_glorfindels_identity_on_a_restore_point_is_kept_and_critical(table):
 
 # ── the sister rule does not change ───────────────────────────────────────────
 
-# sha256 of `snapshot-by-unexpected-caller` as origin/main shipped it on 06/11 (13e98ec8),
-# every key and value: AL2 adds a rule, it does not touch this one (Jonathan, 06/11).
-_SNAPSHOT_RULE_SHA256 = "7bf204b6997ac1e6d88e571ed2224bfe45f89bf3c72531d16f4c6ba4bb831cc4"
+# sha256 of `snapshot-by-unexpected-caller`, every key and value: AL2 adds a rule, it does
+# not touch this one (Jonathan, 06/11). The digest held by AL2 was the rule as origin/main
+# shipped it on 06/11 (13e98ec8, 7bf204b6…); AL1d (#600) — not the sister — then changed it:
+# an operation that succeeded is read whatever its latest line, and a bare latest line keeps
+# the caller its operation names (tests/unit/test_activity_operation_read.py).
+_SNAPSHOT_RULE_SHA256 = "3238028a213dc2d46983512270f25920d03cc270f1abb9d6c684aa6bdd981d2a"
 
 
 def test_the_snapshot_rule_does_not_change():

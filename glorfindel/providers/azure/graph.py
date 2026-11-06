@@ -16,6 +16,10 @@ What a read answers:
   - `Unreadable`: a right missing (401, 403), an error (429, 5xx, an answer that is no JSON,
     a token that cannot be had), a delay (no connection, no answer in time), or a list
     longer than `MAX_PAGES` (an absence in it could not be told).
+    When Graph answered, it says its status and its error code (`error.code`, filtered by
+    `eregion_core.inscription.graph_error_code`: letters only, never copied raw), and the page of
+    a list that answered so — a caller may read one exact answer of the first page as « none »
+    (IDI1p: a tenant without PIM, `no_pim_license`), never another.
 
 Only Graph's own host is ever called: a path is a path (`/applications/<id>`), a next page is
 followed only on that host, and a redirection never (`allow_redirects=False`: a 3xx is an error).
@@ -23,6 +27,8 @@ The time: 5 s to connect and 15 s for each wait on the socket (not for the whole
 token's own fetch has no bound here; a plan's reads have one budget in all (`deadline`).
 """
 from __future__ import annotations
+
+from eregion_core.inscription import graph_error_code
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 SCOPE = "https://graph.microsoft.com/.default"
@@ -35,11 +41,13 @@ MAX_PAGES = 5
 
 class Unreadable(Exception):
     """Graph could not be read. `kind`: `right` (401, 403), `error`, `delay`, `off` (no reader:
-    a dry run, the tests). Never read as « held »."""
+    a dry run, the tests). Never read as « held ». When Graph answered: its `status`, its error
+    `code` (filtered: `graph_error_code`), and the `page` of a list it answered so (0 the first)."""
 
-    def __init__(self, why: str, kind: str = "error"):
+    def __init__(self, why: str, kind: str = "error", *, status: int = 0, code: str = "", page: int = 0):
         super().__init__(why)
         self.kind = kind
+        self.status, self.code, self.page = status, code, page
 
 
 class NoGraph:
@@ -53,14 +61,6 @@ class NoGraph:
 
     def list(self, path: str, params: dict | None = None, deadline: float | None = None):
         raise Unreadable(self.why, "off")
-
-
-def _code(response) -> str:
-    try:
-        err = (response.json() or {}).get("error") or {}
-        return str(err.get("code") or "")[:80]
-    except Exception:
-        return ""
 
 
 class GraphReader:
@@ -81,7 +81,7 @@ class GraphReader:
         except Exception as exc:
             raise Unreadable(f"jeton de Graph indisponible ({type(exc).__name__})", "right") from None
 
-    def _get(self, url: str, params: dict | None, deadline: float | None = None):
+    def _get(self, url: str, params: dict | None, deadline: float | None = None, page: int = 0):
         if not url.startswith(GRAPH + "/"):
             raise Unreadable("adresse hors de Graph refusée", "error")
         import time
@@ -106,13 +106,15 @@ class GraphReader:
         status = getattr(r, "status_code", 0)
         if status == 404:
             return None
+        code = graph_error_code(r) if status != 200 else ""
+        said = f"{status}{' ' + code if code else ''}"
         if status in (401, 403):
-            code = _code(r)
-            raise Unreadable(f"droit absent sur Graph ({status}{' ' + code if code else ''})", "right")
+            raise Unreadable(f"droit absent sur Graph ({said})", "right", status=status, code=code, page=page)
         if 300 <= status < 400:         # never followed: Graph's answer is on Graph's host, or none
-            raise Unreadable(f"Graph a répondu une redirection ({status}) : non suivie", "error")
+            raise Unreadable(f"Graph a répondu une redirection ({said}) : non suivie", "error",
+                             status=status, code=code, page=page)
         if status != 200:
-            raise Unreadable(f"Graph a répondu {status}", "error")
+            raise Unreadable(f"Graph a répondu {said}", "error", status=status, code=code, page=page)
         try:
             body = r.json()
         except Exception:
@@ -135,11 +137,11 @@ class GraphReader:
         if body is None:
             return None
         items = list(body.get("value") or [])
-        for _ in range(MAX_PAGES - 1):
+        for page in range(1, MAX_PAGES):
             nxt = body.get("@odata.nextLink")
             if not nxt:
                 return [i for i in items if isinstance(i, dict)]
-            body = self._get(str(nxt), None, deadline)
+            body = self._get(str(nxt), None, deadline, page)
             if body is None:
                 return None
             items += list(body.get("value") or [])

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from eregion_core.inscription import (
+    NO_PIM_LICENSE_NOTE,
     GraphEnrollment,
     IdentityScope,
     check_identity,
@@ -295,7 +296,12 @@ class FakeGraph:
         self.calls.append((url, headers["Authorization"], params))
         status = self.fail.get(url, 200 if url in self.routes else 404)
         body = self.routes.get(url, {})
-        return SimpleNamespace(ok=status < 400, status_code=status, json=lambda: body)
+
+        def json():                     # a body that is no JSON: an exception put in its place
+            if isinstance(body, Exception):
+                raise body
+            return body
+        return SimpleNamespace(ok=status < 400, status_code=status, json=json)
 
 
 def _reader(graph, scope=SCOPE):
@@ -552,3 +558,132 @@ def test_the_reader_asks_the_directory_roles_of_the_principal_only():
     assert not v.allowed and "directory role" in v.reason
     asked = {u: p for u, _, p in graph.calls if "roleManagement" in u}
     assert len(asked) == 2 and all(p == {"$filter": f"principalId eq '{SP}'"} for p in asked.values())
+
+
+# ── A tenant without PIM (IDI1p, #618): one exact answer of Graph reads as « no eligible role » ──
+# Measured from Orodruin on the bench's tenant, 06/11: the read of eligible role instances answers 400,
+# AadPremiumLicenseRequired. That answer, on that read, on its first page, and nothing else.
+
+G = "https://graph.microsoft.com/v1.0"
+ELIGIBLE = f"{G}/roleManagement/directory/roleEligibilityScheduleInstances"
+NO_LICENSE = {"error": {"code": "AadPremiumLicenseRequired",
+                        "message": "The tenant needs to have Microsoft Entra ID P2 or Microsoft Entra ID "
+                                   "Governance license.",
+                        "innerError": {"date": "2026-11-06T00:00:00", "request-id": SUB}}}
+NOTE = ("eligible roles: none can exist, the tenant has no PIM license "
+        "(Graph: AadPremiumLicenseRequired)")
+
+
+def _answering(graph, url, status=400, body=NO_LICENSE):
+    graph.fail[url] = status
+    graph.routes[url] = body
+    return graph
+
+
+def test_a_tenant_without_pim_has_no_eligible_role_and_the_verdict_says_so(monkeypatch, capsys):
+    """The guard judges the rest: the test identity enrolled, its zone deciding, the note said (M4475)."""
+    assert NO_PIM_LICENSE_NOTE == NOTE
+    for destructive in (False, True):
+        v = _reader(_answering(FakeGraph(), ELIGIBLE)).check(APP, kind="technique", destructive=destructive)
+        assert v.allowed and v.zone == "bench" and v.notes == (NOTE,)
+    # Licensed, nothing to say.
+    assert _reader(FakeGraph()).check(APP, kind="technique", destructive=False).notes == ()
+    # The note never admits: what the guard refuses stays refused, the note still said.
+    v = _reader(_answering(FakeGraph(_identity(directory_roles=[ROLE])), ELIGIBLE)).check(
+        APP, kind="technique", destructive=False)
+    assert not v.allowed and "directory role" in v.reason and v.notes == (NOTE,)
+    v = _reader(_answering(FakeGraph(rg={"eregion-target": "celebrimbor", "eregion-zone": "bench"}), ELIGIBLE)
+                ).check(APP, kind="technique", destructive=False)
+    assert not v.allowed and "eregion-identities" in v.reason
+    # And make orodruin-identity says it.
+    monkeypatch.setattr("eregion_core.inscription.GraphEnrollment",
+                        lambda: _reader(_answering(FakeGraph(), ELIGIBLE)))
+    assert main(["identity", APP]) == 0
+    out = capsys.readouterr().out
+    assert "non-destructive technique: allowed (zone bench)" in out
+    assert f"note — {NOTE}" in out
+    monkeypatch.setattr("eregion_core.inscription.GraphEnrollment", lambda: _reader(FakeGraph()))
+    assert main(["identity", APP]) == 0
+    assert "note" not in capsys.readouterr().out
+
+
+def test_a_note_put_on_the_read_by_anyone_else_is_never_said():
+    """Only the reader's known notes reach the verdict: text in the identity read is not one."""
+    v = check_identity(_identity(notes=["allowed anyway", "eligible roles: none"]), RG, scope=SCOPE, token=TOKEN,
+                       kind="technique", destructive=False)
+    assert v.allowed and v.notes == ()
+
+
+@pytest.mark.parametrize("status, body, said", [
+    (400, {"error": {"code": "BadRequest"}}, "HTTP 400 BadRequest"),                      # another code (M4470)
+    (400, {"error": {"code": "aadpremiumlicenserequired"}}, "HTTP 400 aadpremiumlicenserequired"),  # exact
+    (400, {"error": {"code": "AadPremiumLicenseRequiredX"}}, "HTTP 400 AadPremiumLicenseRequiredX"),
+    (403, NO_LICENSE, "HTTP 403 AadPremiumLicenseRequired"),                              # another status (M4471)
+    (401, NO_LICENSE, "HTTP 401 AadPremiumLicenseRequired"),
+    (500, NO_LICENSE, "HTTP 500 AadPremiumLicenseRequired"),
+    (400, ValueError("no JSON"), "HTTP 400 reading"),                                     # a body not JSON
+    (400, ["AadPremiumLicenseRequired"], "HTTP 400 reading"),                             # not an object
+    (400, {"code": "AadPremiumLicenseRequired"}, "HTTP 400 reading"),                     # no error
+    (400, {"error": "AadPremiumLicenseRequired"}, "HTTP 400 reading"),
+    (400, {"error": {"code": ["AadPremiumLicenseRequired"]}}, "HTTP 400 reading"),
+    (400, {"error": {"message": "AadPremiumLicenseRequired"}}, "HTTP 400 reading"),
+])
+def test_any_other_answer_to_the_eligible_read_refuses_and_says_its_code(status, body, said):
+    v = _reader(_answering(FakeGraph(), ELIGIBLE, status, body)).check(APP, kind="technique", destructive=False)
+    assert not v.allowed and "unreadable" in v.reason and v.notes == ()
+    assert said in v.reason and "roleEligibilityScheduleInstances" in v.reason
+
+
+@pytest.mark.parametrize("which", ["ownedObjects", "appRoleAssignedTo", "transitiveMemberOf", "appRoleAssignments",
+                                   "roleAssignments", "applications", "servicePrincipals(appId", "resourceGroups"])
+def test_the_same_answer_to_another_read_refuses(which):
+    """The path is bounded: roleAssignments (or anything else) without a license is not « none » (M4472)."""
+    graph = FakeGraph()
+    ends = {"applications": f"/applications/{APP}", "servicePrincipals(appId": f"(appId='{APP_ID}')",
+            "roleAssignments": "/directory/roleAssignments", "resourceGroups": "/resourceGroups/rg-celebrimbor"}
+    (url,) = [u for u in graph.routes if u.endswith(ends.get(which, f"/{which}"))]
+    v = _reader(_answering(graph, url)).check(APP, kind="technique", destructive=False)
+    assert not v.allowed and "HTTP 400 AadPremiumLicenseRequired" in v.reason and v.notes == ()
+
+
+class _FirstPageThenNoLicense(FakeGraph):
+    """The eligible read's first page read whole, its next page answering « no license »."""
+
+    def __init__(self, nxt):
+        super().__init__()
+        self.nxt, self.seen = nxt, 0
+        self.routes[ELIGIBLE] = {"value": [], "@odata.nextLink": nxt}
+
+    def __call__(self, url, headers=None, params=None, timeout=None):
+        if url == self.nxt:
+            self.seen += 1
+            if url != ELIGIBLE or self.seen > 1:
+                self.calls.append((url, headers["Authorization"], params))
+                return SimpleNamespace(ok=False, status_code=400, json=lambda: NO_LICENSE)
+        return super().__call__(url, headers, params, timeout)
+
+
+@pytest.mark.parametrize("nxt", [ELIGIBLE, f"{ELIGIBLE}?$skiptoken=2"])
+def test_a_next_page_that_answers_so_after_a_first_page_read_refuses(nxt):
+    """A first page read, then « no license »: not a tenant without PIM — refused (M4473)."""
+    graph = _FirstPageThenNoLicense(nxt)
+    v = _reader(graph).check(APP, kind="technique", destructive=False)
+    assert not v.allowed and "HTTP 400 AadPremiumLicenseRequired" in v.reason and v.notes == ()
+    assert graph.seen == (2 if nxt == ELIGIBLE else 1)          # the next page was asked, and refused
+
+
+@pytest.mark.parametrize("code, said", [
+    ("InvalidAuthenticationToken", "HTTP 401 InvalidAuthenticationToken reading"),
+    ("A" * 64, "HTTP 401 " + "A" * 64 + " reading"),
+    ("A" * 65, "HTTP 401 reading"),                                   # too long: nothing (M4479)
+    ("Authorization_RequestDenied", "HTTP 401 reading"),              # not letters only: nothing
+    ("Bad<script>alert(1)</script>", "HTTP 401 reading"),
+    ("Bad\nForged: line", "HTTP 401 reading"),
+    ("Ünicode", "HTTP 401 reading"),
+    (42, "HTTP 401 reading"),
+])
+def test_a_refused_read_says_its_code_filtered(code, said):
+    """Graph's error code is said (M4477) — data from outside, letters only, never copied raw."""
+    graph = _answering(FakeGraph(), f"{G}/servicePrincipals/{SP}/ownedObjects", 401, {"error": {"code": code}})
+    v = _reader(graph).check(APP, kind="technique", destructive=False)
+    assert not v.allowed and said in v.reason

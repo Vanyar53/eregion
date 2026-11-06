@@ -2160,6 +2160,8 @@ def identity_contract_cmd():
     click.echo(f"identity executor: {verdict.verdict}")
     for m in verdict.missing:
         click.echo(f"  ✗ {m['code']}: {m['detail']}")
+    for note in verdict.notes:
+        click.echo(f"  note — {note}")
     if verdict.held:
         click.echo(f"  held: {', '.join(sorted(verdict.held))}")
     if verdict.armed:

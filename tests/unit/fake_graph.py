@@ -28,6 +28,7 @@ class FakeGraph:
         self.member_of: dict[str, list[dict]] = {}           # principal → its groups, transitively (IR1b)
         self.assigned_to: dict[str, list[dict]] = {}         # principal → who holds an app role on it (IR1b)
         self.fail: str = ""                                  # right | error | delay | crash
+        self.refuse: dict[str, Unreadable] = {}              # a list's path → Graph's answer to it (IDI1p)
         self.calls: list[tuple[str, str, dict | None]] = []
 
     def _fail(self):
@@ -68,6 +69,8 @@ class FakeGraph:
     def list(self, path: str, params: dict | None = None, deadline: float | None = None):
         self.calls.append(("list", path, params))
         self._fail()
+        if path in self.refuse:
+            raise self.refuse[path]
         if path == "/oauth2PermissionGrants":
             client = self._principal(params)
             return [g for g in self.grants if g["clientId"] == client]

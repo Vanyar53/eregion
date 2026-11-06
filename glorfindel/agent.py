@@ -88,6 +88,7 @@ class GlorfindelState(TypedDict):
     decision_draws: list[dict]  # every draw asked before a disruptive autonomous action (D-1)
     uncontained: str            # a characterized detection a snapshot alone answers (V-11): its card's reason
     floor: str                  # why decide raised the action to isolate_vm (B3a): brute force succeeded, then root
+    floor_displaced: str        # the action only a human approves that the floor set aside (B3a): its own card
     identity_plan: dict | None  # the plan of an identity card (IR1a, entra_plan): on the card, never to the model
 
 
@@ -1245,6 +1246,11 @@ def _root_compromise_floor(d: dict, signal: dict, incident: dict | None) -> str:
     already isolating keeps it. The action raised, every gate after it still applies (the
     confidence, the signal, the attribution, the telemetry, the mode — in human_only nothing
     runs, the card proposes it — the agreement of the draws, each draw floored alike).
+
+    An action only a human approves (a restore…) is never lost: the VM is contained first,
+    the action set aside is kept (`d["displaced"]`) — said in the card's reason when the
+    cycle escalates, its own card once the isolation ran (`store_cycle`). Only on a
+    detection: never on a recovery_complete (the release after a restore) nor a timeout.
     Returns the reason, or "" when the floor does not play."""
     if signal.get("event") != "detection" or d["action"] == "isolate_vm":
         return ""
@@ -1259,11 +1265,19 @@ def _root_compromise_floor(d: dict, signal: dict, incident: dict | None) -> str:
     ip = _correlation_row(signal).get("SourceIP") if _is_compromise(signal) else ""
     d["action"] = "isolate_vm"
     d["reversible"] = True
+    if before in HUMAN_APPROVAL_REQUIRED:
+        d["displaced"] = before
+        why = (f"'{before}' reste proposée à un humain : la VM est contenue d'abord, "
+               f"'{before}' attend son approbation.")
+    elif before == "block_suspicious_ip":
+        why = "bloquer la source laisse debout la VM où root a été pris."
+    else:
+        why = "la VM où root a été pris doit être contenue."
     return (
         f"Plancher déterministe (B3a) : sur cette VM, la corrélation a confirmé un brute force "
         f"SSH suivi d'une connexion réussie{f' depuis {ip}' if ip else ''}, et une élévation "
         f"vers root (sudo) — 'isolate_vm' au moins, quel que soit le choix du modèle "
-        f"('{before}') : bloquer la source laisse debout la VM où root a été pris."
+        f"('{before}') : {why}"
     )
 
 
@@ -1801,6 +1815,7 @@ def decide(
         "decision_draws": draws,
         "uncontained": uncontained,
         "floor": floor,
+        "floor_displaced": d.get("displaced", "") if floor else "",
     }
 
 
@@ -2330,10 +2345,43 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
         _console.print(f"[yellow]store_cycle: notify_action failed: {exc}[/yellow]")
 
     _record_uncontained(state, source, exercise_run)
+    _record_displaced(state, source, exercise_run)
 
     # Debug JSONL — always written, even if ChromaDB or webhook failed
     _write_debug_record(state)
     return state
+
+
+def _record_displaced(state: GlorfindelState, source: str, exercise_run: str) -> None:
+    """B3a: the action only a human approves (a restore…) that the floor set aside for an
+    isolation, once the isolation ran — its own card, never lost behind the containment. A
+    cycle that escalated instead said it in its card's reason (the floor's)."""
+    outcome = state.get("outcome") or {}
+    displaced = state.get("floor_displaced") or ""
+    if not displaced or state.get("dry_run") or not outcome.get("executed"):
+        return
+    signal = state["signal"]
+    try:
+        from glorfindel import escalations
+        escalations.record(
+            signal_id=signal.get("signal_id", ""),
+            resource_id=signal.get("resource_id", ""),
+            action=displaced,
+            escalation_type="destructive_action",
+            reason=(f"{state.get('floor') or ''} La VM est isolée ; '{displaced}', proposée "
+                    "par le modèle, attend une approbation humaine.").strip(),
+            run_id=(signal.get("context") or {}).get("run_id", ""),
+            suggested_steps=list(state.get("suggested_steps") or []),
+            ttp=signal.get("ttp", ""),
+            severity=signal.get("severity", ""),
+            confidence=state.get("confidence", 0.0),
+            rule_name=(signal.get("context") or {}).get("rule_name", ""),
+            source=source,
+            exercise_run=exercise_run,
+            explanation=state.get("explanation", ""),
+        )
+    except Exception as exc:          # said, and the debug line still written
+        _console.print(f"[red]store_cycle: carte de '{_esc_markup(displaced)}' non écrite — {exc}[/red]")
 
 
 def _record_uncontained(state: GlorfindelState, source: str, exercise_run: str) -> None:

@@ -204,6 +204,59 @@ def test_what_confirms_nothing():
     assert out["floor"] == ""
 
 
+@pytest.mark.parametrize("event", ["recovery_complete", "detection_timeout"])
+def test_only_a_detection_is_floored(event):
+    """An incident holding both facts, and a signal that is no detection: the release after a
+    completed restore, a timeout — the model's choice stands (never re-isolated by the floor)."""
+    both = _incident(agent.ROOT_ELEVATION, agent.LOGIN_AFTER_BRUTE_FORCE)
+    out, _ = _decide({**_sudo(), "event": event}, _decision("release_isolation"), both)
+    assert out["action"] == "release_isolation" and out["floor"] == ""
+    # The same incident, a detection: floored (the control).
+    out, _ = _decide(_sudo(), _decision("release_isolation"), both)
+    assert out["action"] == "isolate_vm" and out["floor"]
+
+
+def test_the_reason_fits_the_choice_set_aside():
+    """« Bloquer la source… » only when the model blocked."""
+    both = _incident(agent.ROOT_ELEVATION)
+    blocked, _ = _decide(_brute_force(), _decision("block_suspicious_ip"), both)
+    assert "bloquer la source" in blocked["floor"]
+    for answer in ("no_action", "snapshot", "restore_from_backup"):
+        out, _ = _decide(_brute_force(), _decision(answer), both)
+        assert "bloquer la source" not in out["floor"], answer
+
+
+def test_an_action_only_a_human_approves_is_kept_on_a_card():
+    """The model proposes a restore: the floor contains first (isolate_vm, alone in
+    non_disruptive), and the restore is never lost — said in the reason, kept in the state,
+    then its own card (destructive_action) once the isolation ran."""
+    out, _ = _decide(_brute_force(), _decision("restore_from_backup"), _incident(agent.ROOT_ELEVATION))
+    assert out["action"] == "isolate_vm" and out["escalate"] is False
+    assert out["floor_displaced"] == "restore_from_backup"
+    assert "'restore_from_backup' attend son approbation" in out["floor"]
+    conn = Recorder()
+    agent_ = _agent(conn, autonomy=AutonomyConfig(default="non_disruptive"))
+    _respond(agent_, _sudo(), _decision("no_action"))
+    final = _respond(agent_, _brute_force(), _decision("restore_from_backup"))
+    assert conn.writes() == ["isolate_vm"] and final["floor_displaced"] == "restore_from_backup"
+    card = next(c for c in _cards() if c["action"] == "restore_from_backup")
+    assert card["escalation_type"] == "destructive_action"
+    assert "La VM est isolée" in card["reason"] and "Plancher déterministe (B3a)" in card["reason"]
+
+
+def test_an_action_only_a_human_approves_is_said_when_the_cycle_escalates():
+    """In human_only nothing runs: the card proposes isolate_vm and its reason names the
+    restore the model proposed."""
+    conn = Recorder()
+    agent_ = _agent(conn, autonomy=AutonomyConfig(default="human_only"))
+    _respond(agent_, _sudo(), _decision("no_action"))
+    final = _respond(agent_, _brute_force(), _decision("restore_from_backup"))
+    assert conn.writes() == [] and final["action"] == "isolate_vm"
+    card = next(c for c in _cards() if c["action"] == "isolate_vm")
+    assert "restore_from_backup" in card["reason"]
+    assert not [c for c in _cards() if c["action"] == "restore_from_backup"]
+
+
 # ── Through the graph: the incident keeps the facts; the mode applies ────────────────────
 
 def _respond(agent_, signal, resp):
@@ -315,11 +368,26 @@ def test_the_harness_paired_case_as_written_is_neighbouring_signals(smoke):
     assert _harness_runs(smoke, sc, sc["row"], sc["incident"]) == [("block_suspicious_ip", False)] * 3
 
 
-def test_the_harness_case_with_the_correlation_confirmed_passes_three_times_in_three(smoke):
-    """The same case, the brute force seen succeed (COR1) and the sudo confirmed on the VM: a
-    model that blocks every time still passes 3/3 — the floor runs inside decide."""
-    sc = next(s for s in smoke.SCENARIOS if s.get("pair") and s.get("incident"))
-    row = {**sc["row"], "Correlation": "ssh-login-after-brute-force",
-           "SuccessfulLogins": [{"account": "alice", "method": "password", "at": "x"}]}
-    incident = {**sc["incident"], "confirmed": [agent.ROOT_ELEVATION]}
-    assert _harness_runs(smoke, sc, row, incident) == [("isolate_vm", True)] * 3
+def test_the_harness_floor_case_is_the_paired_case_seen_succeed(smoke):
+    """The harness's floor case (B3a): the brute force of the pair 2/2, marked by COR1, its
+    incident holding the confirmed sudo — nothing else differs."""
+    after = next(s for s in smoke.SCENARIOS if s.get("pair") and s.get("incident"))
+    floor = next(s for s in smoke.SCENARIOS if s["kind"] == "floor")
+    assert floor["ttp"] == after["ttp"] and floor["expected"] == {"isolate_vm"}
+    assert {k: v for k, v in floor["row"].items()
+            if k not in ("Correlation", "SuccessfulLogins")} == after["row"]
+    assert floor["row"]["Correlation"] == "ssh-login-after-brute-force"
+    assert {k: v for k, v in floor["incident"].items() if k != "confirmed"} == after["incident"]
+    assert floor["incident"]["confirmed"] == [agent.ROOT_ELEVATION]
+
+
+@pytest.mark.parametrize("answer", ["block_suspicious_ip", "no_action", "snapshot"])
+def test_the_harness_floor_case_passes_three_times_in_three(smoke, answer, capsys):
+    """The harness end to end (`_run_one`, its decide, its judge), the model patched to answer
+    the same wrong action every time: 3/3 isolate_vm — the floor runs inside decide."""
+    with patch("litellm.completion", return_value=_decision(answer)):
+        res = smoke._run_one("anthropic/claude-test", 3, {"floor"})
+    [case] = res["cases"]
+    assert [(s["action"], s["good"]) for s in case["slots"]] == [("isolate_vm", True)] * 3
+    sc = next(s for s in smoke.SCENARIOS if s["kind"] == "floor")
+    assert _harness_runs(smoke, sc, sc["row"], sc["incident"]) == [("isolate_vm", True)] * 3

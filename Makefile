@@ -179,7 +179,7 @@ help:
 	@echo "Dev (local, no Docker)"
 	@echo "  make venv           Create .venv (python3 -m venv)"
 	@echo "  make install        Create .venv + install dev dependencies (from the lock, hashes checked)"
-	@echo "  make lock           Regenerate the dependency lock (uv; UPGRADE=1 bumps all) — docs/operations.md"
+	@echo "  make lock           Regenerate the dependency lock (uv; UPGRADE=1 bumps all, UPGRADE_PACKAGE=<name> only it) — docs/operations.md"
 	@echo "  make audit          Known advisories of the locks, pip-audit's own too (read as locked; CI2)"
 	@echo "  make test           Run all tests (104, 0 Azure, 0 LLM calls)"
 	@echo "  make lint           Ruff linter"
@@ -1620,19 +1620,39 @@ install: venv
 # Regénérer le verrou (uv, résolution universelle : Python 3.11 et 3.12, Linux et macOS).
 # Les versions déjà verrouillées restent ; UPGRADE=1 les monte toutes. Une PR, puis le harnais
 # (make llm-compare) avant de redéployer H0 : docs/operations.md, « Verrou des dépendances ».
+# DEP2 (#590) : UPGRADE_PACKAGE=<paquet>[,<paquet>] monte ces paquets seuls, à leur dernière version
+# d'avant UPGRADE_DATE (le jour, par défaut), dans les verrous qui les portent ; les autres sont
+# réécrits à l'octet. La date admise par paquet reste dans l'en-tête du verrou, et make lock la
+# reprend tant qu'elle passe LOCK_DATE (scripts/lock_flags.py) : sans elle, il redescendait le paquet.
+# LOCK_DATE, UPGRADE_PACKAGE et UPGRADE_DATE (le jour, par défaut) ne sont jamais développées par make
+# ni lues par le shell ($(value …), unexport — comme REF) : lock_flags.py les lit dans son
+# environnement et les vérifie avant uv ; « `…` » ou « $(…) » n'y est pas exécuté.
 # Puis les avis connus des verrous écrits (make audit, CI2) : une information pour la PR,
 # jamais un échec de make lock.
-UV         ?= uv
-LOCK_DATE  ?= $(shell date -u +%Y-%m-%d)
-LOCK_FLAGS  = --universal --python-version 3.11 --generate-hashes \
-              --exclude-newer $(LOCK_DATE)T00:00:00Z $(if $(UPGRADE),--upgrade)
+UV           ?= uv
+LOCK_DATE    ?=
+UPGRADE_PACKAGE ?=
+UPGRADE_DATE ?=
+unexport LOCK_DATE UPGRADE_PACKAGE UPGRADE_DATE UPGRADE
+lock: export EREGION_LOCK_DATE = $(value LOCK_DATE)
+lock: export EREGION_UPGRADE_PACKAGE = $(value UPGRADE_PACKAGE)
+lock: export EREGION_UPGRADE_DATE = $(value UPGRADE_DATE)
+# --exclude-newer <LOCK_DATE> et les drapeaux propres au verrou (ses dates par paquet, UPGRADE_PACKAGE
+# s'il le porte) : $$f, écrit par lock_flags.py.
+LOCK_FLAGS    = --universal --python-version 3.11 --generate-hashes $$f $(if $(value UPGRADE),--upgrade)
+LOCK_PKG      = python3 scripts/lock_flags.py flags $(1)
 lock:
-	$(UV) pip compile pyproject.toml requirements/build.in --extra dev $(LOCK_FLAGS) -o requirements/dev.txt
-	$(UV) pip compile pyproject.toml requirements/build.in --extra glorfindel --extra war-room \
+	@python3 scripts/lock_flags.py held $(LOCKS)
+	f=$$($(call LOCK_PKG,requirements/dev.txt)) && \
+	  $(UV) pip compile pyproject.toml requirements/build.in --extra dev $(LOCK_FLAGS) -o requirements/dev.txt
+	f=$$($(call LOCK_PKG,requirements/glorfindel.txt)) && \
+	  $(UV) pip compile pyproject.toml requirements/build.in --extra glorfindel --extra war-room \
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/glorfindel.txt
-	$(UV) pip compile pyproject.toml requirements/build.in --extra annatar \
+	f=$$($(call LOCK_PKG,requirements/annatar.txt)) && \
+	  $(UV) pip compile pyproject.toml requirements/build.in --extra annatar \
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/annatar.txt
-	$(UV) pip compile requirements/audit.in $(LOCK_FLAGS) -o requirements/audit.txt
+	f=$$($(call LOCK_PKG,requirements/audit.txt)) && \
+	  $(UV) pip compile requirements/audit.in $(LOCK_FLAGS) -o requirements/audit.txt
 	@echo "" && echo "Les avis connus des verrous écrits (make audit, à recopier dans la PR) :"
 	@$(MAKE) --no-print-directory audit || echo "⚠ make audit n'a pas pu lire les avis (réseau ? son venv ?) : le relancer avant la PR — make lock n'échoue pas pour autant." >&2
 

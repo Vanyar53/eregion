@@ -3779,6 +3779,14 @@ class IsolationMachine(RuleBasedStateMachine):
                                                                          | self._cutting_others()))
         return sorted({(k, n) for (k, n) in found if n.startswith(prefixes) and any(m in n for m in marks)})
 
+    def _held_for_itself(self, vm: str) -> set:
+        """I3K: our denies a turned rule waits behind (_behind_turned) for the NICs of `vm`
+        alone — none of another VM's. The test's records (the NICs, `tampered`). Denies only
+        (_cutting_orphans, _cutting_others): none is a turned allow aimed elsewhere
+        (_turned_aimed_elsewhere, kept for another VM's flows) — nothing to take off."""
+        behind = self._behind_turned(self._cutting_orphans() | self._cutting_others())
+        return {r for r, cut in behind.items() if cut <= {key(vm)}}
+
     def _kept_said(self, vm: str, out, fault, what: str, done: tuple, prefixes: tuple,
                    nics: list | None = None, recorded: set | None = None):
         """I3, I4C: what an operation keeps is said. A rule of the VM kept because taking it
@@ -3787,7 +3795,22 @@ class IsolationMachine(RuleBasedStateMachine):
         frozen sequences saw it: the unblock counts the rules on the VM's addresses alone
         (_block_rules_for), the reset reads the world without the turned rules (_world).
         `recorded`: for a deleted VM's release, the rules its state recorded — as I3 judges
-        it (no record of its NICs left, a rule named for one can't be told to be its own)."""
+        it (no record of its NICs left, a rule named for one can't be told to be its own).
+
+        I3K (#602): a deny that holds back a turned rule for the VM's OWN other NIC alone (an
+        address of one NIC given to the other) hangs no other VM's flows: the operation lifts
+        the VM, that rule with it — and the turned one, the VM's too. Left all the same (Azure
+        refused the delete: the role taken away), it is named in `failed`, by its error — never
+        in `deleted` (M4414: the lie, a refused delete said done; no other invariant reads
+        `deleted`) —, never « gardée »: nothing kept it. Before, the oracle asked « gardée » of
+        it, as of a rule kept for another VM (the machine during MUT3's review). A name is
+        matched as a whole word (_named): never as the start of another (`…-0d0228` in
+        `…-0d0228-out`)."""
+        import re
+
+        def _named(n: str, s: str) -> bool:
+            """`n` in `s` as a whole name, as `word()` of _older_kept_put_back."""
+            return re.search(re.escape(n.lower()) + r"(?![\w-])", s) is not None
         if not isinstance(out, dict):
             return
         kept = [(k, n) for k, n in self._kept(vm, prefixes, nics) if recorded is None or n in recorded]
@@ -3805,8 +3828,11 @@ class IsolationMachine(RuleBasedStateMachine):
             reach = None if nics is not None else {
                 key(g) for n in self._nics(vm) for g in (n["nsg"], self.fake.subnets[key(n["subnet"])]["nsg"]) if g}
             texts = [s.lower() for v in out.values() if isinstance(v, list) for s in v if isinstance(s, str)]
+            failed = [s.lower() for s in out.get("failed") or [] if isinstance(s, str)]
+            itself = self._held_for_itself(vm) if nics is None else set()
             unsaid = sorted({n for k, n in kept if (reach is None or k in reach)
-                             and not any(n in s and "gardée" in s for s in texts)})
+                             and not (any(_named(n, s) and "gardée" in s for s in texts)
+                                      or ((k, n) in itself and any(_named(n, s) for s in failed)))})
             assert not unsaid, (f"I3 (said): {what} said {out.get('status')}, rules of {vm} kept without "
                                 f"saying so: {unsaid}")
 

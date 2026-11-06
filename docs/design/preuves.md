@@ -414,6 +414,32 @@ autre mesure. MUT3 (#599) les traite tous :
 dont l'écriture échoue encore saute son resserrement), attrapés par les deux tests de MUT3. Au budget
 de la porte (500 séquences, deux tours), avant la relecture : 18/18 à chaque tour.
 
+### Un reset refusé nomme ce qu'il laisse (I3K)
+
+Pendant la relecture de MUT3, la machine a échoué sur `main` non muté : « I3 (said): reset --from-azure
+said swept_partial, rules of …/Db--01 kept without saying so ». La séquence (24 règles, retrouvée telle
+quelle, réduite à 5 pas, `test_a_reset_refused_by_azure_names_the_rule_it_leaves`) : Db--01, deux cartes
+sur nsg-tier, bloquée puis isolée ; l'adresse de db-nic-0 change ; le rôle retiré (toute écriture refusée,
+403) ; une règle `-out` du blocage de db-nic-0 retournée en autorisation, et l'ancienne adresse de db-nic-0
+donnée à db-nic-1, l'autre carte de la même VM ; puis le reset. Chaque suppression refusée : le reset dit
+`swept_partial` et nomme chaque règle par son erreur.
+
+L'oracle se trompait, pas le reset. La casse de l'identifiant n'y est pour rien : l'identifiant canonique
+échoue de même. `_behind_turned` comptait le deny d'isolation de db-nic-0, qui vise maintenant db-nic-1,
+comme retenant une règle retournée pour une autre VM. C'était Db--01 elle-même. L'oracle demandait donc
+« gardée » d'une règle que rien ne garde : le reset lève la VM, la règle retournée avec elle, et le code lit
+les cartes de la VM comme les siennes (`own_ips`, `mates`). Désormais, une telle règle (`_held_for_itself`)
+doit être nommée dans `failed`, par son erreur, et nulle part ailleurs ; « gardée » reste exigé d'une
+règle gardée pour une autre VM (M1962 tient cette moitié). Un nom se lit en mot entier :
+`…-db-nic-0-0d0228` n'est pas trouvé dans `…-db-nic-0-0d0228-out`.
+
+La relecture a sondé la première version de cet oracle, qui acceptait le nom dans n'importe quelle liste
+du résultat. Le mensonge passait : une suppression refusée rangée dans `deleted`, quand une autre refusée
+garde `swept_partial`. Aucun autre invariant ne lit `deleted`. M4414 réinjecte ce mensonge : il survit à
+l'ancien oracle et l'oracle corrigé l'attrape. M4413 (une suppression refusée dite sans le nom de sa
+règle) et M4414 sont attrapés par la séquence figée : la machine tire trop rarement ensemble un 403, un
+échange d'adresse entre deux cartes et une règle retournée.
+
 ### Chaque mutant mesuré, sans le travail en double (CI10a)
 
 Décision de Jonathan du 05/11 (« Tout le paquet », #580), sur l'étude CI9 : la porte confirmait sans

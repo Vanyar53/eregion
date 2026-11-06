@@ -15,8 +15,9 @@ RulePoller — no Azure, no model. What is held:
     backup's own correlation id too (a client chooses it);
   - a failure makes none — the operation's latest line is read;
   - RETRIEVESASURIS alone makes one; so does a disk restore point's download access;
-  - the card names the operation and the resource;
-  - Glorfindel's identity on a restore point is kept, critical;
+  - the card names the operation and the resource, and the caller that decided it — a bare
+    latest line, or Azure Backup's, takes the caller another line names;
+  - Glorfindel's identity on a restore point is kept, critical — its latest line bare too;
   - the snapshot rule does not change.
 """
 from __future__ import annotations
@@ -302,7 +303,7 @@ def test_anyone_else_s_card_comes_at_the_pass_where_their_line_lands():
     [row] = kql_subset.run(query, [start], now=NOW - timedelta(minutes=58))
     assert (row["Caller"], row["ActivityStatusValue"]) == (HUMAN, "Start")
     [row] = kql_subset.run(query, [start, bare], now=NOW - timedelta(minutes=2))
-    assert row["CorrelationId"] == "c-late"
+    assert (row["CorrelationId"], row["Caller"], row["ActivityStatusValue"]) == ("c-late", HUMAN, "Success")
     assert kql_subset.run(query, [start, bare], now=NOW) == []
 
 
@@ -337,6 +338,54 @@ def test_the_card_names_the_operation_and_the_resource(table):
     reason = _control_plane_decision(_initial(sig))["escalation_reason"]
     for text in (DISK_SAS, DRP, HUMAN, "203.0.113.7"):
         assert text in reason, text
+
+
+def test_a_humans_start_then_a_bare_success_names_the_human(table):
+    """The operation's latest line names no one: the card names whoever its Start line
+    names — never an empty caller."""
+    table += [_line(SAS, "Start", corr="c-h", caller=HUMAN, oid="c4444444-d444-e444-f444-a44444444444",
+                    minutes_ago=5.0),
+              _line(SAS, "Success", corr="c-h", caller="", claims=False, minutes_ago=4.9)]
+    [sig] = _cards(table)
+    row = sig["raw_signal"]["first_result_row"]
+    assert (row["ActivityStatusValue"], row["Caller"]) == ("Success", HUMAN)
+    assert row["CallerObjectId"] == "c4444444-d444-e444-f444-a44444444444"
+    assert sig["raw_signal"]["normalized_signal"]["caller"] == HUMAN
+    assert sig["severity"] == "high"
+
+
+@pytest.mark.parametrize("where", ["claims", "caller"])
+def test_a_backup_s_latest_line_never_names_the_card(table, where):
+    """A backup's correlation id taken up by someone else, Azure Backup's lines the latest
+    (and first in the table): the card names the other caller, never Azure Backup."""
+    table += [*[{**line, "TimeGenerated": NOW - timedelta(minutes=m)}
+                for line, m in zip(_backup(SAS, "b-s", where), (1.0, 0.9))],
+              *_operation(SAS, "b-s", caller=HUMAN)]
+    [sig] = _cards(table)
+    row = sig["raw_signal"]["first_result_row"]
+    assert row["Caller"] == HUMAN
+    assert AZURE_BACKUP not in (row.get("CallerAppId") or "", row.get("CallerObjectId") or "")
+
+
+def test_glorfindels_start_then_a_bare_success_is_critical(table):
+    """Under Glorfindel's identity, the operation's latest line bare: its Start line names
+    Glorfindel — the row carries it, the card is critical."""
+    table += [_line(SAS, "Start", corr="c-gb", caller=OWN_OID, appid=OWN_APP, oid=OWN_OID, minutes_ago=5.0),
+              _line(SAS, "Success", corr="c-gb", caller="", claims=False, minutes_ago=4.9)]
+    [sig] = _cards(table)
+    row = sig["raw_signal"]["first_result_row"]
+    assert sig["severity"] == "critical"
+    assert row["GlorfindelIdentity"] is True
+    assert (row["Caller"], row["CallerAppId"], row["CallerObjectId"]) == (OWN_OID, OWN_APP, OWN_OID)
+
+
+def test_the_reader_s_take_anyif_and_iif():
+    """kql_subset: take_anyif keeps only what its predicate keeps (nulls left out); iif
+    chooses."""
+    rows = [{"Type": "T", "k": 1, "v": None, "p": True}, {"Type": "T", "k": 1, "v": "no", "p": False},
+            {"Type": "T", "k": 1, "v": "yes", "p": True}]
+    [out] = kql_subset.run("T | summarize V = take_anyif(v, p) by k | extend W = iif(V == \"yes\", 1, 2)", rows)
+    assert (out["V"], out["W"]) == ("yes", 1)
 
 
 def test_glorfindels_identity_on_a_restore_point_is_kept_and_critical(table):

@@ -3,10 +3,12 @@ as written, on lines the test writes (SEC2). No Log Analytics, no Azure.
 
 Only what the Syslog rules use: a table, then `where`, `extend`, `summarize` (`arg_max(col, *)`
 alone or followed by named aggregations — AL2 —, or `name = count()`, `countif(p)`, `min(col)`,
-`max(col)`, `take_any(col)`, `make_set_if(col, p, n)` — AUD1 —, several of them), `project`,
+`max(col)`, `take_any(col)`, `take_anyif(col, p)`, `make_set_if(col, p, n)` — AUD1 —, several of
+them), `project`,
 `order by`, `limit`; predicates `==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`, `!has`,
 `in (…)`, `in~ (…)`, `!in~ (…)`, `matches regex`, `startswith`, `and`, `or`, `not(…)`; functions
-`ago()`, `extract()`, `isnotempty()`, `isnotnull()`, `toint()`, `tolong()`, `tostring()`,
+`ago()`, `extract()`, `iif()` (or `iff()`), `isnotempty()`, `isnotnull()`, `toint()`,
+`tolong()`, `tostring()`,
 `parse_json()` with a member (`.appid`) or an index (`["…"]`) — the Activity Log's `Claims`, AL2.
 Anything
 else raises NotImplementedError: a rule this reader cannot follow fails its test, never
@@ -239,6 +241,10 @@ class _Parser:
         if name == "isnotempty":
             (_, f), = args
             return lambda r: f(r) not in (None, "")
+        if name in ("iif", "iff"):
+            # KQL's conditional (AL2: the row names the caller that decided it).
+            (_, cond), (_, then), (_, other) = args
+            return lambda r: then(r) if cond(r) else other(r)
         if name == "isnotnull":
             (_, f), = args
             return lambda r: f(r) is not None
@@ -389,4 +395,9 @@ _AGGREGATES = {
     "max": _max,
     "take_any": lambda members, f: next((f(r) for r in members if f(r) is not None), None),
     "make_set_if": _make_set_if,
+    # Log Analytics picks any row the predicate keeps (no order): this reader takes the first.
+    # A rule that reads it holds for any choice — its predicate keeps only what may be taken
+    # (AL2). Nulls left out, as take_any.
+    "take_anyif": lambda members, f, pred: next(
+        (f(r) for r in members if pred(r) and f(r) is not None), None),
 }

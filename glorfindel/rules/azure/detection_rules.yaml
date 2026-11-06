@@ -527,10 +527,13 @@ rules:
   # sienne quand une de ses lignes le nomme et qu'aucune n'en nomme un autre : la dernière
   # ligne (Success) peut ne porter ni Claims ni Caller, et un CorrelationId se choisit
   # (l'en-tête x-ms-correlation-request-id) — repris d'une sauvegarde, il ne cache pas
-  # l'appelant qui le reprend. L'identité de Glorfindel reste traitée par l'adaptateur, comme
-  # dans les autres règles : aucune de ces opérations n'est à lui — sous son identité, la
-  # ligne reste, critique. RESTOREPOINTCOLLECTIONS/WRITE n'est pas lue : une collection seule
-  # ne contient rien, son premier point de restauration fait la carte.
+  # l'appelant qui le reprend. La ligne rendue porte l'appelant qui la décide : celui de la
+  # dernière ligne quand elle nomme un autre appelant qu'Azure Backup, sinon un autre appelant
+  # nommé par une ligne de l'opération (une dernière ligne nue, ou celle d'Azure Backup). L'identité
+  # de Glorfindel reste traitée par l'adaptateur, sur cet appelant, comme dans les autres règles :
+  # aucune de ces opérations n'est à lui — sous son identité, la ligne reste, critique.
+  # RESTOREPOINTCOLLECTIONS/WRITE n'est pas lue : une collection seule ne contient rien, son
+  # premier point de restauration fait la carte.
   - name: restorepoint-by-unexpected-caller
     description: >
       Point de restauration d'une VM créé, ou accès de téléchargement (URL SAS) aux disques
@@ -575,10 +578,20 @@ rules:
       // line that names no one decides nothing: a backup's latest line may be bare, and its
       // Start line (Azure Backup's) may be out of the window or not yet in. Anyone else's Start
       // line names them (ID1-A9 shows each line): their card comes at the pass where it lands.
-      | summarize arg_max(TimeGenerated, *), OtherLines = countif(OtherCaller)
+      // Named*: who else the operation's lines name, to carry on its row (below).
+      | summarize arg_max(TimeGenerated, *), OtherLines = countif(OtherCaller),
+            NamedCaller = take_anyif(Caller, OtherCaller and isnotempty(Caller)),
+            NamedAppId = take_anyif(CallerAppId, OtherCaller and isnotempty(CallerAppId)),
+            NamedObjectId = take_anyif(CallerObjectId, OtherCaller and isnotempty(CallerObjectId))
           by CorrelationId, OperationNameValue, _ResourceId
       | where OtherLines > 0
       | where ActivityStatusValue !in~ ("Failure", "Failed")
+      // The row names the caller that decided it: its latest line's when that line names
+      // someone else, else another caller one of its lines names (a bare latest line, or Azure
+      // Backup's) — Glorfindel's identity is read on it, critical (the adapter).
+      | extend Caller = iif(OtherCaller, Caller, NamedCaller),
+               CallerAppId = iif(OtherCaller, CallerAppId, NamedAppId),
+               CallerObjectId = iif(OtherCaller, CallerObjectId, NamedObjectId)
       | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
 

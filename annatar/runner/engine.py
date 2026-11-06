@@ -693,10 +693,14 @@ class Engine:
 
     def _run_stratus(self, scenario, run_id: str, session, resolved, executor=None) -> RunOutcome:
         """Run a Stratus Red Team technique on the enrolled control plane (R2). The bench group
-        is guarded (enrolled, its zone allowing this technique, destructive as the catalog says)
-        — Stratus provisions inside it during warmup — then the cycle runs inside an exercise
-        window. ``executor`` is injected by the tests (a fake Stratus); otherwise a real one is
-        built. The real bench measurement of control-plane detection is ID1 (#281)."""
+        is guarded: inside the bench, enrolled (``eregion-target``/``eregion-zone``) and in zone
+        ``bench`` only — a Stratus technique can create real cloud resources, so it never runs in
+        twin or production. ``executor`` is injected by the tests (a fake Stratus); otherwise a
+        real one is built, and the cycle runs inside an exercise window.
+
+        Whether Stratus provisions inside this group or creates its own (then outside the
+        inscription and the exercise window) is a design question routed to R2b/ID1 (#281), not
+        settled here; the real bench measurement of control-plane detection is ID1 too."""
         import os
 
         from annatar.executors.stratus_host import StratusExecutor
@@ -717,23 +721,26 @@ class Engine:
         if executor is None:
             executor = StratusExecutor(resolved, session, target=rg_scope, dry_run=self.dry_run)
 
-        # Control-plane enrollment guard: the bench group's tags, read through ARM.
+        # Control-plane enrollment guard: the bench group's tags, read through ARM. The group
+        # itself is the enrolled target here (there is no VM), so its tags stand for both the
+        # group and the target of check_target — enrollment() requires both enrolled, and the
+        # zone is the group's.
         try:
             rg_tags = executor.resource_group_tags(sub, rg)
         except Exception as e:
             why = f"the bench group's enrollment could not be read ({type(e).__name__}: {e})"
-            console.print(f"[red]Safety check failed:[/red] {why}")
+            console.print(f"[red]Control-plane safety check failed:[/red] {why}")
             return RunOutcome(run_id, "unknown", error=f"safety: {why}", refused=True)
-        guard = check_target(rg_scope, rg_tags, {}, kind="technique", destructive=destructive)
+        guard = check_target(rg_scope, rg_tags, rg_tags, kind="technique", destructive=destructive)
         if not guard.allowed:
             console.print(f"[red]Control-plane safety check failed:[/red] {guard.reason}")
             return RunOutcome(run_id, "unknown",
                               error=f"safety: {guard.reason} (control plane)", refused=True)
-        if guard.zone == "production" and self.without_glorfindel:
-            console.print(f"[red]Control-plane safety check failed:[/red] "
-                          f"{NO_WITHOUT_IN_PRODUCTION}")
-            return RunOutcome(run_id, "unknown", error=f"safety: {NO_WITHOUT_IN_PRODUCTION}",
-                              refused=True)
+        if guard.zone != "bench":
+            why = (f"a Stratus control-plane technique runs only in zone 'bench', not "
+                   f"{guard.zone!r} — it can create real cloud resources")
+            console.print(f"[red]Control-plane safety check failed:[/red] {why}")
+            return RunOutcome(run_id, "unknown", error=f"safety: {why}", refused=True)
 
         open_window(run_id, injector="annatar",
                     kind="technique", experiment=f"{scenario.mitre} {scenario.name}",
@@ -770,16 +777,18 @@ class Engine:
         metrics.update(watch_gate.without_metrics(self.without_glorfindel))
         T0 = time.time()
         attack_error = None
-        warmed = False
+        attempted = False   # warmup was journaled: cleanup must run, whatever happens next
+        tried_detonate = False
+        detonated = False
         restored = None
         try:
             lost = self._watch_lost()
             if lost:
                 return self._lost(run_id, lost)
             console.print("[cyan]->[/cyan] Warmup (prerequisites)...")
+            attempted = True   # before the call: a warmup that fails half-way is still cleaned
             executor.warmup()
             checks["warmup"] = "PASS"
-            warmed = True
 
             # Initial state before detonate — read-only Graph probe (None when none declared).
             before = executor.probe_initial_state("before")
@@ -796,7 +805,9 @@ class Engine:
                 if lost:
                     return self._lost(run_id, lost)
                 console.print(f"[cyan]->[/cyan] Detonate {resolved.technique_id}...")
+                tried_detonate = True
                 executor.detonate()
+                detonated = True
                 checks["detonate"] = "PASS"
                 if scenario.detection:
                     detection_timeout_s = self._parse_duration(
@@ -808,20 +819,28 @@ class Engine:
                     metrics["attack_time"] = T0
                     console.print("[cyan]->[/cyan] Signal 'attack_started' emitted.")
         except Exception as e:
-            checks["detonate"] = checks.get("detonate") or "ERROR"
-            console.print(f"[red]Stratus detonate failed:[/red] {type(e).__name__}: {e}")
+            # Label the phase that actually failed — never a bogus detonate=ERROR for a warmup
+            # (or a before-probe) that raised.
+            if checks.get("warmup") != "PASS":
+                checks["warmup"] = "ERROR"
+            elif tried_detonate and not detonated:
+                checks["detonate"] = "ERROR"
+            console.print(f"[red]Stratus phase failed:[/red] {type(e).__name__}: {e}")
             raise
         finally:
-            if warmed:
-                # revert best effort; cleanup ALWAYS destroys the prerequisites, even when
-                # detonate raised (warmup created them). Each guarded, so the report is saved.
-                try:
-                    console.print("[cyan]->[/cyan] Revert (detonation)...")
-                    executor.revert()
-                    checks["revert"] = "PASS"
-                except Exception as e:
-                    checks["revert"] = "SKIPPED"
-                    console.print(f"[yellow]Revert not applied:[/yellow] {e}")
+            if attempted:
+                # cleanup ALWAYS destroys what warmup created (even when warmup or detonate
+                # raised). revert runs ONLY after a detonation — reverting before detonating is
+                # meaningless, and not every technique supports revert. Each guarded, so the
+                # report is always saved.
+                if detonated:
+                    try:
+                        console.print("[cyan]->[/cyan] Revert (detonation)...")
+                        executor.revert()
+                        checks["revert"] = "PASS"
+                    except Exception as e:
+                        checks["revert"] = "SKIPPED"
+                        console.print(f"[yellow]Revert not applied:[/yellow] {e}")
                 try:
                     console.print("[cyan]->[/cyan] Cleanup (prerequisites)...")
                     executor.cleanup()
@@ -838,7 +857,9 @@ class Engine:
                 except Exception as e:
                     checks["initial_state_after"] = "ERROR"
                     console.print(f"[red]After-probe failed:[/red] {e}")
-            if checks.get("cleanup") != "PASS" or restored is False:
+            # The control plane may be dirty when cleanup ran but failed, or the return is not
+            # restored (cleanup not attempted means warmup never ran — nothing to clean).
+            if checks.get("cleanup") == "ERROR" or restored is False:
                 self._stratus_recovery_hint(resolved)
             # Control-plane detection is ID1 (#281): not waited on here.
             metrics["detection"] = "unknown"

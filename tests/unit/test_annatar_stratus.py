@@ -336,7 +336,8 @@ def _scenario(**over) -> Scenario:
                     detection_hints={}, raw=raw, engine="stratus", engine_ref=raw["engine_ref"])
 
 
-def _fake_executor(tmp_path, *, before=True, after=True, rg_tags=None, detonate_raises=False):
+def _fake_executor(tmp_path, *, before=True, after=True, rg_tags=None,
+                   detonate_raises=False, warmup_raises=False):
     binary, digest = _fake_binary(tmp_path)
     r = resolve(TID, binary_path=binary, stratus_dir=_stratus_dir(tmp_path, digest),
                 catalog=_catalog())
@@ -352,6 +353,8 @@ def _fake_executor(tmp_path, *, before=True, after=True, rg_tags=None, detonate_
 
         def warmup(self):
             calls.append("warmup")
+            if warmup_raises:
+                raise RuntimeError("warmup failed")
 
         def detonate(self):
             calls.append("detonate")
@@ -418,11 +421,13 @@ def test_run_stratus_cycle_does_not_detonate_on_a_dirty_initial_state(tmp_path, 
 
 def test_run_stratus_refuses_an_unenrolled_group(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")   # scope OK: enrollment is what fails
     fake, r, _ = _fake_executor(tmp_path, rg_tags={})   # no enrollment tags
     engine = Engine()
     out = engine._run_stratus(_scenario(), "20260101T000003Z", _session(tmp_path), r,
                               executor=fake)
-    assert out.refused and out.error.startswith("safety:")
+    # Refused by the enrollment guard with its own reason (not the later bench-zone message).
+    assert out.refused and "missing tag" in out.error
 
 
 def test_run_stratus_refuses_a_target_without_subscription(tmp_path, monkeypatch):
@@ -432,6 +437,51 @@ def test_run_stratus_refuses_a_target_without_subscription(tmp_path, monkeypatch
     sc = _scenario(target={"type": "azure_subscription", "resource_group": "rg-celebrimbor"})
     out = Engine()._run_stratus(sc, "20260101T000004Z", _session(tmp_path), r, executor=fake)
     assert out.refused and "subscription_id" in out.error
+
+
+def test_run_stratus_runs_the_cycle_on_an_enrolled_group(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")   # the bench scope's subscription
+    fake, r, calls = _fake_executor(tmp_path)   # ENROLLED, zone bench
+    out = Engine()._run_stratus(_scenario(), "20260101T000010Z", _session(tmp_path), r,
+                                executor=fake)
+    assert not out.refused                       # the guard allowed the enrolled bench group
+    assert calls == ["warmup", "probe:before", "detonate", "revert", "cleanup", "probe:after"]
+    # The exercise window (isolated_exercise_windows redirects it under tmp/exercises).
+    window = json.loads((tmp_path / "exercises" / "20260101T000010Z.json").read_text())
+    assert window["end"] is not None             # opened then closed
+
+
+def test_run_stratus_refuses_a_non_bench_zone(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")
+    twin = {"eregion-target": "celebrimbor", "eregion-zone": "twin"}
+    fake, r, calls = _fake_executor(tmp_path, rg_tags=twin)   # enrolled, but not bench
+    out = Engine()._run_stratus(_scenario(), "20260101T000011Z", _session(tmp_path), r,
+                                executor=fake)
+    assert out.refused and "bench" in out.error
+    assert "warmup" not in calls                 # refused before the cycle
+
+
+def test_run_stratus_cycle_cleans_up_when_warmup_fails(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    fake, r, calls = _fake_executor(tmp_path, warmup_raises=True)
+    with pytest.raises(RuntimeError, match="warmup failed"):
+        Engine()._run_stratus_cycle(_scenario(), fake, "20260101T000012Z", r)
+    assert "cleanup" in calls                     # a half-provisioned warmup is still cleaned
+    assert "revert" not in calls and "detonate" not in calls   # never revert without a detonation
+    rpt = _report(tmp_path)
+    assert rpt["checks"]["warmup"] == "ERROR"     # the failed phase, labelled right
+
+
+def test_executor_reverifies_binary_before_each_phase(tmp_path):
+    binary, digest = _fake_binary(tmp_path)
+    r = resolve(TID, binary_path=binary, stratus_dir=_stratus_dir(tmp_path, digest),
+                catalog=_catalog())
+    ex = StratusExecutor(r, _session(tmp_path), target=RG_SCOPE, run=_ok_run())
+    binary.write_bytes(b"swapped-after-resolve\n")   # tampered between resolve and the phase
+    with pytest.raises(RuntimeError, match="binary changed"):
+        ex.detonate()
 
 
 # ── Authoring + dispatch surface ──────────────────────────────────────────────────────

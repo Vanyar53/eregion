@@ -1,7 +1,8 @@
 """R2a (Partie de #79): the Stratus Red Team adapter — a technique id resolved against a CLOSED
 allow-list, the pinned binary checked at run time, the warmup/detonate/revert/cleanup cycle run
 from an armed Orodruin with every phase journaled, and a read-only Graph probe of the initial
-state. M4315–M4334, measured by tests/unit/test_annatar_stratus.py."""
+state. M4315–M4344 (M4335–M4344 from the Opus 5.5 review: control-plane guard, bench-only zone,
+warmup cleanup, per-phase binary check), measured by tests/unit/test_annatar_stratus.py."""
 ENG = "annatar/engines/stratus.py"
 HOST = "annatar/executors/stratus_host.py"
 RUN = "annatar/runner/engine.py"
@@ -67,6 +68,43 @@ MUTANTS = [
     ("M4334", "the stratus engine is dropped from KNOWN_ENGINES (refused at authoring)", PARSER,
      'KNOWN_ENGINES = frozenset({"local-script", "atomic", "stratus"})',
      'KNOWN_ENGINES = frozenset({"local-script", "atomic"})'),
+    # ── Review (Opus 5.5): control-plane guard, bench-only zone, warmup cleanup, binary check ─
+    ("M4335", "the control-plane enrollment guard is disabled (unenrolled group runs)", RUN,
+     '        if not guard.allowed:\n'
+     '            console.print(f"[red]Control-plane safety check failed:[/red] {guard.reason}")',
+     '        if False:\n'
+     '            console.print(f"[red]Control-plane safety check failed:[/red] {guard.reason}")'),
+    ("M4336", "a Stratus technique runs outside zone bench (twin/production let through)", RUN,
+     '        if guard.zone != "bench":', '        if guard.zone != "bench" and False:'),
+    ("M4337", "the group's enrollment is not required as the target (always-refuse bug back)", RUN,
+     "        guard = check_target(rg_scope, rg_tags, rg_tags, kind=\"technique\","
+     " destructive=destructive)",
+     "        guard = check_target(rg_scope, rg_tags, {}, kind=\"technique\","
+     " destructive=destructive)"),
+    ("M4338", "cleanup is skipped (prerequisites left behind after warmup)", RUN,
+     '                    executor.cleanup()\n                    checks["cleanup"] = "PASS"',
+     '                    checks["cleanup"] = "PASS"  # cleanup call removed (mutant)'),
+    ("M4339", "revert runs without a detonation (meaningless, before detonate)", RUN,
+     "                if detonated:", "                if detonated or True:"),
+    ("M4340", "warmup is marked attempted only after it returns (a failed warmup not cleaned)",
+     RUN,
+     "            attempted = True   # before the call: a warmup that fails half-way is still"
+     " cleaned\n            executor.warmup()",
+     "            executor.warmup()\n            attempted = True   # before the call: a warmup"
+     " that fails half-way is still cleaned"),
+    ("M4341", "a failed warmup is not labelled ERROR in the report", RUN,
+     '            if checks.get("warmup") != "PASS":\n                checks["warmup"] = "ERROR"',
+     '            if checks.get("warmup") != "PASS" and False:\n'
+     '                checks["warmup"] = "ERROR"'),
+    ("M4344", "the detonation is never recorded (revert then skipped)", RUN,
+     "                detonated = True", "                detonated = False"),
+    ("M4342", "the per-phase binary sha256 re-check passes a changed binary", HOST,
+     "        if digest != self.resolved.binary_digest:",
+     "        if digest != self.resolved.binary_digest and False:"),
+    ("M4343", "a phase runs without re-checking the pinned binary first", HOST,
+     "        self._verify_binary_unchanged(phase)   # re-check the pinned sha256 before every"
+     " phase",
+     "        pass   # re-check removed (mutant)"),
 ]
 
 TESTS = {
@@ -90,4 +128,14 @@ TESTS = {
     "M4332": f"{_T}::test_run_stratus_cycle_runs_all_phases_and_emits_attack_started",
     "M4333": f"{_T}::test_run_stratus_cycle_does_not_detonate_on_a_dirty_initial_state",
     "M4334": f"{_T}::test_known_engines_has_stratus",
+    "M4335": f"{_T}::test_run_stratus_refuses_an_unenrolled_group",
+    "M4336": f"{_T}::test_run_stratus_refuses_a_non_bench_zone",
+    "M4337": f"{_T}::test_run_stratus_runs_the_cycle_on_an_enrolled_group",
+    "M4338": f"{_T}::test_run_stratus_cycle_cleans_up_when_warmup_fails",
+    "M4339": f"{_T}::test_run_stratus_cycle_cleans_up_when_warmup_fails",
+    "M4340": f"{_T}::test_run_stratus_cycle_cleans_up_when_warmup_fails",
+    "M4341": f"{_T}::test_run_stratus_cycle_cleans_up_when_warmup_fails",
+    "M4342": f"{_T}::test_executor_reverifies_binary_before_each_phase",
+    "M4343": f"{_T}::test_executor_reverifies_binary_before_each_phase",
+    "M4344": f"{_T}::test_run_stratus_runs_the_cycle_on_an_enrolled_group",
 }

@@ -130,6 +130,22 @@ class StratusExecutor:
             raise Passive(f"stratus {phase} on {self.target}: no armed Orodruin contract")
         self._session.before_call(f"stratus:{phase}", self.target, detail)
 
+    def _verify_binary_unchanged(self, phase) -> None:
+        """SEC5 (R2a review): the pinned sha256 is re-checked before EVERY phase, not only when
+        the technique was resolved — a binary swapped between resolution and a later phase runs
+        nothing. Compared to the digest captured (and PIN-checked) by resolve()."""
+        import hashlib
+        from pathlib import Path
+        binary = phase.argv[0]
+        try:
+            digest = hashlib.sha256(Path(binary).read_bytes()).hexdigest()
+        except OSError as e:
+            raise RuntimeError(f"the Stratus binary {binary} is unreadable before {phase.name}: "
+                               f"{e} — phase not run") from e
+        if digest != self.resolved.binary_digest:
+            raise RuntimeError(f"the Stratus binary changed since it was pinned this run — "
+                               f"{phase.name} not run")
+
     def run_phase(self, name: str) -> str:
         """Journal, then run one phase of the Stratus cycle (warmup/detonate/revert/cleanup).
         In dry_run nothing starts; the argv and the offline environment are shown."""
@@ -137,6 +153,7 @@ class StratusExecutor:
         if self.dry_run:   # nothing runs, so nothing is journaled against the contract
             console.print(f"  [yellow]DRY RUN[/yellow] stratus {name}: {' '.join(phase.argv)}")
             return ""
+        self._verify_binary_unchanged(phase)   # re-check the pinned sha256 before every phase
         self._before_call(name, phase.label)
         console.print(f"  [dim]Stratus → {name} : {self.resolved.technique_id}[/dim]")
         completed = self._run(phase.argv, env=self._env(), capture_output=True, text=True,

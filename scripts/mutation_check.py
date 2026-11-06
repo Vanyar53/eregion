@@ -10,9 +10,9 @@ mutant, the code moved) — never counted as caught.
     python scripts/mutation_check.py                       # push budget (60), 3 rounds
     python scripts/mutation_check.py --examples 1000 --rounds 2
     python scripts/mutation_check.py --only M04,M13
-    python scripts/mutation_check.py --examples 500 --rounds 2 --shard 3/14 --json m3.json   # the release gate's
-    python scripts/mutation_check.py --total DIR --shards 14 --control-shards 2 --examples 500 --rounds 2
-    python scripts/mutation_check.py --machines --skip-machine-baseline --shard 3/14 --json m3.json
+    python scripts/mutation_check.py --examples 500 --rounds 2 --skip-machine-baseline --shard 3/10 --json m3.json   # the gate's
+    python scripts/mutation_check.py --total DIR --shards 10 --control-shards 2 --examples 500 --rounds 2
+    python scripts/mutation_check.py --machines --shard 3/14 --json m3.json                  # the Monday's (CI10b)
     python scripts/mutation_check.py --narrow tests/unit/test_host_cd.py --rounds 2 --jobs 4
 
 Each round draws new seeds — for Hypothesis only: a target no chance moves has one round (CI10a,
@@ -3411,8 +3411,8 @@ MUTANTS += [
     ("M1440", "a race thread that never unwound holds web's lock: the teardown waits behind it (U3F)",
      INVARIANTS, '            if getattr(self, "hung", None):\n', "            if False:\n"),
     ("M1441", "the CI's Linux tests hang without saying where (U3F)", ".github/workflows/ci.yml",
-     "        run: python -m pytest tests/ -q -o faulthandler_timeout=480\n",
-     "        run: python -m pytest tests/ -q\n"),
+     "        run: python -m pytest tests/ -q -n 4 --dist load -o faulthandler_timeout=480\n",   # CI10b: 4 processes
+     "        run: python -m pytest tests/ -q -n 4 --dist load\n"),
 ]
 TESTS.update({"M1349": "tests/unit/test_invariant_regressions.py -k reverse_order",
               "M1440": "tests/unit/test_invariant_regressions.py -k out_of_sight_holding",

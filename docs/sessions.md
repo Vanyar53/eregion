@@ -89,7 +89,9 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
        fichier de lot sans mutant, ou dont `TESTS` nomme le mutant d'un autre, aussi. Un fichier de lot
        neuf : `git add -N` d'abord. Ce qui suivrait la garde du harnais n'est jamais mesuré (54 mutants
        l'étaient le 02/11, MCG) ; `tests/unit/test_mutant_anchors.py` échoue alors. Une raison
-       illisible aussi est une faute (CI6e).
+       illisible aussi est une faute (CI6e). La CI le relance sur chaque PR et chaque push sur `main`
+       (CI10b, `ci.yml`, « Mutants anchored to this tree ») : un mutant qu'une autre fusion a rendu
+       périmé se voit à la fusion, plus à la porte suivante. Le lancer avant de pousser reste la règle.
    - **Tes mutants, tous attrapés.** Depuis CI6e (#553), la porte de release et la mesure du lundi sont
      rouges dès qu'un mutant compté survit à un tour sans raison que le harnais lit. Une raison commence
      par `EQUIVALENT:`, `MULTI-HOST:` ou `TIMING:`, et doit être vraie, vérifiable à la lecture du code ;

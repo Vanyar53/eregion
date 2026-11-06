@@ -2008,6 +2008,49 @@ que GitHub compte comme réussi : le laisser requis ne bloquerait pas une PR, ma
 plus rien. Aucun autre check requis ne change : ceux de Components ne l'étaient pas, et Images garde
 les siens. Vérifier : `gh api repos/grootcyber/eregion/rules/branches/main` ne liste plus macOS.
 
+## La CI au bon endroit (CI10b, #581, 05/11)
+
+Décision de Jonathan du 05/11 : l'étude CI9 prise en entier (« Tout le paquet »). Le principe : chaque
+étage mesure ce qu'il est seul à pouvoir mesurer. La PR prouve que le changement tient, `main` que deux
+changements tiennent ensemble, la nuit cherche (elle trouve : 5 défauts en 10 nuits), la porte prouve
+chaque mutant sur l'arbre publié, une fois, sans travail en double. Le côté harnais est CI10a
+(`docs/design/preuves.md`) ; ce qui suit est le côté workflows.
+
+- **Les ancres des mutants à chaque fusion** (L16). `ci.yml` lance `python scripts/mutant_anchors.py`
+  sur chaque PR et chaque push sur `main`, avant les tests (moins d'une seconde, rien à installer pour
+  lui). Un mutant qu'une autre PR a rendu périmé se voit à la fusion, plus à la porte suivante
+  (M825, M945 et M1225 l'ont été sur `main`, #299).
+- **La suite en quatre processus** (L8). `python -m pytest tests/ -q -n 4 --dist load` : pytest-xdist,
+  dans l'extra `dev` et son verrou (`requirements/dev.txt` ; les verrous des images ne bougent pas), test
+  par test. Les mêmes tests, au même budget (200 séquences sur une PR, 500 sur un push), sur 3.11 et
+  3.12. **Mesuré sur un poste, le 05/11, à 200 séquences** : la suite entière passe en quatre
+  processus comme en un, aucun test ne dépend d'un autre ni d'un état laissé (la conftest, les `tmp_path`,
+  ChromaDB, les verrous entre vrais processus de `test_locks.py`) : 8 223 réussis, 8 sautés, dans les
+  deux cas. 483 s en un processus, 152 à 183 s en quatre (deux runs), soit 2,6 à 3,2 fois plus court —
+  sur un poste partagé, chargé par d'autres sessions (charge moyenne autour de 9) : des ordres de
+  grandeur, pas des mesures de runner. Le plancher est le test le plus long, la machine Azure, dans un
+  seul processus.
+  Sur un runner (4 vCPU), l'étude estime l'étape des tests de 13,5 à environ 5 min, une PR verte en 6 à
+  8 min au lieu de 14,6 : à mesurer sur les premières PR.
+- **Components en un seul job sur une PR** (L11). Le job « every component alone, then the compose
+  profiles » fait, pour chaque composant de `scripts/component_check.py`, ses deux vérifications (ses
+  modules importés seuls, ses tests seuls, les autres composants absents de son processus), chacune
+  lancée quoi qu'ait dit la précédente (`!cancelled()`), puis les profils compose. Core, Annatar et
+  Gothmog n'attendent que l'installation ; seul Glorfindel, qui lit le modèle de ChromaDB, attend aussi
+  son téléchargement : un modèle qui ne vient pas ne saute pas les autres et ne cache pas leur rouge.
+  Les actions du job sont épinglées par commit, celles de la porte (aucune action ajoutée). Cinq runners
+  deviennent un par push de PR. Sur `main`, un job par composant et celui des profils, comme avant :
+  ce sont leurs noms que le CD de H0 lit (« dits », jamais requis). Aucun check requis ne change de
+  nom : les cinq de [sessions.md](sessions.md) restent ceux de `ci.yml` et d'Images, et ceux de
+  Components n'en ont jamais été (`tests/unit/test_workflows.py`).
+- **La porte** : 10 tranches (L5), plus de run non muté d'une machine dans une tranche (L3), ses tests en
+  deux jobs (L6), un total qui n'attend plus macOS (L7) : « La porte de release », ci-dessous.
+- **Le lundi** réduit aux mutants des machines et au jeu de contrôle, à 1 000 séquences (L13) : « La
+  porte de release », « La mesure du lundi ».
+- **Ce qui ne change pas** : la nuit à 10 000 séquences (Azure, AWS ; Linux, macOS), les deux versions
+  de Python en PR, 200 séquences en PR, le budget de la porte (500 séquences, deux tours, chaque mutant de
+  l'arbre).
+
 ## Ce que la CI retente (CI8, #566, 05/11)
 
 Décision de Jonathan du 05/11. Aucun job n'est relancé seul : « Re-run failed jobs », c'est Jonathan
@@ -2519,10 +2562,15 @@ qu'elle publie. La PR de version ne passait que la CI d'une PR (200 invariants a
 mesurait en entier le commit publié.
 
 **La batterie** (`.github/workflows/release-gate.yml`), un job par partie :
-- `invariants` : toute la suite, 2 000 séquences par machine d'invariants (Azure, AWS), sur Linux, la
-  base Hypothesis de la nuit rejouée d'abord ;
-- `mutants` (14 tranches) et `control` (2 tranches) : toute la mutation, `--examples 500 --rounds 2
-  --jobs 4`, jeu de contrôle compris. Un seul runner n'y suffit pas : 2 633 mutants le 04/11, et la mesure
+- `invariants-azure` et `invariants-rest` : toute la suite, 2 000 séquences par machine d'invariants
+  (Azure, AWS), sur Linux, la base Hypothesis de la nuit rejouée d'abord. En deux jobs côte à côte depuis
+  CI10b (#581) : la machine Azure seule (un test, environ 22 min), et tout le reste en quatre processus
+  (`-n 4 --dist load`, la machine AWS comprise, `--ignore=tests/unit/test_invariants.py`). Chaque test
+  tourne dans un seul des deux (`tests/unit/test_workflows.py`) ;
+- `mutants` (10 tranches, 14 avant CI10b) et `control` (2 tranches) : toute la mutation, `--examples 500
+  --rounds 2 --jobs 4 --skip-machine-baseline`, jeu de contrôle compris. `--skip-machine-baseline`
+  (CI10a) : une tranche ne refait plus le run non muté d'une machine d'invariants, que les deux jobs
+  ci-dessus prouvent à 2 000 sur le même arbre (7,8 h de runner par porte, CI9). Un seul runner n'y suffit pas : 2 633 mutants le 04/11, et la mesure
   du lundi (1 000 séquences) annulée à sa borne de 180 min le 02/11, avant son premier mutant. Chaque
   tranche (`mutation_check.py --shard K/N --json …`) prend des cibles entières, coupées en morceaux
   selon leur poids mesuré (CI6d, ci-dessous) ; puis `mutants-total` (`--total`) vérifie que chaque tranche est là, une fois, au
@@ -2553,13 +2601,13 @@ mesurait en entier le commit publié.
   release : le macOS du commit de la 0.5.4 a été annulé faute de runner. Le job a `continue-on-error`.
   Cela ne suffit pas : annulé faute de runner, il met quand même le run en `failure` (la 0.5.6, 05/11).
   C'est pourquoi `release-draft` ne lit jamais la conclusion du run, mais ses jobs (REL3, ci-dessous).
-  Son résultat est dit dans le résumé du run (`$GITHUB_STEP_SUMMARY`) : celui de ses tests, et celui que
-  voit le dernier job.
+  Son résultat est dit dans le résumé du run (`$GITHUB_STEP_SUMMARY`), par son propre job.
 
-Le dernier job, « release gate », attend tous les autres, macOS compris, pour le dire. Il n'est vert que
-si chaque job qui bloque l'est (les invariants, les tranches de mutants et leur total, Terraform) : un
-job annulé (sa borne, un runner jamais pris) ou sauté compte comme rouge. Son résumé donne, job par job,
-le résultat et le rôle (bloque, ou informe). Chaque job a sa borne
+Le dernier job, « release gate », attend chaque job qui bloque, et **plus macOS** (CI10b, #581) : le
+05/11, il a conclu 12 min après le dernier job qui bloque, macOS attendant un runner. Il n'est vert que
+si chacun de ceux qu'il attend l'est (les deux jobs d'invariants, les tranches de mutants et leur total,
+Terraform) : un job annulé (sa borne, un runner jamais pris) ou sauté compte comme rouge. Son résumé
+donne, job par job, le résultat, et dit que macOS informe par son propre job. Chaque job a sa borne
 (`timeout-minutes`), les permissions sont `contents: read` et rien d'autre, chaque action est épinglée
 par commit. Chaque job extrait la tête de la PR exactement, jamais le commit de fusion que GitHub
 calcule : c'est cet arbre que `release-draft` compare.
@@ -2582,7 +2630,9 @@ dispatch, ou la PR `chore/release-…` de ce dépôt **vers `main`** : un run `p
 workflow de la base, qu'une PR vers une autre branche aurait pu changer), et prend le dernier démarré
 (`run_started_at` : un run relancé repart, son `created_at` ne bouge pas) dont l'arbre (`head_commit.tree_id`)
 est celui d'`origin/main` (`git rev-parse origin/main^{tree}`). Une squash-merge change le commit, pas
-l'arbre, si rien d'autre n'a fusionné entre-temps. Ce run doit être fini et vert par ses jobs (ci-dessous).
+l'arbre, si rien d'autre n'a fusionné entre-temps. Ce run doit être vert par ses jobs (ci-dessous) :
+fini, ou encore en cours pour un seul job qui informe (CI10b : un run qui attend encore macOS, son total
+et chaque job qui bloque verts, passe, macOS dit « en cours »). Tout autre run en cours est refusé.
 Sinon le brouillon est refusé, et la commande dit lequel, son état (en cours, rouge, annulé, sauté…),
 son commit et son lien.
 Sans run sur cet arbre, elle dit que quelque chose a fusionné après la porte, et comment la relancer sur
@@ -2649,8 +2699,8 @@ en lecture que la lecture des runs demande déjà.
   leur total, Terraform) : un rouge, un annulé, un sauté ou un job encore en cours refuse, même à côté
   d'un total vert. Le premier est nommé, les autres comptés. Le total les tient déjà ; les relire ne
   coûte rien, et un total qui se tromperait ne suffit pas.
-- **Un job qui informe** (macOS) rouge, annulé, sauté ou absent est **dit** à la suite de la ligne
-  verte (« informe sans bloquer : « tests (macOS, …) » annulé »), et ne bloque jamais.
+- **Un job qui informe** (macOS) rouge, annulé, sauté, absent ou encore en cours (CI10b) est **dit** à
+  la suite de la ligne verte (« informe sans bloquer : « tests (macOS, …) » annulé »), et ne bloque jamais.
 - **Un job relancé** (« Re-run failed jobs »). Mesuré sur le run 42061905987 : après une relance
   partielle, la tentative 2 rend les 21 jobs, sans doublon ; les jobs non relancés y sont recopiés,
   sous de nouveaux ids. Si une réponse mêlait pourtant deux tentatives, de deux jobs du même nom celui
@@ -2658,8 +2708,8 @@ en lecture que la lecture des runs demande déjà.
   soient leurs ids. Deux jobs du même nom dans une même tentative : refus, le motif dit.
 - **Une seule source pour les jobs qui informent.** `scripts/release.py` tient `GATE_JOB` (le nom du
   total) et `INFORMATIVE` (l'id et le nom de chaque job qui informe). `tests/unit/test_release.py` les
-  lit face au workflow : l'`INFORMATIVE` de l'étape du total (par id), le `name:` de chaque job, le
-  `needs` du total (tous les autres jobs), et `continue-on-error` sur les seuls jobs qui informent.
+  lit face au workflow : le `name:` de chaque job, le `needs` du total (tous les autres jobs, sauf ceux
+  qui informent, depuis CI10b), et `continue-on-error` sur les seuls jobs qui informent.
   Tout autre job bloque, sans liste à recopier. Le faux GitHub des tests tire ses jobs du workflow
   lui-même, chaque matrice dépliée.
 - Une lecture qui échoue, une réponse qui n'est pas une liste de jobs, une réponse sans `total_count`,
@@ -2739,10 +2789,14 @@ double »). Ce qui change dans le harnais :
   de `tests/unit/test_published_image.py`. M1014 garde sa cible. On relance `--narrow` quand `scripts/mutant_anchors.py` dit qu'une entrée ne
   s'applique plus, ou qu'un nouveau lot ajoute des mutants sur un fichier entier lourd.
 - **`--skip-machine-baseline`** : la tranche ne refait plus le run non muté des machines
-  d'invariants, et dit combien de cibles l'ont perdu ; le reste de chaque cible tourne encore. Le job
-  `invariants` de la porte fait déjà tourner toute la suite à 2 000 séquences sur le même arbre (un
-  test le vérifie avant que le drapeau soit passé). La porte le passe (câblé par CI10b) ; le lundi et
-  un run local non.
+  d'invariants, et dit combien de cibles l'ont perdu ; le reste de chaque cible tourne encore. Les deux
+  jobs d'invariants de la porte (`invariants-azure`, `invariants-rest`, CI10b) font déjà tourner toute
+  la suite à 2 000 séquences sur le même arbre. Un test le vérifie
+  (`test_a_shard_leaves_the_machines_only_to_a_gate_that_runs_them`) : le drapeau cherché dans tout le
+  texte des jobs, les deux jobs dans les `needs` du total, 500 séquences au moins, aucune machine retirée
+  par un `--deselect` ou un `--ignore`. La porte le passe (câblé par CI10b) ; le lundi et un run local
+  non. Un autre test exige que chaque option qu'un workflow passe au harnais soit connue de son parseur,
+  par son nom entier (`test_workflows.py`).
 - **`--machines`** mesure les seuls mutants dont la cible fait tourner une machine (un fichier qui
   définit une `RuleBasedStateMachine`), avec `--shard` et `--json` ; `--total DIR --machines` juge
   ceux-là seuls, et refuse une tranche mesurée autrement. Le jeu de contrôle garde sa sélection.
@@ -2782,8 +2836,8 @@ ensemble ; la plus longue fait la durée :
 
 | Job | Sur un runner | D'où |
 |---|---|---|
-| `mutants`, une tranche sur 14 | ~41 min estimées, la plus lourde (de 36 à 41 ; installation ~1 min comprise) | avant CI6d, de 22 à 72 min mesurées. Une fois les runs non mutés mesurés par la porte et le fichier mis à jour, les tranches se resserrent (de 39 à 42 min estimées) ; la plus lourde reste vers 41 |
-| `invariants` (2 000) | 22 à 36 min mesurées | les deux runs du 05/11 |
+| `mutants`, une tranche sur 14, avant CI10b | ~41 min estimées, la plus lourde (de 36 à 41 ; installation ~1 min comprise) | avant CI6d, de 22 à 72 min mesurées. Une fois les runs non mutés mesurés par la porte et le fichier mis à jour, les tranches se resserrent (de 39 à 42 min estimées) ; la plus lourde reste vers 41 |
+| `invariants` (2 000), avant CI10b | 22 à 36 min mesurées | les deux runs du 05/11 ; scindé depuis (ci-dessous) |
 | `control`, une tranche sur 2 | ~31 min estimées | avant CI6d, de 24 à 36 min mesurées : 16 mutants d'invariants par tranche, dont une dizaine survivent (deux tours entiers chacun) |
 | `macos` (informe) | 4 à 8 min, s'il a un runner | les deux runs du 05/11 |
 | `terraform` | moins d'1 min | les deux runs du 05/11 |
@@ -2794,18 +2848,38 @@ une tranche de 41 min à environ 72 ; un runner 1,2 fois plus lent qu'ordinaire 
 long mutant seul (C15, ou M36 sur un runner lent : 21 min) et le plus long run non muté (environ 10 min)
 restent loin de la part d'une tranche : rien d'indivisible n'empêche les 45 min.
 
-19 jobs en même temps : GitHub en donne 20 à un dépôt public. Une PR ouverte en parallèle en fait attendre
-quelques-uns. La mesure d'un seul runner n'était plus possible : la mesure du lundi à 1 000 séquences dure
+19 jobs en même temps avant CI10b, 16 depuis (10 tranches, 2 de contrôle, les deux jobs d'invariants,
+Terraform, macOS) : GitHub en donne 20 à un dépôt public, et une PR ouverte en parallèle attend moins.
+La mesure d'un seul runner n'était plus possible : la mesure du lundi à 1 000 séquences dure
 plus de 180 min (annulée à sa borne le 02/11). Chaque job a pour borne environ deux fois sa durée
-estimée : 90 min pour une tranche, 75 pour les invariants.
+estimée : 90 min pour une tranche, 75 pour la machine Azure, 60 pour le reste des tests.
 
-**La mesure du lundi passe aux tranches** (CI6d). `mutants.yml` tourne comme la porte : 14 tranches des
-mutants, 2 du jeu de contrôle, découpées sur les mêmes durées, puis leur total (`--total`, au budget du
-dispatch, 1 000 séquences et deux tours par défaut, tenu à la liste connue comme la porte). Il part même si une tranche a
-échoué, le run annulé à part : une tranche manquante y est rouge. 17 jobs, sous les 20 de GitHub ; à
-1 000 séquences, les machines d'invariants prennent deux fois plus : 150 min de borne par tranche. Ses
-actions sont celles de la porte, épinglées par commit. Les entrées du dispatch passent par
-l'environnement, jamais dans le texte du script (SEC6).
+**Ce que CI10b change à sa durée** (#581, l'étude CI9 prise en entier par Jonathan le 05/11). Une fois
+les leviers du harnais de CI10a posés (cibles du CD resserrées, un tour pour le déterministe, plus de run
+non muté d'une machine dans une tranche), le modèle de l'étude donnait une tranche la plus lourde
+d'environ 23 min sur dix tranches, autant que sur quatorze. **Le modèle du harnais, sur l'arbre fusionné
+avec CI10a, dit plus** : `python scripts/mutation_check.py --plan 10 --jobs 4 --skip-machine-baseline`
+(06/11) donne dix tranches équilibrées à ~25,1 min chacune (3 294 mutants), contre ~17,9 min à
+quatorze (CI10a) ; le jeu de contrôle, ~23,3 min pour la plus lourde de ses deux tranches. Ce modèle est
+optimiste d'un facteur 1,2 à 1,3 : environ 30 à 33 min mesurées attendues à dix tranches. Dix tranches
+rendent quatre runners aux PR pour quelques minutes de plus à la porte. Le job d'invariants à 2 000, de
+23 à 36 min, aurait été le chemin critique : scindé, la machine Azure seule tient environ 22 min, le reste
+en quatre processus moins. Le total n'attend plus macOS. Attendu : une porte de 56–68 min vers 30–35 min.
+**Estimé, pas mesuré** : la première porte après CI10a et CI10b le mesurera, et ce tableau sera remis à
+jour.
+
+**La mesure du lundi, réduite aux machines et au jeu de contrôle** (CI6d, puis CI10b). `mutants.yml`
+tourne en tranches : 14 tranches des seuls mutants dont la cible fait tourner une machine d'invariants
+(`--machines`, CI10a), 2 du jeu de contrôle, découpées sur les durées mesurées, puis leur total
+(`--total --machines`, au budget du dispatch, 1 000 séquences et deux tours par défaut, tenu à la liste
+connue comme la porte). Ce sont les seuls verdicts qu'un budget fait bouger : un mutant d'un test
+déterministe a le même verdict à 60 et à 1 000 séquences, et la porte mesure chaque mutant de l'arbre à
+chaque release (CI9 : du lundi, environ 54 h de runner à environ 23 h). Chaque tranche refait le run non
+muté de sa machine (pas de `--skip-machine-baseline` : aucun job d'invariants ne prouve la base ici). Le
+total part même si une tranche a échoué, le run annulé à part : une tranche manquante y est rouge.
+17 jobs, sous les 20 de GitHub ; à 1 000 séquences, une tranche des machines prend environ 80 min :
+150 min de borne. Ses actions sont celles de la porte, épinglées par commit. Les entrées du dispatch
+passent par l'environnement, jamais dans le texte du script (SEC6).
 
 **Si elle est rouge.**
 - **Un vrai rouge** (un invariant, un mutant qui survit hors de la liste connue, un test) : la release
@@ -2817,8 +2891,9 @@ l'environnement, jamais dans le texte du script (SEC6).
   le modèle de ChromaDB) est déjà retenté trois fois dans le job (CI8, « Ce que la CI retente ») : un
   rouge qui reste après ses trois tentatives est une vraie panne du réseau. Les tests, la mutation et
   les invariants ne sont jamais retentés.
-- **Un macOS rouge, annulé ou sans runner** ne rend pas la porte rouge : il se lit dans le résumé du run,
-  et un vrai rouge macOS se corrige par un lot, comme sur `main` et la nuit (CI5).
+- **Un macOS rouge, annulé, sans runner ou encore en cours** ne rend pas la porte rouge et ne la retient
+  pas (CI10b) : il se lit dans le résumé du run, et un vrai rouge macOS se corrige par un lot, comme sur
+  `main` et la nuit (CI5).
 - **À mesurer au premier run réel** : la conclusion du run quand le job macOS, qui a `continue-on-error`,
   est **annulé** (à sa borne, ou faute de runner) plutôt que rouge. Le cas rouge laisse le run vert (c'est
   ce que fait `continue-on-error`). Le cas annulé n'est pas mesuré. Si GitHub conclut alors le run

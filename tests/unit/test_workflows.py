@@ -1323,7 +1323,11 @@ GATE = ROOT / ".github" / "workflows" / "release-gate.yml"
 GATE_SCOPE = ("github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') "
               "&& github.event.pull_request.head.repo.full_name == github.repository)")
 GATE_REF = "${{ github.event.pull_request.head.sha || github.sha }}"
-MUTANT_SHARDS, CONTROL_SHARDS = 14, 2
+# CI10b (#581, L5): ten shards at the gate, fourteen before; the Monday keeps fourteen of the machines'.
+MUTANT_SHARDS, CONTROL_SHARDS, MONDAY_SHARDS = 10, 2, 14
+# L6: the gate's tests in two jobs — Azure's machine alone, every other test beside it.
+GATE_TESTS = ("invariants-azure", "invariants-rest")
+AZURE_MACHINE = "tests/unit/test_invariants.py"
 MACOS_SAID = "Said in the run's summary, never blocking"
 
 
@@ -1392,30 +1396,58 @@ def test_every_job_of_the_gate_is_bounded():
             assert "continue-on-error" not in step, (name, step.get("name") or step.get("uses"))
             if "if" in step:                          # macOS's summary alone, said whatever came before
                 assert (name, step.get("name"), step["if"]) == ("macos", MACOS_SAID, "always()"), (name, step)
-    assert jobs["invariants"]["timeout-minutes"] <= 75 and jobs["gate"]["timeout-minutes"] <= 5
+    assert all(jobs[name]["timeout-minutes"] <= 75 for name in GATE_TESTS) and jobs["gate"]["timeout-minutes"] <= 5
+
+
+def _gate_pytest(name: str) -> str:
+    (step,) = [s for s in _gate()["jobs"][name]["steps"] if "pytest" in (s.get("run") or "")]
+    return step["run"]
 
 
 def test_the_gate_runs_every_test_with_2000_invariant_sequences_on_linux():
-    job = _gate()["jobs"]["invariants"]
-    assert job["runs-on"] == "ubuntu-latest"
-    (step,) = [s for s in job["steps"] if "pytest" in (s.get("run") or "")]
-    assert step["run"].startswith("python -m pytest tests/ -q")
-    assert step["env"] == {"GLORFINDEL_INVARIANT_EXAMPLES": "2000", "GLORFINDEL_INVARIANT_DB": ".hypothesis-invariants"}
-    assert any("actions/cache/restore" in (s.get("uses") or "") and s["with"]["path"] == ".hypothesis-invariants"
-               for s in job["steps"])
+    """CI10b (#581, L6): in two jobs side by side, each test in exactly one — Azure's machine alone
+    (one test, the longest), every other test in four processes beside it, the AWS machine among
+    them; both at 2 000 sequences, replaying first what the night kept."""
+    jobs = _gate()["jobs"]
+    for name in GATE_TESTS:
+        job = jobs[name]
+        assert job["runs-on"] == "ubuntu-latest", name
+        (step,) = [s for s in job["steps"] if "pytest" in (s.get("run") or "")]
+        assert step["env"] == {"GLORFINDEL_INVARIANT_EXAMPLES": "2000",
+                               "GLORFINDEL_INVARIANT_DB": ".hypothesis-invariants"}, name
+        assert "-o faulthandler_timeout=2400" in step["run"], name
+        assert any("actions/cache/restore" in (s.get("uses") or "") and s["with"]["path"] == ".hypothesis-invariants"
+                   and job["steps"].index(s) < job["steps"].index(step) for s in job["steps"]), name
+    # the machine alone in one; every other test in the other, the machine left out by its file alone
+    assert _gate_pytest("invariants-azure") == f"python -m pytest {AZURE_MACHINE} -q -o faulthandler_timeout=2400"
+    assert _gate_pytest("invariants-rest") == ("python -m pytest tests/ -q -n 4 --dist load "
+                                               f"--ignore={AZURE_MACHINE} -o faulthandler_timeout=2400")
+    # Azure's machine is one test, the file holds no other: nothing else is left out with it.
+    import ast
+    tree = ast.parse((ROOT / AZURE_MACHINE).read_text(encoding="utf-8"))
+    tests = [n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))
+             and (n.name.startswith("test_") or n.name.startswith("Test"))]
+    assert tests == ["test_isolation_invariants"], tests
 
 
 def test_the_gate_runs_the_whole_mutation_in_shards_control_set_included():
     """`--examples 500 --rounds 2 --jobs 4`, each shard of the matrix once; the control set too; the
     total checks every shard, then that no mutant survived a round outside the known survivors
-    (CI6e: `min_caught` before) — the harness holds it, nothing of the workflow passes over it."""
+    (CI6e: `min_caught` before) — the harness holds it, nothing of the workflow passes over it.
+    CI10b (#581): ten shards (L5), and no unmutated run of a machine in a shard
+    (`--skip-machine-baseline`, L3): the gate's invariant jobs prove the base at 2 000. Never
+    `--machines`: the gate measures every mutant of the tree."""
     jobs = _gate()["jobs"]
+    assert MUTANT_SHARDS == 10
     for name, n, flag in (("mutants", MUTANT_SHARDS, ""), ("control", CONTROL_SHARDS, "--control ")):
         job = jobs[name]
         assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": list(range(1, n + 1))}}, name
+        assert job["name"] == ("mutants (shard ${{ matrix.shard }}/10)" if name == "mutants"
+                               else "control set (shard ${{ matrix.shard }}/2)"), name
         (step,) = [s for s in job["steps"] if "mutation_check.py" in (s.get("run") or "")]
         assert step["run"] == (f"python scripts/mutation_check.py {flag}--examples 500 --rounds 2 --jobs 4 "
-                               f'--shard "$SHARD/{n}" --json "{name}-$SHARD.json"'), step["run"]
+                               f'--skip-machine-baseline --shard "$SHARD/{n}" --json "{name}-$SHARD.json"'), step["run"]
+        assert "--machines" not in step["run"]
         assert step["env"] == {"SHARD": "${{ matrix.shard }}"}
         (up,) = [s for s in job["steps"] if str(s.get("uses") or "").startswith("actions/upload-artifact@")]
         assert up["with"]["name"] == f"{name}-${{{{ matrix.shard }}}}" and up["with"]["if-no-files-found"] == "error"
@@ -1429,28 +1461,46 @@ def test_the_gate_runs_the_whole_mutation_in_shards_control_set_included():
     assert down["with"] == {"path": "mutants-results"}
 
 
-# CI6d (#545): the Monday measure in the gate's shards — on one runner it outlasted its 180 min.
+def test_the_gate_s_jobs_fit_githubs_twenty_at_once():
+    """CI10b (#581, L5): the jobs that start at once — the shards, the two invariant jobs, Terraform and
+    macOS — are 16, under the 20 GitHub gives a public repository; four runners more for the pull
+    requests than with fourteen shards (19). The count and the total wait for them."""
+    jobs = _gate()["jobs"]
+    first = [j for j in jobs.values() if not j.get("needs")]
+    width = sum(len(((j.get("strategy") or {}).get("matrix") or {}).get("shard", [None])) for j in first)
+    assert width == MUTANT_SHARDS + CONTROL_SHARDS + len(GATE_TESTS) + 2 == 16 <= 20
+    assert {k for k, j in jobs.items() if j.get("needs")} == {"mutants-total", "gate"}
+
+
+# CI6d (#545): the Monday measure in shards — on one runner it outlasted its 180 min.
 MONDAY = ROOT / ".github" / "workflows" / "mutants.yml"
 MONDAY_INPUTS = {"EXAMPLES": "${{ inputs.examples || '1000' }}", "ROUNDS": "${{ inputs.rounds || '2' }}"}
 
 
 def test_the_monday_measure_runs_in_the_gate_s_shards_and_their_total():
-    """Fourteen shards of the mutants and two of the control set, as release-gate.yml cuts them, then
-    their total: each mutant of the tree measured once, at the dispatcher's budget, the count held
-    to no survivor outside the known ones (CI6e) — never more jobs than GitHub gives a public
-    repository at once (20)."""
+    """Fourteen shards of the machines' mutants and two of the control set, then their total: each
+    mutant selected measured once, at the dispatcher's budget, the count held to no survivor outside
+    the known ones (CI6e) — never more jobs than GitHub gives a public repository at once (20).
+    CI10b (#581, L13): only the mutants whose target runs an invariant machine (`--machines`, in each
+    shard and in the total) and the control set, at 1 000 sequences — the only verdicts a budget
+    moves; the gate measures every mutant at each release. The unmutated machine still runs in each
+    shard (never `--skip-machine-baseline`: no invariant job here proves the base)."""
     doc, gate = _load(MONDAY), _gate()["jobs"]
     jobs = doc["jobs"]
     assert doc["on"]["schedule"] == [{"cron": "41 4 * * 1"}] and doc["permissions"] == {"contents": "read"}
     assert set(jobs) == {"mutants", "control", "mutants-total"}
-    for name, n, flag in (("mutants", MUTANT_SHARDS, ""), ("control", CONTROL_SHARDS, "--control ")):
+    assert doc["on"]["workflow_dispatch"]["inputs"]["examples"]["default"] == "1000"
+    for name, n, flag, select in (("mutants", MONDAY_SHARDS, "", "--machines "),
+                                  ("control", CONTROL_SHARDS, "--control ", "")):
         job = jobs[name]
-        assert job["strategy"] == gate[name]["strategy"] == {"fail-fast": False,
-                                                             "matrix": {"shard": list(range(1, n + 1))}}
+        assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": list(range(1, n + 1))}}
+        if name == "control":
+            assert job["strategy"] == gate[name]["strategy"]
         steps = job["steps"]
         (step,) = [s for s in steps if "mutation_check.py" in (s.get("run") or "")]
         assert step["run"] == (f'python scripts/mutation_check.py {flag}--examples "$EXAMPLES" --rounds "$ROUNDS" '
-                               f'--jobs 4 --shard "$SHARD/{n}" --json "{name}-$SHARD.json"'), step["run"]
+                               f'--jobs 4 {select}--shard "$SHARD/{n}" --json "{name}-$SHARD.json"'), step["run"]
+        assert "--skip-machine-baseline" not in step["run"]
         assert step["env"] == {**MONDAY_INPUTS, "SHARD": "${{ matrix.shard }}"}
         (up,) = [s for s in steps if str(s.get("uses") or "").startswith("actions/upload-artifact@")]
         assert up["with"]["name"] == f"{name}-${{{{ matrix.shard }}}}" and up["with"]["if-no-files-found"] == "error"
@@ -1460,14 +1510,15 @@ def test_the_monday_measure_runs_in_the_gate_s_shards_and_their_total():
     total = jobs["mutants-total"]
     assert total["needs"] == ["mutants", "control"] and total["if"] == "${{ !cancelled() }}"
     (step,) = [s for s in total["steps"] if "mutation_check.py" in (s.get("run") or "")]
-    assert step["run"] == (f"python3 scripts/mutation_check.py --total mutants-results --shards {MUTANT_SHARDS} "
-                           f'--control-shards {CONTROL_SHARDS} --examples "$EXAMPLES" --rounds "$ROUNDS"')
+    assert step["run"] == (f"python3 scripts/mutation_check.py --total mutants-results --machines "
+                           f"--shards {MONDAY_SHARDS} --control-shards {CONTROL_SHARDS} "
+                           f'--examples "$EXAMPLES" --rounds "$ROUNDS"')
     assert step["env"] == MONDAY_INPUTS and "continue-on-error" not in step
     assert set(doc["on"]["workflow_dispatch"]["inputs"]) == {"examples", "rounds"}     # min_caught gone (CI6e)
     (down,) = [s for s in total["steps"] if str(s.get("uses") or "").startswith("actions/download-artifact@")]
     assert down["with"] == {"path": "mutants-results"}
     width = sum(len(j.get("strategy", {}).get("matrix", {}).get("shard", [None])) for j in jobs.values())
-    assert width == MUTANT_SHARDS + CONTROL_SHARDS + 1 <= 20
+    assert width == MONDAY_SHARDS + CONTROL_SHARDS + 1 <= 20
     # the gate's own actions, pinned by commit, and the checkout's credentials never kept
     assert all(PINNED.match(a) for a in _actions(doc)), _actions(doc)
     assert set(_actions(doc)) <= set(_actions(_gate()))
@@ -1485,7 +1536,7 @@ def test_the_gate_s_test_runs_restore_chroma_s_model_as_ci_does():
     run, the mutants' unmutated runs fetched it at once into one place, two shards red."""
     jobs = _gate()["jobs"]
     pins = set()
-    for name in ("invariants", "mutants", "control"):
+    for name in (*GATE_TESTS, "mutants", "control"):
         steps = jobs[name]["steps"]
         restores = [i for i, s in enumerate(steps) if s.get("with") == CHROMA_CACHE]
         assert len(restores) == 1, name
@@ -1518,13 +1569,16 @@ def test_the_gate_runs_ci_s_macos_job_and_its_terraform_tests_word_for_word():
     assert jobs["terraform"]["env"] == ci["terraform-test"]["env"] == {"CHECKPOINT_DISABLE": "1"}
 
 
-def test_the_last_job_waits_for_every_other_one():
+def test_the_last_job_waits_for_every_job_that_blocks_never_macos():
+    """CI10b (#581, L7): the total needs every job but the one that informs — on 05/11 it concluded
+    12 min after the last job that blocks, macOS waiting for a runner. macOS says itself."""
     jobs = _gate()["jobs"]
     assert jobs["gate"]["name"] == "release gate"
-    assert sorted(jobs["gate"]["needs"]) == sorted(n for n in jobs if n != "gate")
+    assert sorted(jobs["gate"]["needs"]) == sorted(n for n in jobs if n not in ("gate", "macos"))
+    informing = [k for k, j in jobs.items() if j.get("continue-on-error") is True]
+    assert informing == ["macos"] and not set(informing) & set(jobs["gate"]["needs"])
     (step,) = jobs["gate"]["steps"]
-    # It waits for macOS too, to say it — and asks nothing of it: macOS alone informs.
-    assert step["env"] == {"NEEDS": "${{ toJSON(needs) }}", "INFORMATIVE": "macos"}
+    assert step["env"] == {"NEEDS": "${{ toJSON(needs) }}"}
 
 
 def test_macos_informs_and_never_blocks():
@@ -1551,7 +1605,7 @@ def _gate_says(tmp_path, needs: dict) -> tuple[int, str]:
     script = step["run"].split("<<'EOF'\n", 1)[1].rsplit("EOF", 1)[0]
     path, summary = tmp_path / "gate.py", tmp_path / "summary.md"
     path.write_text(textwrap.dedent(script), encoding="utf-8")
-    env = {"NEEDS": json.dumps(needs), "INFORMATIVE": step["env"]["INFORMATIVE"], "GITHUB_STEP_SUMMARY": str(summary)}
+    env = {"NEEDS": json.dumps(needs), "GITHUB_STEP_SUMMARY": str(summary)}
     code = subprocess.run([sys.executable, str(path)], env=env, capture_output=True, text=True).returncode
     return code, summary.read_text(encoding="utf-8") if summary.exists() else ""
 
@@ -1562,24 +1616,21 @@ def _gate_says(tmp_path, needs: dict) -> tuple[int, str]:
     ({"a": "success", "b": "cancelled"}, False),
     ({"a": "skipped", "b": "success"}, False),
     ({"a": "success", "b": None}, False),
-    ({}, False),
-    # macOS informs: red, cancelled, skipped, never acquired — the gate as the others say.
-    ({"a": "success", "macos": "failure"}, True),
-    ({"a": "success", "macos": "cancelled"}, True),
-    ({"a": "success", "macos": "skipped"}, True),
-    ({"a": "cancelled", "macos": "success"}, False),
-    ({"macos": "success"}, False),                       # nothing that blocks: never green
+    ({}, False),                                         # nothing that blocks: never green
+    # CI10b (L7): every job it needs blocks — none is let off, whatever its name.
+    ({"a": "success", "macos": "failure"}, False),
+    ({"a": "success", "macos": "cancelled"}, False),
 ])
 def test_the_last_job_is_green_only_when_every_job_that_blocks_is(tmp_path, results, green):
     """Run as GitHub runs it: `needs` as JSON. A cancelled or skipped job that blocks is red; each
-    job and its role said in the run's summary."""
+    job said in the run's summary, and that macOS informs by its own."""
     needs = {k: {"result": v, "outputs": {}} for k, v in results.items()}
     code, summary = _gate_says(tmp_path, needs)
     assert (code == 0) is green
     assert ("**Porte de release verte**" if green else "**Porte de release rouge**") in summary
     for k, v in results.items():
-        role = "informe, ne bloque pas" if k == "macos" else "bloque"
-        assert f"| {k} | {v} | {role} |" in summary, summary
+        assert f"| {k} | {v} | bloque |" in summary, summary
+    assert "macOS informe, ne bloque pas" in summary
 
 
 def test_release_py_reads_this_workflow_by_its_file_name():
@@ -1854,11 +1905,11 @@ RETRIED = {
     ("ci.yml", "audit", "Install pip-audit"),
     ("ci.yml", "test-macos", _INSTALL),
     *(("ci.yml", "terraform-test", s) for s in (_TF, *_INITS)),
-    *(("release-gate.yml", job, s) for job in ("invariants", "mutants", "control") for s in (_INSTALL, CHROMA_STEP)),
+    *(("release-gate.yml", job, s) for job in (*GATE_TESTS, "mutants", "control") for s in (_INSTALL, CHROMA_STEP)),
     ("release-gate.yml", "macos", _INSTALL),
     *(("release-gate.yml", "terraform", s) for s in (_TF, *_INITS)),
     *(("mutants.yml", job, s) for job in ("mutants", "control") for s in (_INSTALL, CHROMA_STEP)),
-    *(("components.yml", "component", s) for s in (_INSTALL, CHROMA_STEP)),
+    *(("components.yml", job, s) for job in ("component", "components") for s in (_INSTALL, CHROMA_STEP)),
     ("invariants.yml", "invariants", _INSTALL),
     ("pip-audit.yml", "audit", "Install pip-audit"),
     ("publish.yml", "publish", "syft"), ("publish.yml", "publish", "cosign"),
@@ -2078,3 +2129,161 @@ def test_ci8_the_command_said_in_a_workflow_message_cannot_end_it(tmp_path):
 def test_ci8_without_a_command_it_says_how_and_fails(tmp_path):
     res, calls, slept = _retry_sh(tmp_path, None)
     assert res.returncode == 2 and "usage" in res.stderr and calls == [] and slept == []
+
+
+# ── CI10b (#581): the CI in its place — the anchors at each merge, the suite in four processes,
+# Components in one job on a pull request (the gate and the Monday: above) ──────────────────────────
+COMPONENTS_WF = ROOT / ".github" / "workflows" / "components.yml"
+ANCHORS = "python scripts/mutant_anchors.py"
+XDIST = "-n 4 --dist load"
+
+
+def _ci_test_steps() -> list[dict]:
+    return _load(CI)["jobs"]["test"]["steps"]
+
+
+def test_ci10b_every_mutant_is_anchored_on_each_pull_request_and_each_push():
+    """L16: scripts/mutant_anchors.py in ci.yml's Linux job, on both Pythons, before the long tests
+    — a mutant made stale by another merge is seen at the merge (M825, M945, M1225 were, on main:
+    #299), never at the next gate. Nothing retried, nothing allowed to fail."""
+    job = _load(CI)["jobs"]["test"]
+    assert {e: _runs(job, e) for e in EVENTS} == {"push": True, "pull_request": True, "schedule": False}
+    steps = _ci_test_steps()
+    (anchors,) = [s for s in steps if "mutant_anchors.py" in (s.get("run") or "")]
+    assert anchors["run"] == ANCHORS and not ({"if", "continue-on-error", "env"} & set(anchors))
+    (tests,) = [s for s in steps if (s.get("run") or "").startswith("python -m pytest tests/ ")]
+    install = [i for i, s in enumerate(steps) if "-r requirements/dev.txt" in str(s.get("run") or "")]
+    assert install[0] < steps.index(anchors) < steps.index(tests)
+    assert (ROOT / "scripts" / "mutant_anchors.py").is_file()
+
+
+def test_ci10b_the_suite_runs_in_four_processes_from_the_dev_lock():
+    """L8: ci.yml's tests in four processes, test by test — pytest-xdist declared in the dev extra
+    and locked with its hashes (M-3), the same tests, both Pythons, 200 sequences on a pull request
+    and 500 on a push; and the gate's every other test in four processes too."""
+    (tests,) = [s for s in _ci_test_steps() if (s.get("run") or "").startswith("python -m pytest tests/ ")]
+    assert tests["run"] == f"python -m pytest tests/ -q {XDIST} -o faulthandler_timeout=480"
+    assert _load(CI)["jobs"]["test"]["strategy"]["matrix"]["python-version"] == ["3.11", "3.12"]
+    assert _expr(tests["env"]["GLORFINDEL_INVARIANT_EXAMPLES"], "pull_request") == "200"
+    assert XDIST in _gate_pytest("invariants-rest")
+    import tomllib
+    dev = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["optional-dependencies"]["dev"]
+    assert any(re.match(r"pytest-xdist\b", d) for d in dev), dev
+    lock = (ROOT / "requirements" / "dev.txt").read_text(encoding="utf-8")
+    for name in ("pytest-xdist", "execnet"):
+        assert re.search(rf"^{name}==[\w.]+ \\\n    --hash=sha256:[0-9a-f]{{64}}", lock, re.M), name
+    # A dev tool only: never in an image's lock.
+    for image in ("glorfindel.txt", "annatar.txt"):
+        assert "pytest-xdist" not in (ROOT / "requirements" / image).read_text(encoding="utf-8"), image
+
+
+def _components() -> list[str]:
+    """component_check.py's COMPONENTS, read from its text: the keys of its dict."""
+    import ast
+    tree = ast.parse((ROOT / "scripts" / "component_check.py").read_text(encoding="utf-8"))
+    (value,) = [n.value for n in tree.body if isinstance(n, ast.AnnAssign)
+                and getattr(n.target, "id", None) == "COMPONENTS"]
+    return sorted(k.value for k in value.keys)
+
+
+def test_ci10b_components_run_in_one_job_on_a_pull_request_each_component_still_alone():
+    """L11: on a pull request one job runs, for each component of component_check.py, the two checks
+    the matrix runs on a push (its imports, then its tests, the others absent), then the compose
+    profiles — each step run whatever the component before it said, once the install and ChromaDB's
+    model are there. On a push to main, the matrix and the profiles' job, as before; never both."""
+    doc = _load(COMPONENTS_WF)
+    jobs = doc["jobs"]
+    on = {e: {k for k, j in jobs.items() if _runs(j, e)} for e in ("push", "pull_request")}
+    assert on == {"push": {"component", "profiles"}, "pull_request": {"components"}}
+    matrix = jobs["component"]["strategy"]["matrix"]["component"]
+    assert sorted(matrix) == _components()
+    per = [s["run"] for s in jobs["component"]["steps"] if "component_check.py" in (s.get("run") or "")]
+    want = [r.replace("${{ matrix.component }}", c) for c in matrix for r in per]
+    one = jobs["components"]
+    runs = [s for s in one["steps"] if "component_check.py" in (s.get("run") or "")]
+    assert [s["run"] for s in runs] == want
+    for s in runs:
+        assert s["name"].split(" — ")[0] == s["run"].split()[2], s           # each step names its component
+    (install,) = [s for s in one["steps"] if s.get("name") == _INSTALL]
+    (model,) = [s for s in one["steps"] if s.get("name") == CHROMA_STEP]
+    assert install["id"] == "install" and model["id"] == "model"
+    assert one["steps"].index(install) < one["steps"].index(model) < one["steps"].index(runs[0])
+    (profiles,) = [s for s in one["steps"] if "profiles-check" in (s.get("run") or "")]
+    assert profiles["run"] == "make profiles-check" and profiles["if"] == "${{ !cancelled() }}"
+    assert [s["run"] for s in jobs["profiles"]["steps"] if s.get("run")] == ["make profiles-check"]
+    assert one["steps"].index(profiles) == len(one["steps"]) - 1
+    for name, job in jobs.items():
+        assert isinstance(job.get("timeout-minutes"), int) and 0 < job["timeout-minutes"] <= 30, name
+    # Its check names are none of main's required ones, whatever the event (CI5, H1c).
+    assert not _check_names(doc) & set(_required())
+
+
+def _reads_the_model(component: str) -> bool:
+    """Whether a component reads ChromaDB's model: its matrix job restores the model's cache for it."""
+    (cache,) = [s for s in _load(COMPONENTS_WF)["jobs"]["component"]["steps"]
+                if (s.get("with") or {}).get("path") == CHROMA_CACHE["path"]]
+    cond = str(cache.get("if") or "")
+    m = re.fullmatch(r"matrix\.component == '(\w+)'", cond)
+    assert m, cond
+    return component == m.group(1)
+
+
+def test_ci10b_a_component_that_reads_no_model_never_waits_for_its_download():
+    """Review of CI10b: in the pull request's job, a component whose tests read no ChromaDB model
+    (core, Annatar, Gothmog: the matrix restores the model for Glorfindel alone) runs on the install
+    alone — a model that fails to download never skips it, nor hides its red. Glorfindel's steps wait
+    for the model, as its matrix job does."""
+    steps = _load(COMPONENTS_WF)["jobs"]["components"]["steps"]
+    runs = [s for s in steps if "component_check.py" in (s.get("run") or "")]
+    readers = {c for c in _components() if _reads_the_model(c)}
+    assert readers == {"glorfindel"}
+    for s in runs:
+        needs = "model" if s["run"].split()[2] in readers else "install"
+        assert s["if"] == f"${{{{ !cancelled() && steps.{needs}.outcome == 'success' }}}}", s
+
+
+def _harness_options() -> set[str]:
+    """The options scripts/mutation_check.py's parser knows, as its `--help` says them."""
+    import subprocess
+    import sys
+    out = subprocess.run([sys.executable, str(ROOT / "scripts" / "mutation_check.py"), "--help"],
+                         capture_output=True, text=True, cwd=ROOT, check=True).stdout
+    # The options' column only, never a word of a description (« with --total: … »).
+    options = out.split("\noptions:\n", 1)[1]
+    return set(re.findall(r"^ {2}(?:-\w, )?(--[a-z][a-z0-9-]*)", options, re.M))
+
+
+def _harness_calls() -> list[tuple[str, str, list[str]]]:
+    """(workflow, job, the options) of each call to scripts/mutation_check.py in a workflow's `run`."""
+    calls = []
+    for wf, job, step in _job_steps():
+        # A folded scalar (`>-`) is one line already; a backslash goes on with the next.
+        words = str(step.get("run") or "").replace("\\\n", " ").split()
+        for i, w in enumerate(words):
+            if not w.endswith("scripts/mutation_check.py"):
+                continue
+            tail = words[i + 1:]
+            end = next((k for k, x in enumerate(tail) if x in ("&&", "||", ";", "|")), len(tail))
+            calls.append((wf, job, [x.split("=", 1)[0] for x in tail[:end] if x.startswith("--")]))
+    return calls
+
+
+def test_ci10b_every_option_a_workflow_gives_the_harness_is_one_its_parser_knows():
+    """After CI10a's merge: each option a workflow passes to scripts/mutation_check.py (the gate's,
+    the Monday's) is one its parser knows by its whole name — argparse would take an abbreviation
+    (`--machine` for `--machines`), and an option it does not know only fails the run on GitHub."""
+    known = _harness_options()
+    assert {"--machines", "--skip-machine-baseline", "--total", "--shard", "--json"} <= known, known
+    calls = _harness_calls()
+    assert {wf for wf, _job, _opts in calls} == {"release-gate.yml", "mutants.yml"}, calls
+    for wf, job, opts in calls:
+        assert opts and set(opts) <= known, (wf, job, sorted(set(opts) - known))
+
+
+def test_ci10b_the_pull_request_s_components_job_pins_its_actions_as_the_gate_does():
+    """Review of CI10b: the new job's actions pinned by commit, each one the release gate already
+    pins — no action added. The matrix kept its tags (a debt said, for a SEC lot)."""
+    job = _load(COMPONENTS_WF)["jobs"]["components"]
+    actions = [s["uses"] for s in job["steps"] if s.get("uses")]
+    assert actions and all(PINNED.match(a) for a in actions), actions
+    assert set(actions) <= set(_actions(_gate())), set(actions) - set(_actions(_gate()))

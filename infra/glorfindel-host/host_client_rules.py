@@ -41,6 +41,11 @@ from glorfindel import rule_layers  # noqa: E402
 from glorfindel.detection_rules import load_config, shipped_rules_path  # noqa: E402
 
 
+# CAN2: the GUID a rule's `env_guids` variables take while the push reads the layer back — no
+# identifier, H0's own value is never on this poste.
+_STAND_IN = "00000000-0000-0000-0000-000000000000"
+
+
 def _rules_to_push(path: Path) -> list[dict]:
     try:
         data = yaml.safe_load(path.read_text())
@@ -70,8 +75,13 @@ def merge(rules_path: Path, h0_layer: Path, out: Path, base: Path | None = None)
     # Read back as the watch will, before anything is written: the merged layer over the base.
     staged = out.with_name(f".{out.name}.check")
     rule_layers._write(staged, data)
+    # CAN2: what a rule takes from the WATCH's environment (`env_guids`) is H0's, never this
+    # poste's: read with a stand-in GUID, the rule is checked as the watch reads it once H0 has
+    # the variable — and that it needs it is said (without it, on H0, the shipped rule runs).
+    needs = {v: _STAND_IN for r in rules if isinstance(r.get("env_guids"), list)
+             for v in r["env_guids"] if isinstance(v, str)}
     try:
-        cfg = load_config(base or shipped_rules_path(), client_layer=staged)
+        cfg = load_config(base or shipped_rules_path(), client_layer=staged, environ=needs)
     finally:
         staged.unlink(missing_ok=True)
     loaded = {r.name for r in cfg.rules if r.layer == "client"}
@@ -86,6 +96,11 @@ def merge(rules_path: Path, h0_layer: Path, out: Path, base: Path | None = None)
         raise rule_layers.ClientLayerError("rien d'envoyé : " + " ; ".join(wrong)
                                            + "".join(f"\n  · {note}" for note in cfg.notes))
     rule_layers._write(out, data)
+    for rule in rules:
+        if rule.get("enabled", True) and isinstance(rule.get("env_guids"), list):
+            said.append(f"ℹ « {rule['name']} » prend {', '.join(map(str, rule['env_guids']))} dans "
+                        "l'environnement de la watch de H0 (host.env, un GUID) : sans elle, la règle "
+                        "livrée tourne à sa place, et la watch le dit")
     return said + [f"  · {note}" for note in cfg.notes]
 
 

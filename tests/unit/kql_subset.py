@@ -8,7 +8,7 @@ Only what the Syslog and AzureActivity rules use: a table, then `where`, `extend
 Analytics, exact at the few values a rule counts —, several of them), `project`, `order by`, `limit`; predicates
 `==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`, `!has`, `in (…)`, `!in (…)`, `in~ (…)`, `!in~ (…)`
 (case-insensitive on strings — AL2, AL1d), `matches regex`, `startswith`, `endswith` (both
-case-insensitive, as in KQL — WL1), `and`, `or`, `not(…)`; functions `ago()`, `extract()`,
+case-insensitive, as in KQL — WL1), `contains`, `!contains` (case-insensitive — CAN2), `and`, `or`, `not(…)`; functions `ago()`, `extract()`,
 `iif()` (or `iff()`), `isempty()`, `isnotempty()`, `isnotnull()`, `strcat()`, `toint()`,
 `tolong()`, `tostring()`, `parse_json()`; a member (`.appid`) or an index (`["…"]`) on a column or on what a
 function returns — the Activity Log's `Claims`, AL2, AL1d. Anything
@@ -159,6 +159,12 @@ class _Parser:
             self.take()
             right = self.primary()
             return lambda r: str(left(r) or "").lower().endswith(str(right(r)).lower())
+        if op in ("contains", "!contains") and tok[0] in ("ident", "op"):
+            # KQL's substring match, case-insensitive (CAN2: no user's name as the caller).
+            self.take()
+            right = self.primary()
+            neg = op == "!contains"
+            return lambda r: (str(right(r)).lower() in str(left(r) or "").lower()) != neg
         if (op == "in" and tok[0] == "ident") or (op in ("!in", "in~", "!in~") and tok[0] == "op"):
             self.take()
             self.take("op", "(")

@@ -29,6 +29,7 @@ from glorfindel.detection_rules import load_config, shipped_rules_path  # noqa: 
 
 BENCH = ROOT / "infra" / "glorfindel-host" / "client_rules.bench.yaml"
 NAME = "sudo-privilege-escalation"
+CANARY = "nsg-change-outside-glorfindel"      # CAN2: its appid from the environment of H0's watch
 IP = "192.0.2.10"   # TEST-NET-1: no machine answers there
 APPROVED = {"name": "log-clearing", "ttp": "T1070.002", "assets": ["auto"], "monitoring_backends": ["law-main"],
             "query": 'Syslog\n| where SyslogMessage has "rm -f /var/log"\n'}
@@ -110,7 +111,7 @@ def test_an_h0_without_a_layer_gets_one_and_a_second_push_changes_nothing(tmp_pa
     res, _, home = _make(tmp_path)
     assert res.returncode == 0, res.stdout + res.stderr
     layer = home / ".glorfindel" / "client_rules.yaml"
-    assert list(_rules(layer)) == [NAME]
+    assert list(_rules(layer)) == [NAME, CANARY]
     first = layer.read_text()
     res, _, _ = _make(tmp_path)
     assert res.returncode == 0 and f"inchangée : « {NAME} »" in res.stdout
@@ -193,7 +194,7 @@ def test_merge_replaces_by_name_and_keeps_every_other_entry(tmp_path):
     said = host_client_rules.merge(BENCH, h0, out)
     assert f"remplacée : « {NAME} »" in said
     data = yaml.safe_load(out.read_text())
-    assert [r["name"] for r in data["rules"]] == ["log-clearing", NAME]
+    assert [r["name"] for r in data["rules"]] == ["log-clearing", NAME, CANARY]
     assert data["rules"][1]["interval_s"] == 30 and data["assets"] == [{"name": "a", "type": "azure_vm"}]
     assert not list(tmp_path.glob(".out.yaml.*"))
 
@@ -216,6 +217,25 @@ def test_merge_refuses_a_rule_the_watch_would_skip(tmp_path):
     with pytest.raises(host_client_rules.rule_layers.ClientLayerError, match="ignorée par la watch"):
         host_client_rules.merge(src, tmp_path / "absent.yaml", tmp_path / "out.yaml")
     assert not (tmp_path / "out.yaml").exists()
+
+
+def test_merge_reads_a_rule_that_takes_a_guid_of_h0_s_watch_with_a_stand_in_and_says_so(tmp_path, monkeypatch):
+    """CAN2: the canary's appid is H0's, never this poste's — the push reads the copy back with a
+    stand-in GUID (the copy checked as the watch reads it with its variable), writes it as it is
+    (`${…}` kept: H0's watch replaces it), and says that H0's watch needs the variable."""
+    monkeypatch.delenv("EREGION_RULE_CANARY_APPID", raising=False)
+    out = tmp_path / "out.yaml"
+    said = host_client_rules.merge(BENCH, tmp_path / "absent.yaml", out)
+    assert f"ajoutée : « {CANARY} »" in said
+    assert any("EREGION_RULE_CANARY_APPID" in line and "H0" in line and CANARY in line for line in said)
+    assert _rules(out)[CANARY] == _rules(BENCH)[CANARY]
+    assert "${EREGION_RULE_CANARY_APPID}" in _rules(out)[CANARY]["query"]
+    assert host_client_rules._STAND_IN not in out.read_text()
+    # A copy whose variable is named wrong is refused: the watch would skip it.
+    wrong = {**_rules(BENCH)[CANARY], "env_guids": ["AZURE_CLIENT_ID"]}
+    with pytest.raises(host_client_rules.rule_layers.ClientLayerError, match="ignorée par la watch"):
+        host_client_rules.merge(_write(tmp_path / "src.yaml", {"rules": [wrong]}), tmp_path / "absent.yaml",
+                                tmp_path / "out2.yaml")
 
 
 def test_merge_reads_against_the_base_of_this_checkout():

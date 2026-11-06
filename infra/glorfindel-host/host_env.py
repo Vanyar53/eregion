@@ -41,6 +41,11 @@ unreadable list refuses every identity — each verb of a plan a human's step, c
 breakdown. What is said names the variable and its source, never a value; the executor's client
 id empty is said as information (ℹ): it stays empty as long as the executor is not enabled.
 
+The azurerm canary's appid (CAN2, #605), EREGION_RULE_CANARY_APPID: the bench's copy of
+nsg-change-outside-glorfindel takes it from the watch's environment to set the canary's runs aside.
+An id, no secret, copied like the rest; empty or no GUID, it is said (`canary_warning`), never
+refused — the shipped rule runs, and the canary makes its cards.
+
 A value written, any of COPIED, never holds a line break, a carriage return, a quote, a `$` or a
 backslash (one pair of quotes around it is unwrapped, as compose reads it): refused, the
 variable named, never the value — a line break would add a variable of its own to host.env, a
@@ -106,8 +111,12 @@ COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID",
           # IA1: the analysis AI's model, never Glorfindel's — the hosted watch writes the
           # campaign reports with it (analysis/hosted_report.py).
           "EREGION_ANALYSIS_MODEL",
+          # CAN2: the azurerm canary's appid, which the bench's copy of nsg-change-outside-glorfindel
+          # takes from the watch's environment (`env_guids`) — an id, no secret.
+          "EREGION_RULE_CANARY_APPID",
           # NT1: who is never a target, read by the watch (eregion_core/never_target.py).
           *NEVER_TARGET)
+CANARY = "EREGION_RULE_CANARY_APPID"
 # The model's key is required by its provider (model_missing), never here.
 REQUIRED = ("AZURE_SUBSCRIPTION_ID",)
 MODEL = "GLORFINDEL_LLM_MODEL"
@@ -196,6 +205,22 @@ def never_target_warnings(environ: dict) -> list[str]:
             mark = "ℹ" if name == EXECUTOR else "⚠"
             said.append(f"{mark} {name} vide : {left}. Sa source : {source}.")
     return said
+
+
+_GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def canary_warning(value: str) -> str:
+    """CAN2: the azurerm canary's appid, as the watch reads it — said when it is set but no GUID
+    (the watch ignores it: the canary's runs make their cards, the shipped rule running). Empty is
+    not said here (a deployment without the bench's layer has no use of it): the watch says it, when
+    a rule of its layer needs it. Never the value; never a refusal. "" otherwise."""
+    value = value.strip()
+    if not value or _GUID.fullmatch(value):
+        return ""
+    return (f"⚠ {CANARY} n'est pas un GUID : la watch l'ignore, et les runs du canari azurerm font leurs "
+            "cartes nsg-change-outside-glorfindel (la règle livrée tourne). Sa source : l'appid du "
+            "principal du canari (docs/operations.md, « Le canari azurerm, sans secret »).")
 
 
 def never_target_read(env: dict) -> dict:
@@ -343,6 +368,8 @@ def check(dst: str) -> int:
     # NT1: the never_target list, as the watch receives it — said, never refused.
     for warning in never_target_warnings(never_target_read(env)):
         print(f"{dst}: {warning}", file=sys.stderr)
+    if canary := canary_warning(model_value(env.get(CANARY, ""))):      # CAN2: said, never refused
+        print(f"{dst}: {canary}", file=sys.stderr)
     if name == LEGACY_TOKEN:
         print(f"{dst}: console token under its former name, {LEGACY_TOKEN} — valid, nothing to rename")
     else:
@@ -365,6 +392,8 @@ def main(dst: str) -> int:
         print(f"ℹ {QUEUE_FLAG} / {QUEUE_KEYS} de ton environnement ne vont pas dans host.env : ce sont "
               f"les clés de ce poste, H0 a les siennes — {QUEUE_GESTURE}.", file=sys.stderr)
     for warning in never_target_warnings(never_target_read(env)):
+        print(warning, file=sys.stderr)
+    if warning := canary_warning(env.get(CANARY, "")):
         print(warning, file=sys.stderr)
     path.touch(mode=0o600)
     path.write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")

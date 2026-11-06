@@ -188,8 +188,13 @@ def record(
     explanation: str = "",
     replaces: dict[str, str] | None = None,
     identity_plan: dict | None = None,
+    target: dict | None = None,
 ) -> str:
     """Append an escalation and return its id.
+
+    `target` (AL1c, #597): what a card of the control plane or of an identity is about
+    (glorfindel/card_target.py) — kept on the card for the console and Discord; its `resource_id`
+    is the target's.
 
     `replaces` (L1A, #480): the pending cards this one takes the place of, by id, each with
     the note of its closure — closed in the same write as this card is written, never before.
@@ -316,6 +321,10 @@ def record(
         "status": "pending",
         "resolved_at": None,
     }
+    if target:
+        # AL1c (#597): what a card of the control plane or of an identity is filed on — its
+        # `resource_id` is the target's id; `vms`, the VMs an NSG covers, where the console shows it.
+        esc["target"] = target
     if identity_plan:
         # IR1a: the plan of an identity card, and the thread of its checks (« Verify »). Never a
         # proposal of FS1a: an identity card holds no action (`action_queue.proposed_verbs`).
@@ -774,7 +783,7 @@ def to_judge(since: datetime | None = None, limit: int = 100) -> list[dict]:
         card = {k: e.get(k) for k in (
             "id", "action", "escalation_type", "resource_id", "ttp", "severity", "confidence",
             "reason", "explanation", "action_params", "first_seen", "last_seen", "occurrences",
-            "status", "rule_name")}
+            "status", "rule_name", "target")}
         card["exercise"] = e.get("source") == "exercise"
         card["exercise_run"] = (e.get("exercise_run") or "") if card["exercise"] else ""
         card["recurrence"] = recurrence(e, escs)

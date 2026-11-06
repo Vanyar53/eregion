@@ -584,7 +584,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 
 Rien n'est lancé si `RUNS` est sous 3, ou si le verrou du checkout est celui de la référence : la commande dit alors « ce verrou est déjà celui de <tag> : donne BASE=<la release d'avant> », pour le cas où H0 tourne encore sur une release plus ancienne. Si la passe de référence échoue à l'import, la commande rappelle la règle : une PR de verrou ne porte pas de code qui exige ses nouvelles dépendances, il faut séparer les PR (`docs/operations.md`).
 
-**Le fichier** garde, pour chaque passage, le `lock_sha256`, `runs`, et par cas le résultat de chaque tirage : juste ou non, l'action, la confiance. Il ne garde ni raisonnement, ni ligne de journal, ni secret. Par exemple (factice, deux cas sur 17) :
+**Le fichier** garde, pour chaque passage, le `lock_sha256`, `runs`, et par cas le résultat de chaque tirage : juste ou non, l'action, la confiance. Il ne garde ni raisonnement, ni ligne de journal, ni secret. Par exemple (factice, deux cas sur 18) :
 
 ```json
 {"schema": "eregion.harness/2", "lock": "requirements/glorfindel.txt", "date": "2026-10-30",

@@ -108,9 +108,9 @@ glorfindel/
                           est retenue (last_seen figé) tant que gap < GLORFINDEL_DISCOVERY_RETENTION_H (défaut 8h), puis évincée
                           None sur erreur query → cache conservé (pas d'éviction sur panne)
                           audit.run() lance NSG/backup/compute en parallèle (le RSV ne s'empile plus sur le reste)
-  agent.py              → LangGraph 8 nodes + _SOURCE_LANGUAGES map (source → query lang)
+  agent.py              → LangGraph 10 nodes + _SOURCE_LANGUAGES map (source → query lang)
                           load_context → [poll_detection | propose_detection_rule]
-                          → investigate → decide → execute_action → verify_action → store_cycle
+                          → confirm_facts → investigate → decide → execute_action → verify_action → store_cycle
   actions.py            → façade (A1, 26/10) : `from glorfindel.actions import X` marche pour chaque nom
                           de l'ancien fichier de 4 394 lignes, découpé sans changer son texte. Un seul espace
                           de noms : un nom écrit à travers elle (monkeypatch de `_ISOLATION_STATE_DIR`, `_vm_lock`…)
@@ -165,6 +165,9 @@ glorfindel/
                           Handlers en aval déjà prêts (discovery except→None garde cache ; poller
                           except→last_error ; investigate try→[]). /api/state.monitoring_backends porte
                           `reachable`/`last_error` (dérivé du poll status) → la console rougit le DETECT.
+  card_target.py        → AL1c : ce qu'une carte du plan de contrôle ou d'identité vise (le NSG et ses VM, la VM
+                          d'un disque, la portée d'un rôle, le groupe, l'identité), lu dans la ligne ; Topology : ce
+                          qu'Azure en dit (ReadersMixin.control_topology), en cache — jamais une VM sans lien
   detection_rules.py    → DetectionRule dataclass + RulePoller (continuous polling, status persistence)
                           load_config(path, glorfindel_cfg=None, client_layer=True) — workspace_id résolu depuis
                           glorfindel_cfg ; P1 : la base `path`, puis la couche du client par-dessus (merge_layers :
@@ -219,7 +222,8 @@ glorfindel/
                           et d'eux les seuls champs qu'il écrit ; le reste refusé (journal, compteur), jamais décidé. Le recovery_complete : seul celui de `glorfindel restore` (ce
                           processus, ou ~/.glorfindel/recovery_signals/) lève une isolation seul
                           SEC4a : l'attack_time d'un attack_started borné (2 h en arrière, 5 min en avant), sinon refusé
-  bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command ;
+  bot.py                → Discord bot — un fil par ressource (VM, NSG, groupe ; un seul pour les identités, AL1c),
+                          boutons Acquitter + Commande, /pending slash command ;
                           ButtonPolicy (M-3) : DISCORD_ALLOWED_USERS / _ROLES, fermé par défaut
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v
   rules/azure/

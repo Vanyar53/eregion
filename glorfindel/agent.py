@@ -1935,6 +1935,14 @@ def compromise_card(state: GlorfindelState) -> GlorfindelState:
     return {**state, "outcome": {**out, "compromise_card": True}}
 
 
+def _card_target(signal: dict) -> dict | None:
+    """What the RulePoller filed the card on (AL1c, glorfindel/card_target.py): the NSG and the
+    VMs it covers, a disk's VM, a role's scope, the group, the control plane, the identity.
+    None for a signal that carries none (an attack_started on the Activity Log names its VM)."""
+    target = (signal.get("context") or {}).get("target")
+    return dict(target) if isinstance(target, dict) and target.get("kind") else None
+
+
 def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     """Mark the decision as escalated — human must approve before any action."""
     said = _correlation_said(state["signal"])
@@ -2029,6 +2037,9 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             explanation=state.get("explanation", ""),
             # IR1a: the plan, for the console's « Verify » — an identity card's only.
             identity_plan=state.get("identity_plan") if escalation_type == "identity_change" else None,
+            # AL1c: what a card of the control plane or of an identity is filed on — whatever its
+            # type (a cycle that failed on one is filed there too).
+            target=_card_target(signal),
         )
 
     # An action that ran (verification failed, or it failed midway) keeps what its
@@ -2776,6 +2787,7 @@ def record_cycle_failure(
                 severity=signal.get("severity", ""),
                 source=source,
                 exercise_run=exercise_run,
+                target=_card_target(signal),        # AL1c: filed where the signal is
             )
         except Exception as rec_exc:  # the trace must not raise in turn
             _console.print(f"[red]cycle_failed: escalation non enregistrée — {rec_exc}[/red]")

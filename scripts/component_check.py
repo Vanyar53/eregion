@@ -111,7 +111,7 @@ COMPONENTS: dict[str, Component] = {
 # runs, the analysis AI over a campaign and Glorfindel's decisions, the gate seen from both
 # sides, the host and the Makefile — and the repository-wide checks. The full suite runs them.
 TOGETHER = (
-    "test_action_proposal.py", "test_action_queue_async.py", "test_action_queue_watch.py", "test_activity_logs.py", "test_own_run_command.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
+    "test_action_proposal.py", "test_action_queue_async.py", "test_action_queue_watch.py", "test_activity_logs.py", "test_card_target.py", "test_own_run_command.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
     "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_console_shots.py", "test_docs_home.py", "test_console_dagorlad_request.py", "test_console_dagorlad_drills.py", "test_console_dagorlad_follow.py", "test_console_dagorlad_annatar.py", "test_console_blocks.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_console_signed_detections.py", "test_console_identity_plan.py", "test_profiles.py",
     "test_coverage.py",

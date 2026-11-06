@@ -27,7 +27,7 @@ from glorfindel.detectors import (  # noqa: E402  (after optional deps)
     is_identity_source,
     plane_of,
 )
-from glorfindel import auditd, correlation, expected_sudo  # noqa: E402
+from glorfindel import auditd, card_target, correlation, expected_sudo  # noqa: E402
 
 logger = logging.getLogger("glorfindel.detection_rules")
 
@@ -1219,6 +1219,14 @@ def _vm_id_of(resource_id: str) -> str:
     return (m.group(1) if m else resource_id).lower()
 
 
+def _names_vm_resource(row: dict) -> bool:
+    """The row's own resource (`_ResourceId`) is a VM or one of its sub-resources."""
+    if not isinstance(row, dict):
+        return False
+    rid = row.get("_ResourceId") or row.get("ResourceId")
+    return isinstance(rid, str) and "/microsoft.compute/virtualmachines/" in rid.lower()
+
+
 def _caller_ip(row: dict) -> str:
     for col in _VM_IP_COLUMNS:
         v = row.get(col)
@@ -1295,6 +1303,7 @@ class RulePoller:
         dispatch: Callable[[dict], None],
         dry_run: bool = False,
         ip_owners: Callable[[], dict] | None = None,
+        topology=None,
     ) -> None:
         RulePoller._live.add(self)
         self._rules = rules
@@ -1309,6 +1318,9 @@ class RulePoller:
         # private IP → VM resource id (lowercase), read from Azure, cached — the watch
         # hands the IpOwners its attack_started lines read too (SEC4c).
         self._ip_owners = shared_ip_owners(ip_owners)
+        # AL1c (#597): what a card of the control plane is filed on — the VMs an NSG covers, a
+        # disk's VM, a snapshot's source (glorfindel/card_target.Topology, read on Azure, cached).
+        self._topology = topology
         self._detectors: dict[str, object] = {}
         # Dedup state: self._status[rule]["dispatched"][target] = {row identity: epoch}
         # — persisted, so a restart doesn't dispatch (and act on) a detection still
@@ -1416,12 +1428,18 @@ class RulePoller:
                targets: list[tuple[str, str]]) -> dict[str, tuple]:
         """target key → ((resource_id, name) | None, rows). A row naming a VM this rule
         doesn't watch (excluded, another backend's) is dropped; one that names none is
-        keyed "unattributed". Each row read by `attribute_row`."""
+        keyed "unattributed". Each row read by `attribute_row`.
+
+        A row of the control plane or of an identity is about what it names (AL1c): dropped
+        only when its own resource is a VM this rule doesn't watch (AL1) — never because the
+        address that made the call is such a VM's (an NSG written from an excluded VM, or with
+        no VM watched): that row stays, unattributed (third review, AL1c)."""
         index = RowAttribution(targets, self._owners)
+        control = self._plane(rule) != "data"
         out: dict[str, tuple] = {}
         for row in rows:
             named, tgt = index.attribute(row)
-            if named and tgt is None:
+            if named and tgt is None and (not control or _names_vm_resource(row)):
                 continue
             key = tgt[0].lower() if tgt else "unattributed"
             out.setdefault(key, (tgt, []))[1].append(row)
@@ -1497,7 +1515,9 @@ class RulePoller:
                 rows, audit_n = auditd.settle(rule.ttp, rows, getattr(policy, "sensitive_commands", None) or ())
             except Exception as exc:  # the audit reading: every row stays a card
                 faults.append(f"auditd: {type(exc).__name__}: {exc}")
-        routed = self._route(rule, rows, targets) if targets else {}
+        # A card of the control plane or of an identity is filed on what it names (AL1c): no
+        # VM watched is no reason to leave it unsaid.
+        routed = self._route(rule, rows, targets) if targets or self._plane(rule) != "data" else {}
         try:
             judged = self._judge_expected(rule, routed)      # ADM1, outside the lock
         except Exception as exc:  # the expected sudo: none set aside
@@ -1616,23 +1636,9 @@ class RulePoller:
             _save_status(self._status)
         return signals
 
-    def _signal(self, rule: DetectionRule, row: dict, tgt, targets, now_iso: str) -> dict:
-        if tgt is not None:
-            resource_id, asset_name = tgt
-            attribution = "asset"
-        elif not rule.auto_apply:
-            # A rule bound to one asset by the operator: its rows are that asset's.
-            resource_id, asset_name = targets[0]
-            attribution = "asset"
-        else:
-            # No VM named, none whose IP made the call: never a default target — even
-            # with a single monitored VM (third review, L11). The card is anchored on
-            # one monitored VM; VM-targeted actions are held.
-            resource_id, asset_name = sorted(targets, key=lambda t: t[1])[0]
-            attribution = "unattributed"
-        ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        # Control plane (AL1), identities (C2): detection only — `plane` is what `decide`
-        # reads.
+    @staticmethod
+    def _plane(rule: DetectionRule) -> str:
+        """`data`, `control` or `identity`: the rule's source says it, and so does its query."""
         plane = plane_of(rule.source)
         # A rule of another source that reads one of Entra ID's tables (a client's, an
         # approved proposal — C2): its rows may name a user (a UPN) without any column that
@@ -1643,7 +1649,52 @@ class RulePoller:
         # that projects no OperationNameValue (`project Caller, _ResourceId`) — the query says so.
         elif plane == "data" and _reads_activity_table(rule.query):
             plane = "control"
+        return plane
+
+    def _signal(self, rule: DetectionRule, row: dict, tgt, targets, now_iso: str) -> dict:
+        # Control plane (AL1), identities (C2): detection only — `plane` is what `decide`
+        # reads.
+        plane = self._plane(rule)
         control = plane in ("control", "identity")
+        target = None
+        if control:
+            # AL1c (#597): the card is filed on what the row names — the NSG and the VMs it
+            # covers, the VM of a disk, a role's scope, the group, the identity —, never on a VM
+            # it has nothing to do with (glorfindel/card_target.py).
+            # Routed to no VM, though a VM's address made the call: a VM this rule does not
+            # watch — said, never named (third review, AL1c).
+            ip = _caller_ip(row) if tgt is None else ""
+            unwatched = bool(ip and (self._owners() or {}).get(ip))
+            try:
+                target = card_target.of_row(row, plane, tgt, targets, self._topology,
+                                            caller_unwatched=unwatched)
+            except Exception as exc:  # a card is never lost to its target: the plane, said
+                logger.warning("detection rule '%s': target unreadable (%s)", rule.name, exc)
+                target = card_target.control_plane_target(
+                    limit=f"Ce que la ligne vise n'a pas pu être lu ({type(exc).__name__}).")
+        # The VM the row was routed to is its own only when the row names it (a role on the VM):
+        # one found by the address that made the call is the caller (review, AL1c).
+        named = tgt is not None and card_target.names_vm(row, tgt[0])
+        if target is not None and (plane == "identity" or not named):
+            # An identity's name is chosen by whoever registers it: its pseudo id, never its name.
+            resource_id = target["id"]
+            asset_name = target["id"] if target["kind"] == "identity" else target["name"]
+            attribution = "unattributed"
+        elif tgt is not None:
+            resource_id, asset_name = tgt
+            attribution = "asset"
+        elif not rule.auto_apply:
+            # A rule bound to one asset by the operator: its rows are that asset's.
+            resource_id, asset_name = targets[0]
+            attribution = "asset"
+        else:
+            # No VM named, none whose IP made the call: never a default target — even
+            # with a single monitored VM (third review, L11). The card of the data plane is
+            # anchored on one monitored VM; VM-targeted actions are held (a card of the control
+            # plane or of an identity is filed on its target, above).
+            resource_id, asset_name = sorted(targets, key=lambda t: t[1])[0]
+            attribution = "unattributed"
+        ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         grave = control and _grave(row)
         # COR1: a brute force followed by a login from its address — an account compromised.
         grave = grave or row.get("Correlation") == correlation.COMPROMISED
@@ -1653,7 +1704,7 @@ class RulePoller:
             "ttp": rule.ttp,
             "severity": "critical" if grave else "high",
             "resource_id": resource_id,
-            "resource_type": "vm",
+            "resource_type": target["kind"] if target is not None else "vm",
             "provider": "azure",
             "timestamp": now_iso,
             "context": {
@@ -1664,8 +1715,10 @@ class RulePoller:
                 # Room can display the decision. watch-{rule}-{ts}: not an Annatar run.
                 "run_id": f"watch-{rule.name}-{ts_compact}",
                 "attribution": attribution,
-                **({"candidates": sorted(n for _, n in targets)} if attribution == "unattributed" else {}),
+                **({"candidates": sorted(n for _, n in targets)}
+                   if attribution == "unattributed" and not control else {}),
                 **({"plane": plane} if control else {}),
+                **({"target": target} if target is not None else {}),
             },
             "raw_signal": {
                 "detection_source": rule.source,

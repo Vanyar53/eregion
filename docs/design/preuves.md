@@ -1014,6 +1014,37 @@ réattribués à A3 le 27/10).
 | M715 | une config illisible lue « aucun backend » par `migrate-rules` | la vraie cause tue |
 | M716 | une couche ignorée dite « absente » | contredit la note |
 
+### La maintenance de bree hors de `sudo-privilege-escalation` (WL1)
+
+La règle de la couche du client du banc (`infra/glorfindel-host/client_rules.bench.yaml`) écarte
+les trois sudo du cron de bree, et rien d'autre. Un mutant par propriété de l'exclusion, chacun
+l'élargit ; mesurés par `tests/unit/test_bench_routine.py`, tous attrapés (06/11), chacun par le
+test de sa propriété — une cible où le hasard ne joue pas, un seul tour (CI10a). La dérive de la
+copie (`base_sha256`, `_drift` de `glorfindel/detection_rules.py`) a ses mutants aussi, après la
+relecture : une copie périmée écartée, la règle livrée à sa place — seulement si elle charge
+(seconde relecture : M4365–M4367) ; une copie au champ retiré `base_query_sha256` écartée
+(M4368) ; troisième relecture : une autre entrée du même nom (M4369), une copie invalide (M4395) ;
+attrapés de même.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M4265 | toute commande d'un mot écartée | `sudo /bin/bash` de celebrimbor sur bree sans carte |
+| M4266 | l'exclusion sans ancre de fin | `nginx -t; bash` sans carte |
+| M4267 | tout compte écarté | le même sudo d'un autre compte sans carte |
+| M4268 | une ligne avec `TTY=` écartée | le même sudo depuis un terminal sans carte |
+| M4269 | l'exclusion sur toute VM | le même sudo sur gondolin sans carte |
+| M4300 | la dérive plus lue | une copie périmée tourne, sans un mot |
+| M4301 | une empreinte mal formée acceptée | la copie charge, jamais comparée |
+| M4302 | la copie périmée dite mais gardée | la règle livrée corrigée ne tourne pas : moins de cartes |
+| M4303 | une copie dont la base n'existe plus retirée aussi | sa technique n'est plus détectée |
+| M4304 | l'empreinte de la requête seule | un autre champ de la règle livrée change sans dérive |
+| M4365 | copie périmée écartée malgré un `disable` du même nom | plus rien ne détecte la technique |
+| M4366 | copie périmée écartée malgré une règle livrée `enabled: false` | plus rien ne détecte la technique |
+| M4367 | la copie d'une règle livrée qui ne charge pas retirée | plus rien ne détecte la technique |
+| M4368 | le champ retiré `base_query_sha256` accepté | la copie charge, jamais comparée |
+| M4369 | copie périmée écartée malgré une autre entrée du même nom | une entrée `enabled: false` gagne : plus rien ne détecte |
+| M4395 | une copie invalide lue pour la dérive | une note de dérive pour une règle ignorée |
+
 ### Annatar et Gothmog exigent Glorfindel (V1)
 
 Avant chaque run, et avant tout appel au cloud, l'injecteur lit le battement de la watch

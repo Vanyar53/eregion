@@ -32,6 +32,8 @@ _HEADER = """\
 #             chargement) ; `enabled: false` sous ce nom la désactive
 #   disable:  noms de règles de base à ne pas charger
 #   assets, monitoring_backends : comme dans la base, l'entrée du client gagne par nom
+#   base_sha256 (dans une règle recopiée d'une règle de base) : l'empreinte de la règle livrée
+#             copiée — quand elle change, la copie est écartée et la règle livrée charge (WL1)
 # Écrite par `glorfindel approve-rule`, la War Room et `glorfindel migrate-rules` ; éditable
 # à la main (un commentaire ne survit pas à la prochaine écriture : mettre une description).
 """

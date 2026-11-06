@@ -22,8 +22,10 @@ NICENESS = 10
 def pytest_configure(config):
     """The suite yields the CPU on a workstation, never in CI. Sub-agents run it side by side
     in their worktrees; at full priority, on 06/11, the WSL starved VS Code until it killed its
-    extension host seven times in a day. Raised to NICENESS, never lowered; xdist's workers and
-    the mutants' runs inherit it. A CI runner runs one suite: it keeps its priority."""
+    extension host seven times in a day. Raised to NICENESS, never lowered, by every process that
+    loads this conftest (it is not an initial conftest: each xdist worker raises itself as it
+    collects; xdist's controller, which does not collect, keeps its priority). A CI runner runs one
+    suite: it keeps its priority."""
     if os.environ.get("CI") or not hasattr(os, "nice"):
         return
     try:

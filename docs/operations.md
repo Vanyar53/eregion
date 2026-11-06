@@ -2067,13 +2067,17 @@ chaque mutant sur l'arbre publié, une fois, sans travail en double. Le côté h
   seul processus.
   Sur un runner (4 vCPU), l'étude estime l'étape des tests de 13,5 à environ 5 min, une PR verte en 6 à
   8 min au lieu de 14,6 : à mesurer sur les premières PR.
-- **Sur un poste, la suite en priorité basse** (NICE1, #620). Hors CI (`CI` absente),
-  `tests/unit/conftest.py` monte pytest à `nice 10` dès son démarrage, jamais plus bas que ce qu'il
-  hérite. Les workers de xdist et les runs des mutants héritent de cette priorité. La raison : le
+- **Sur un poste, la suite en priorité basse** (NICE1, #620). Hors CI (`CI` absente ou
+  vide), dès que pytest charge `tests/unit/conftest.py`, chaque processus qui collecte (le pytest seul,
+  chaque worker de xdist, chaque run d'un mutant) se monte à `nice 10`, jamais plus bas que ce qu'il
+  hérite. Ce conftest n'est pas initial (`testpaths = ["tests"]`) : il est chargé à la collecte. Le
+  contrôleur de xdist, qui ne collecte pas, garde donc sa priorité, presque inactif ; un pytest lancé
+  sur un chemin sous `tests/unit` (les passes de mutants) se baisse avant de démarrer ses workers, qui
+  en héritent. La raison : le
   06/11, des sous-agents lançaient la suite côte à côte dans leurs worktrees, dont un `-n auto`
   (16 workers sur ce poste). La charge est montée à 70 pour 16 cœurs, et VS Code, affamé, a tué son
   hôte d'extensions sept fois dans la journée. Les onglets Claude Code décrochaient. En local,
-  préférer `-n 4` à `-n auto`. La variable `PYTEST_XDIST_AUTO_NUM_WORKERS` plafonne `-n auto`.
+  préférer `-n 4` à `-n auto`. La variable `PYTEST_XDIST_AUTO_NUM_WORKERS` fixe le nombre de workers de `-n auto` (pris tel quel, il peut dépasser le nombre de cœurs).
   Une CI ne lance qu'une suite : elle garde sa priorité.
 - **Components en un seul job sur une PR** (L11). Le job « every component alone, then the compose
   profiles » fait, pour chaque composant de `scripts/component_check.py`, ses deux vérifications (ses

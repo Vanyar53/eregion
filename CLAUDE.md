@@ -42,6 +42,7 @@ L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le 
 | Contrat d'Orodruin | [docs/design/orodruin-contract.md](docs/design/orodruin-contract.md) |
 | Console Eregion : sections, Glorfindel toujours présent, plan UI | [docs/design/console.md](docs/design/console.md) |
 | Dagorlad, guide d'utilisation : Board, Runs, verdicts, demande, Stop all ; images rejouables sur le jeu d'exemple | [docs/dagorlad.md](docs/dagorlad.md) |
+| Le drill du banc (DRL1, conception) : chaque semaine, par le minuteur d'Orodruin ; gardes, rapport, coût | [docs/design/drill-banc.md](docs/design/drill-banc.md) |
 | elrond, sous-agents par lot | [docs/elrond.md](docs/elrond.md) |
 | Le cycle d'une session (issue, plage de mutants, branche, PR, relecture, fusion) ; parler à l'Orchestre | [docs/sessions.md](docs/sessions.md) |
 | Observation : verdicts et rapport | [docs/observation.md](docs/observation.md) |

@@ -2,7 +2,8 @@
 Backup excluded by its public application id, and it alone. M4280–M4289, one per property,
 then M4305–M4309 after the first review (a line that names no one decides nothing, the id
 matched whole, the case of an operation's name, one row per operation, an object id alone), and
-M4390–M4392 after the second (the row carries the caller that decided it), all
+M4390–M4392 after the second (the row carries the caller that decided it), M4410 after the
+third (and its address), all
 measured by tests/unit/test_restore_points.py (the rule run as written through the KQL subset,
 then the AzureActivityDetector and the RulePoller)."""
 RULES = "glorfindel/rules/azure/detection_rules.yaml"
@@ -14,7 +15,8 @@ _GROUP = "          by CorrelationId, OperationNameValue, _ResourceId\n" + _KEEP
 _BACKUP_LINES = "            , AzureBackupLines = countif(AzureBackup)\n"
 _CARRY = ("      | extend Caller = iif(OtherCaller, Caller, NamedCaller),\n"
           "               CallerAppId = iif(OtherCaller, CallerAppId, NamedAppId),\n"
-          "               CallerObjectId = iif(OtherCaller, CallerObjectId, NamedObjectId)\n")
+          "               CallerObjectId = iif(OtherCaller, CallerObjectId, NamedObjectId),\n"
+          "               CallerIpAddress = iif(OtherCaller, CallerIpAddress, NamedIp)\n")
 _OTHER = ('      | extend OtherCaller = not(AzureBackup) and '
           '(isnotempty(Caller) or isnotempty(CallerAppId) or isnotempty(CallerObjectId))\n')
 _MATCH = f'      | extend AzureBackup = CallerAppId =~ "{_ID}" or Caller =~ "{_ID}"\n'
@@ -87,10 +89,17 @@ MUTANTS = [
               "(AL2)", RULES,
      _CARRY, "      | extend Caller = iif(isnotempty(Caller), Caller, NamedCaller),\n"
              "               CallerAppId = iif(isnotempty(CallerAppId), CallerAppId, NamedAppId),\n"
-             "               CallerObjectId = iif(isnotempty(CallerObjectId), CallerObjectId, NamedObjectId)\n"),
+             "               CallerObjectId = iif(isnotempty(CallerObjectId), CallerObjectId, NamedObjectId),\n"
+             "               CallerIpAddress = iif(isnotempty(CallerIpAddress), CallerIpAddress, NamedIp)\n"),
     ("M4392", "the named caller taken from any line, Azure Backup's too — the card may name it (AL2)", RULES,
      "            NamedCaller = take_anyif(Caller, OtherCaller and isnotempty(Caller)),\n",
      "            NamedCaller = take_anyif(Caller, isnotempty(Caller)),\n"),
+
+    # ── after the third review (06/11): and its address ──
+    ("M4410", "the caller's address read from the latest line only — the card says the human acted from "
+              "Azure Backup's address (AL2)", RULES,
+     "NamedObjectId),\n               CallerIpAddress = iif(OtherCaller, CallerIpAddress, NamedIp)\n",
+     "NamedObjectId)\n"),
 ]
 
 TESTS = {m[0]: _TESTS for m in MUTANTS}

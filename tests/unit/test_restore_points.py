@@ -69,12 +69,12 @@ NOW = datetime.now(timezone.utc)
 
 
 def _line(op=WRITE, status="Success", caller=HUMAN, appid="", oid="", corr="c-1",
-          minutes_ago=5.0, target=None, claims=True):
+          minutes_ago=5.0, target=None, claims=True, ip="203.0.113.7"):
     """One AzureActivity line, as the table holds it: Claims a JSON string."""
     claim = {"appid": appid, "http://schemas.microsoft.com/identity/claims/objectidentifier": oid}
     return {"Type": "AzureActivity", "TimeGenerated": NOW - timedelta(minutes=minutes_ago),
             "OperationNameValue": op, "ActivityStatusValue": status, "Caller": caller,
-            "CallerIpAddress": "203.0.113.7", "Claims": json.dumps(claim) if claims else "",
+            "CallerIpAddress": ip, "Claims": json.dumps(claim) if claims else "",
             "_ResourceId": target or TARGET[op], "ResourceGroup": "rg-bench", "CorrelationId": corr}
 
 
@@ -365,6 +365,36 @@ def test_a_backup_s_latest_line_never_names_the_card(table, where):
     row = sig["raw_signal"]["first_result_row"]
     assert row["Caller"] == HUMAN
     assert AZURE_BACKUP not in (row.get("CallerAppId") or "", row.get("CallerObjectId") or "")
+
+
+@pytest.mark.parametrize("latest", ["bare", "azure_backup"])
+def test_the_card_gives_the_named_caller_s_address(table, latest):
+    """Each line its own address: the human's Start from theirs, the latest line (bare, or
+    Azure Backup's) from another — the card says the human's, never the other."""
+    human_ip, other_ip = "198.51.100.23", "192.0.2.80"
+    last = (dict(caller="", claims=False) if latest == "bare"
+            else dict(caller="", appid=AZURE_BACKUP))
+    table += [_line(SAS, "Success", corr="c-ip", minutes_ago=4.9, ip=other_ip, **last),
+              _line(SAS, "Start", corr="c-ip", caller=HUMAN, minutes_ago=5.0, ip=human_ip)]
+    [sig] = _cards(table)
+    row = sig["raw_signal"]["first_result_row"]
+    assert (row["Caller"], row["CallerIpAddress"]) == (HUMAN, human_ip)
+    from glorfindel.agent import _control_plane_decision
+    reason = _control_plane_decision(_initial(sig))["escalation_reason"]
+    assert human_ip in reason and other_ip not in reason
+
+
+def test_several_other_callers_may_be_mixed_and_glorfindel_s_id_is_critical(table):
+    """A human's Start without Claims, then Glorfindel's (its ids in Claims), then a bare
+    Success: each column is taken on one of their lines — the row may name the human with
+    Glorfindel's ids, and is critical, since an id it carries is Glorfindel's."""
+    table += [_line(SAS, "Start", corr="c-mix", caller=HUMAN, claims=False, minutes_ago=5.0),
+              _line(SAS, "Start", corr="c-mix", caller="", appid=OWN_APP, oid=OWN_OID, minutes_ago=4.95),
+              _line(SAS, "Success", corr="c-mix", caller="", claims=False, minutes_ago=4.9)]
+    [sig] = _cards(table)
+    row = sig["raw_signal"]["first_result_row"]
+    assert (row["Caller"], row["CallerAppId"], row["CallerObjectId"]) == (HUMAN, OWN_APP, OWN_OID)
+    assert sig["severity"] == "critical" and row["GlorfindelIdentity"] is True
 
 
 def test_glorfindels_start_then_a_bare_success_is_critical(table):

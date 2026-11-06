@@ -458,10 +458,22 @@ rules:
           "MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/SECURITYRULES/DELETE")
       | extend CallerAppId = tostring(parse_json(Claims).appid),
                CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
-      // One row per operation, its latest line (Start, Accept, Success).
-      | summarize arg_max(TimeGenerated, *) by CorrelationId, OperationNameValue, _ResourceId
-      | where ActivityStatusValue !in~ ("Failure", "Failed")
-      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+      // One row per operation: its latest line, how many of its lines succeeded, and the
+      // caller its lines name. An operation that succeeded is read, whatever its latest line;
+      // one that only failed is not.
+      | summarize arg_max(TimeGenerated, *), Succeeded = countif(ActivityStatusValue in~ ("Success", "Succeeded")),
+          NamedCaller = take_anyif(Caller, isnotempty(Caller)),
+          NamedCallerIp = take_anyif(CallerIpAddress, isnotempty(CallerIpAddress)),
+          NamedCallerAppId = take_anyif(CallerAppId, isnotempty(CallerAppId)),
+          NamedCallerObjectId = take_anyif(CallerObjectId, isnotempty(CallerObjectId))
+          by CorrelationId, OperationNameValue, _ResourceId
+      | where Succeeded > 0 or ActivityStatusValue !in~ ("Failure", "Failed")
+      // A latest line that names no caller: the caller its operation's other lines name.
+      | extend Caller = iif(isempty(Caller), NamedCaller, Caller),
+               CallerIpAddress = iif(isempty(CallerIpAddress), NamedCallerIp, CallerIpAddress),
+               CallerAppId = iif(isempty(CallerAppId), NamedCallerAppId, CallerAppId),
+               CallerObjectId = iif(isempty(CallerObjectId), NamedCallerObjectId, CallerObjectId)
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Succeeded, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
 
   - name: role-assignment-write
@@ -481,9 +493,22 @@ rules:
       | where OperationNameValue =~ "MICROSOFT.AUTHORIZATION/ROLEASSIGNMENTS/WRITE"
       | extend CallerAppId = tostring(parse_json(Claims).appid),
                CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
-      | summarize arg_max(TimeGenerated, *) by CorrelationId, OperationNameValue, _ResourceId
-      | where ActivityStatusValue !in~ ("Failure", "Failed")
-      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+      // One row per operation: its latest line, how many of its lines succeeded, and the
+      // caller its lines name. An operation that succeeded is read, whatever its latest line;
+      // one that only failed is not.
+      | summarize arg_max(TimeGenerated, *), Succeeded = countif(ActivityStatusValue in~ ("Success", "Succeeded")),
+          NamedCaller = take_anyif(Caller, isnotempty(Caller)),
+          NamedCallerIp = take_anyif(CallerIpAddress, isnotempty(CallerIpAddress)),
+          NamedCallerAppId = take_anyif(CallerAppId, isnotempty(CallerAppId)),
+          NamedCallerObjectId = take_anyif(CallerObjectId, isnotempty(CallerObjectId))
+          by CorrelationId, OperationNameValue, _ResourceId
+      | where Succeeded > 0 or ActivityStatusValue !in~ ("Failure", "Failed")
+      // A latest line that names no caller: the caller its operation's other lines name.
+      | extend Caller = iif(isempty(Caller), NamedCaller, Caller),
+               CallerIpAddress = iif(isempty(CallerIpAddress), NamedCallerIp, CallerIpAddress),
+               CallerAppId = iif(isempty(CallerAppId), NamedCallerAppId, CallerAppId),
+               CallerObjectId = iif(isempty(CallerObjectId), NamedCallerObjectId, CallerObjectId)
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Succeeded, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
 
   - name: snapshot-by-unexpected-caller
@@ -510,9 +535,22 @@ rules:
           "MICROSOFT.COMPUTE/DISKS/BEGINGETACCESS/ACTION")
       | extend CallerAppId = tostring(parse_json(Claims).appid),
                CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
-      | summarize arg_max(TimeGenerated, *) by CorrelationId, OperationNameValue, _ResourceId
-      | where ActivityStatusValue !in~ ("Failure", "Failed")
-      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+      // One row per operation: its latest line, how many of its lines succeeded, and the
+      // caller its lines name. An operation that succeeded is read, whatever its latest line;
+      // one that only failed is not.
+      | summarize arg_max(TimeGenerated, *), Succeeded = countif(ActivityStatusValue in~ ("Success", "Succeeded")),
+          NamedCaller = take_anyif(Caller, isnotempty(Caller)),
+          NamedCallerIp = take_anyif(CallerIpAddress, isnotempty(CallerIpAddress)),
+          NamedCallerAppId = take_anyif(CallerAppId, isnotempty(CallerAppId)),
+          NamedCallerObjectId = take_anyif(CallerObjectId, isnotempty(CallerObjectId))
+          by CorrelationId, OperationNameValue, _ResourceId
+      | where Succeeded > 0 or ActivityStatusValue !in~ ("Failure", "Failed")
+      // A latest line that names no caller: the caller its operation's other lines name.
+      | extend Caller = iif(isempty(Caller), NamedCaller, Caller),
+               CallerIpAddress = iif(isempty(CallerIpAddress), NamedCallerIp, CallerIpAddress),
+               CallerAppId = iif(isempty(CallerAppId), NamedCallerAppId, CallerAppId),
+               CallerObjectId = iif(isempty(CallerObjectId), NamedCallerObjectId, CallerObjectId)
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Succeeded, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
 
   # Notre propre identité surveillée (SID1, #409). Le rôle de réponse tient runCommand pour
@@ -543,8 +581,19 @@ rules:
       | where OperationNameValue =~ "MICROSOFT.COMPUTE/VIRTUALMACHINES/RUNCOMMAND/ACTION"
       | extend CallerAppId = tostring(parse_json(Claims).appid),
                CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
-      // One row per operation, its latest line, and when its first line was written.
-      | summarize arg_max(TimeGenerated, *), Started = min(TimeGenerated) by CorrelationId, OperationNameValue, _ResourceId
+      // One row per operation, its latest line, when its first line was written, and the
+      // caller its lines name.
+      | summarize arg_max(TimeGenerated, *), Started = min(TimeGenerated),
+          NamedCaller = take_anyif(Caller, isnotempty(Caller)),
+          NamedCallerIp = take_anyif(CallerIpAddress, isnotempty(CallerIpAddress)),
+          NamedCallerAppId = take_anyif(CallerAppId, isnotempty(CallerAppId)),
+          NamedCallerObjectId = take_anyif(CallerObjectId, isnotempty(CallerObjectId))
+          by CorrelationId, OperationNameValue, _ResourceId
+      // A latest line that names no caller: the caller its operation's other lines name.
+      | extend Caller = iif(isempty(Caller), NamedCaller, Caller),
+               CallerIpAddress = iif(isempty(CallerIpAddress), NamedCallerIp, CallerIpAddress),
+               CallerAppId = iif(isempty(CallerAppId), NamedCallerAppId, CallerAppId),
+               CallerObjectId = iif(isempty(CallerObjectId), NamedCallerObjectId, CallerObjectId)
       | extend WatchedCaller = "glorfindel"
       | project TimeGenerated, Started, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId, WatchedCaller

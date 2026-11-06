@@ -948,6 +948,14 @@ def _control_plane_row(signal: dict) -> dict:
     return raw.get("first_result_row") or raw.get("detected_data") or {}
 
 
+def _succeeded_lines(row: dict) -> int:
+    """How many of an operation's lines succeeded (`Succeeded`, AL1d); 0 when unread."""
+    try:
+        return int(row.get("Succeeded") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _control_plane_text(signal: dict) -> tuple[str, list[str]]:
     """What a control-plane detection says, from the row alone (AL1): the operation, its
     status as read, the caller, its address, the target, the gravest marks, the
@@ -964,6 +972,11 @@ def _control_plane_text(signal: dict) -> tuple[str, list[str]]:
     # An operation seen at its Start may still fail: the card says the status it read.
     if status.lower() in ("start", "started", "accept", "accepted"):
         what += " Statut lu au stade « " + status + " » : l'opération a pu échouer ensuite."
+    # AL1d: an operation that succeeded is read whatever its latest line — a latest line
+    # in failure does not say the operation failed when one of its lines succeeded.
+    elif status.lower() in ("failure", "failed") and _succeeded_lines(row) > 0:
+        what += (" Statut lu à sa dernière ligne, mais une de ses lignes a réussi : "
+                 "l'opération a pris effet.")
     steps = ["Vérifier dans le journal d'activité qui a fait cette opération, et pourquoi"
              + (f" (CorrelationId {row['CorrelationId']})" if row.get("CorrelationId") else "") + "."]
     if norm.get("glorfindel_managed"):

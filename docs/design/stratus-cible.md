@@ -1,132 +1,152 @@
 # Stratus — l'abonnement de test dédié et la cible (R2b)
 
-_Conception — 2026-11-06 (re-décision de Jonathan, **remplace** celle du matin ; v2 après une relecture Opus 5.5 `blocking`) — statut : **conception, à relire avant tout code** (R2b, #608, « Partie de #79 »). Fait suite à R2a (l'adaptateur, fusionné le 06/11, `3f6ae335`)._
+_Conception — 2026-11-06 (re-décision de Jonathan ; v3 après deux relectures Opus 5.5 — v1 `blocking`, v2 `changes`) — statut : **conception, à relire avant tout code** (R2b, #608, « Partie de #79 »). Fait suite à R2a (fusionné le 06/11, `3f6ae335`). **En attente d'une décision de Jonathan** sur deux points, marqués ⏳ : l'identité (A ou B) et la zone._
 
-## La décision (Jonathan, 06/11, en interactif, avec les faits de la relecture)
+## La décision (Jonathan, 06/11, en interactif)
 
-**Stratus tourne dans un abonnement de test dédié, unique et permanent**, où **rien d'autre ne vit** : ni H0, ni Orodruin, ni le canari, ni `rg-celebrimbor`. La cible d'une technique Stratus est le groupe que crée son `warmup` **dans cet abonnement**.
+**Stratus tourne dans un abonnement de test dédié, unique et permanent**, où **rien d'autre ne vit** : ni H0, ni Orodruin, ni le canari, ni `rg-celebrimbor`. La cible d'une technique est le groupe que crée son `warmup` **dans cet abonnement**. Cette décision remplace celle du matin (le groupe dans l'abonnement du banc partagé), cassée par la relecture v1 : sous l'identité d'Orodruin, créer/détruire un groupe dans l'abonnement partagé demandait des droits qui atteignaient tout le banc, et un « droit de tag étroit » ne bornait rien.
 
-Cette décision remplace celle du matin (« le groupe du warmup dans l'abonnement du banc partagé »), que la relecture a cassée : Stratus agissant sous l'identité d'Orodruin, créer/détruire un groupe dans l'abonnement **partagé** demandait des droits à l'échelle de l'abonnement qui atteignaient H0, Orodruin, le canari et `rg-celebrimbor` ; `resourceGroups/write` réécrit déjà les tags de n'importe quel groupe, donc un « droit de tag étroit » ne bornait rien, et le contrat d'Orodruin ne s'armait pas. La condition ABAC sur les tags d'un groupe n'était probablement pas réalisable.
+**Ce que l'abonnement dédié règle, et ce qu'il ne règle pas.** Le périmètre devient l'abonnement entier : **plus de tag d'inscription** (donc plus de `tags/write`, plus d'ABAC) — appartenir à l'abonnement dédié *est* l'inscription. Mais **l'abonnement vide n'est pas, à lui seul, un garde-fou** : un rôle large (Contributor) y permettrait encore d'aveugler la watch (supprimer le paramètre de diagnostic), de supprimer l'alerte de budget, de créer des ressources coûteuses, de créer une identité managée à credential fédéré (persistante dans le tenant), ou d'ouvrir une sortie Internet par une VM pilotée en Run Command — ce qui contournerait « Orodruin sans Internet ». Le garde-fou est donc **un rôle personnalisé fermé + une Azure Policy** sur l'abonnement dédié (§ 1, § 6), pas la seule vacuité. Le blast radius est l'abonnement dédié **borné par ce rôle et cette policy**.
 
-**Ce que l'abonnement dédié change — et pourquoi c'est sain :** le périmètre n'est plus un groupe qu'il faut inscrire au milieu d'un abonnement peuplé ; c'est **l'abonnement entier**, vide par construction. Un droit large *dans cet abonnement* (même Contributor) n'atteint **rien de valeur** — il ne peut que créer/détruire des ressources de test jetables. Les deux bloquants disparaissent :
+Le coût d'un abonnement est nul en lui-même ; l'ingestion d'`AzureActivity` dans un workspace est **gratuite** (`infra/terraform/activity_log.tf`). Le seul risque est un `cleanup` raté qui laisse des ressources payantes — l'**Azure Policy** (types/SKU/régions) en est le vrai plafond, l'alerte de budget n'étant qu'une notification (évaluée avec 8–24 h de retard).
 
-- **plus de tag d'inscription à poser** (donc plus de `tags/write`, plus d'ABAC) : être dans l'abonnement dédié **est** l'inscription ;
-- **le blast radius est l'abonnement vide**, pas le banc.
-
-Le coût d'un abonnement est nul en lui-même (Jonathan l'a validé) ; le seul risque est un `cleanup` raté qui laisse des ressources payantes — couvert par une **alerte de budget** propre à cet abonnement (geste de Jonathan, § Gestes).
-
-Le cycle de R2a est inchangé — `warmup → detonate → revert → cleanup` ; R2b change **où** il tourne (l'abonnement dédié) et **comment la watch l'observe** (journal d'activité routé vers le workspace du banc).
+Le cycle de R2a est inchangé — `warmup → detonate → revert → cleanup` ; R2b change **où** il tourne et **comment la watch l'observe**.
 
 ---
 
-## 1. L'identité qui agit dans l'abonnement dédié
+## 1. ⏳ L'identité qui agit, et le contrat
 
-Stratus et son Terraform s'authentifient avec l'identité que l'adaptateur leur donne (`annatar/executors/stratus_host.py`, `_env` passe l'environnement d'Orodruin). Il faut une identité qui a le droit d'agir **dans l'abonnement dédié et nulle part ailleurs**. Deux options ; le contrat d'Orodruin (`eregion_core/orodruin.py`, `assess_identity`) refuse aujourd'hui **toute** attribution hors du banc, sauf la liste blanche étroite des canaux (conteneur du canal d'exercice, conteneur du canal retour en lecture seule).
+### Le choix d'identité (à trancher par Jonathan)
 
-**Option A — l'identité d'Orodruin, plus un rôle sur le seul abonnement dédié (recommandée).**
-Orodruin garde son identité unique ; on lui ajoute **une** attribution, à la portée de l'abonnement dédié, avec les actions dont le cycle Stratus a besoin. Le contrat gagne **une** entrée de liste blanche : une attribution au scope `EREGION_STRATUS_SUBSCRIPTION` (déclaré, comme `EREGION_CHANNEL_SCOPE`) est acceptée ; toute autre attribution hors du banc reste un manque (`identity_outside_bench`). C'est le même patron que les canaux, en une ligne de plus dans `assess_identity`.
-- *Pour* : une seule identité, un seul contrat à raisonner ; `orodruin-check` lit déjà les attributions de cette identité.
-- *Contre* : le jeton d'Orodruin (qui lit aussi le banc, Graph…) peut désormais écrire tout l'abonnement dédié. Mais cet abonnement est vide : le blast radius en cas d'hôte compromis est « créer des ressources de test », pas le banc.
+Stratus s'authentifie avec l'identité que l'adaptateur lui donne. Deux options :
 
-**Option B — une identité propre à Stratus.**
-Une identité gérée distincte, avec un rôle sur le seul abonnement dédié, et **rien** ailleurs ; Orodruin l'assume pour lancer Stratus, mais sa propre identité reste strictement banc. Le contrat doit alors **lire une seconde identité** et prouver qu'elle ne tient qu'un rôle sur l'abonnement dédié.
-- *Pour* : l'identité banc d'Orodruin reste inchangée, tendue ; la séparation est explicite.
-- *Contre* : `orodruin-check` doit évaluer **deux** principals (le sien, celui de Stratus) ; Orodruin détient de toute façon le credential de Stratus pour l'exécuter, donc l'isolement en cas de compromission totale de l'hôte est marginal.
+- **Option A** — l'identité d'Orodruin, plus un rôle sur le seul abonnement dédié. *Contre* : `assess_identity` (`orodruin.py:226-227`) refuse toute attribution hors banc ; A élargit donc le périmètre du jeton d'Orodruin, et ne donne pas d'appelant distinct dans `AzureActivity`.
+- **Option B** — une identité propre à Stratus, dans un bac à sable **sans l'IMDS d'Orodruin** (depuis le bac à sable, une demande de jeton pour l'identité d'Orodruin doit échouer — à mesurer). *Pour* : l'identité banc d'Orodruin reste intacte ; Stratus apparaît comme un **appelant distinct** dans le journal d'activité (utile à la détection).
 
-**Recommandation : Option A.** L'isolement vient de la **frontière d'abonnement**, pas de la frontière d'identité ; un abonnement vide et dédié rend une seconde identité peu rentable face au doublement du contrat. **Ce que le contrat doit accepter, et seulement cela** (Option A) : pour l'identité d'Orodruin, une attribution au scope exact `/subscriptions/<EREGION_STRATUS_SUBSCRIPTION>` portant les actions du cycle Stratus (création/lecture/suppression de groupes et des ressources des techniques au catalogue), **et aucune autre attribution hors du banc**. Une attribution Stratus à une portée plus large que cet abonnement (le tenant, un management group), ou sur un autre abonnement, → `passive`. La liste exacte des actions se mesure au banc (§ Questions).
+**Le relecteur recommande B.** Stratus n'a aucune entrée de cible : seul le RBAC le borne, donc une identité à périmètre propre est plus sûre qu'un élargissement de l'identité d'Orodruin. **Décision en attente de Jonathan** ; la suite de la doc tient pour A comme pour B — seul « quelle identité le contrat lit » change.
 
-> À trancher à la relecture : A ou B. La suite de la doc est écrite pour A ; un basculement vers B ne change que « quelle identité le contrat lit », pas le reste.
+### Ce que le contrat doit faire (vaut pour A et B)
 
----
+Aujourd'hui `orodruin-check` ne liste les attributions que sur l'abonnement du banc (`read_identity`, `orodruin.py:417-420`) : il ne verrait pas, et ne jugerait pas, un rôle sur l'abonnement dédié. R2b doit :
 
-## 2. La garde et la fenêtre sur l'abonnement dédié
+- **une seconde lecture**, à la portée de l'abonnement dédié, avec sa propre preuve d'absence (`roleAssignments/read` sur `/subscriptions/<EREGION_STRATUS_SUBSCRIPTION>`) — en A sur l'identité d'Orodruin, en B sur l'identité de Stratus ;
+- **un rôle tenu à une liste fermée d'actions** (l'esprit de SEC11) : jamais un joker, jamais `Microsoft.Authorization/*/write` ; les actions minimales par technique, mesurées au banc (§ Questions) ;
+- **refuser si `EREGION_STRATUS_SUBSCRIPTION` vaut l'abonnement du banc ou celui de la VM** : sans ce refus, une ligne d'`orodruin.env` ramène exactement le bloquant v1 (un rôle large sur le banc). `orodruin-check` → `passive` ;
+- **dire que les autres abonnements du tenant restent improuvables**, en A comme en B (la seconde lecture ne prouve l'absence que sur l'abonnement dédié et le banc, pas sur un troisième).
 
-### La garde
+### Le kill révoque aussi le rôle dédié (constat 2)
 
-Le moteur Stratus a son **propre périmètre**, borné à l'abonnement dédié — **jamais** celui du chemin VM. R2a appelait déjà `check_target(rg_scope, rg_tags, rg_tags, …)` ; ça ne convient plus (il attend des tags d'inscription et la zone `bench` de `rg-celebrimbor`). R2b introduit un `Scope` Stratus :
+`orodruin-kill` (`orodruin-contract.md`, `orodruin.py` `kill`) ne révoque aujourd'hui que l'abonnement du contrat et celui de la VM : après un kill, l'identité **garde** son rôle sur l'abonnement dédié. R2b doit :
 
-- un `Scope` dont le périmètre est l'abonnement dédié entier (`EREGION_STRATUS_SUBSCRIPTION`), construit par le moteur Stratus seul. `Scope.check(resource_id)` autorise toute ressource **dans cet abonnement** et refuse tout le reste. La zone est une zone dédiée (p. ex. `stratus`, à ajouter à `ZONES`, ou `bench` réservée à cet abonnement — à trancher) ; elle n'autorise que `kind: technique`, jamais une panne, jamais la production (il n'y a pas de production ici).
-- le chemin VM (`atomic`, `local-script`) garde `Scope.for_bench()` et `rg-celebrimbor` **inchangé** ; les deux périmètres sont disjoints par construction (abonnements différents), ce qui empêche un scénario VM de viser l'abonnement Stratus et inversement.
-
-Comme rien d'autre ne vit dans l'abonnement dédié, **aucune étiquette d'inscription n'est posée** : appartenir à l'abonnement dédié est la preuve d'inscription. C'est la simplification centrale de la v2.
-
-### La fenêtre d'exercice et la watch
-
-Le `warmup` crée le groupe `<prefix>-rg-<correlation.short>` (§ 4) ; son nom est lu dans l'état Terraform **après** le warmup. La fenêtre d'exercice (`eregion_core/exercise.py`, `open_window`) doit alors couvrir **tout ce que ce run fait naître dans l'abonnement dédié** :
-
-- **Cible exacte** : la fenêtre nomme le groupe créé (et, à défaut de le connaître avant le warmup, l'abonnement dédié jusqu'à ce que le nom soit lu). La relecture a raison : aujourd'hui la watch n'étiquetterait rien « exercice » ici, parce que son lecteur d'inscription (`TagEnrollment`, SEC8) est réservé aux **VM** de `rg-celebrimbor`, et H0 n'est Reader que sur `rg-celebrimbor`. R2b doit donc, côté watch :
-  - étendre l'étiquetage « exercice » aux événements du **journal d'activité** de l'abonnement dédié, pendant une fenêtre ouverte, **sans** passer par le lecteur d'inscription par VM : dans l'abonnement dédié, tout ce qui naît pendant une fenêtre est un exercice (il n'y a rien d'autre). La garde d'inscription par VM (SEC8, verrou SEC14) **ne s'applique pas** à ce chemin ; le périmètre d'abonnement la remplace.
-  - cette étiquette « exercice » vaut pour les événements `AzureActivity` dont le `SubscriptionId` est celui de l'abonnement dédié et dont l'horodatage tombe dans une fenêtre — pas pour des `resourceId` de VM.
-- **Lecteur / droits de H0** : voir § 3 — H0 lit le journal d'activité **dans le workspace du banc** (où le diag setting le route), donc H0 n'a besoin d'**aucun droit** sur l'abonnement dédié. Le verrou SEC14 (le registre des fenêtres vues) reste ; la seule nouveauté est un type de cible « abonnement/plan de contrôle » à côté des VM.
-
-### Le `warmup` hors fenêtre, et le kill
-
-- **Warmup hors fenêtre** : le groupe se crée avant que la fenêtre couvrant le run ne soit connue par son nom. La fenêtre doit s'**ouvrir avant le warmup**, sur l'abonnement dédié (cible « large » connue d'avance), puis se **préciser** sur le groupe une fois son nom lu — pour qu'aucune création ne tombe hors fenêtre. (R2a ouvrait la fenêtre avant le cycle ; ici la cible initiale est l'abonnement, affinée au groupe.)
-- **Kill** : `orodruin-kill` révoque l'identité et ferme les fenêtres. Il doit aussi **pouvoir vider l'abonnement dédié** d'un run en cours. Mais le kill révoque l'identité d'Orodruin : une fois révoquée, elle ne peut plus détruire. Donc le nettoyage de l'abonnement dédié après kill repose sur **le `az login` de l'opérateur** (§ Gestes, `stratus cleanup --all` dans l'abonnement dédié), pas sur l'identité révoquée. À décrire dans `orodruin-contract.md` au code.
+- **révoquer** l'attribution sur `EREGION_STRATUS_SUBSCRIPTION` ;
+- prouver **« rien à révoquer »** en relisant cet abonnement (le patron M191) ;
+- des mutants.
 
 ---
 
-## 3. Le journal d'activité de l'abonnement dédié vers le workspace du banc
+## 2. La garde, l'abonnement du sous-processus, la fenêtre, la watch, le kill
 
-Les techniques Stratus se voient dans le **journal d'activité** (`AzureActivity`, détection AL1). Pour que la watch de H0 les voie **sans droit sur l'abonnement dédié** :
+### L'abonnement vient de la config, jamais du banc (constat 7)
 
-- un **diagnostic setting** sur l'abonnement dédié envoie sa catégorie `Administrative` (au moins) du journal d'activité vers le **Log Analytics workspace du banc** (celui que H0 lit déjà). Geste de Jonathan (§ Gestes).
-- H0 interroge `AzureActivity` dans ce workspace, filtré sur le `SubscriptionId` dédié et la fenêtre — exactement comme il lit les autres tables. **Aucun droit de H0 sur l'abonnement dédié** : le diag setting fait le pont, à sens unique.
+`stratus_host.py:_env` passe tout `os.environ` au sous-processus, donc `AZURE_SUBSCRIPTION_ID` = le banc ; `_run_stratus` retombe aussi dessus (`engine.py`). R2b doit :
 
-**Coût** : le journal d'activité est à faible volume (événements de plan de contrôle, pas de la donnée) ; l'ingestion dans le workspace est marginale. À mesurer : la **latence** de l'événement de création (la relecture note qu'il serait une preuve de fraîcheur plus forte que `createdTime`) et le volume réel (§ Questions).
+- l'abonnement de Stratus vient **seulement** de `EREGION_STRATUS_SUBSCRIPTION` ;
+- l'environnement du sous-processus **remplace** `AZURE_SUBSCRIPTION_ID` et `ARM_SUBSCRIPTION_ID` par l'abonnement dédié (noms exacts à mesurer ; un 403 attendu si on vise l'abonnement du banc) ;
+- le repli sur l'abonnement du banc **disparaît**.
+
+### La garde — ⏳ zone `bench` réservée, posée par le scope
+
+Le moteur Stratus a son propre `Scope`, borné à l'abonnement dédié (`EREGION_STRATUS_SUBSCRIPTION`), construit par lui seul — **jamais** le chemin VM, qui garde `Scope.for_bench()` et `rg-celebrimbor`. `Scope.check` autorise toute ressource de cet abonnement et refuse le reste. Les deux périmètres sont disjoints (abonnements différents).
+
+**Zone (à trancher par Jonathan ; le relecteur recommande) :** la zone `bench`, **réservée** et **posée par le scope** (pas par une étiquette), la faute refusée. `ZONES` et `check_zone` (`inscription.py:77, 224-236`) restent **inchangés** — une zone étiquetable (p. ex. une zone `stratus` lue d'un tag) rouvrirait `enrollment()` au moteur Stratus, ce qu'on ne veut pas. Pas de tag : le scope impose la zone.
+
+### La fenêtre — une seule, avant le `warmup`, sur l'abonnement (constats 3, 4)
+
+Ma v2 « affinait » la fenêtre au groupe une fois son nom connu : **c'est interdit** (SEC14, `exercise.py:247-267` ; `_fields` ne laisse changer que `end`, `closed_by`, `channel_created` — réécrire la cible refuse la fenêtre et compte le run comme réel). Correction :
+
+- **une seule fenêtre**, ouverte **avant le `warmup`**, ciblant **l'abonnement dédié**, et rien d'autre. L'abonnement étant dédié, cette cible est **exacte**, pas « large ». Le **nom du groupe** créé va au **rapport** (pour l'indice de remise en état), **pas** dans la fenêtre.
+- Une fenêtre qui **nomme un abonnement** est une **nouvelle primitive** côté lecteur (H-1) : aujourd'hui `_targets` compare des identifiants exacts. La watch doit tenir l'identifiant de l'abonnement dédié **de sa propre configuration sur H0**, **jamais** de la fenêtre, et **refuser** s'il vaut l'abonnement du banc — sinon une fenêtre nommant `/subscriptions/<banc>` étiquetterait tout le banc « exercice » pendant 2 h 15.
+
+### La watch étiquette sur le `SubscriptionId` (constat 5)
+
+Aujourd'hui `RowAttribution` (`detection_rules.py:1158-1163, 1327-1329`) lit le `_ResourceId` d'une VM : hors des actifs découverts, une ligne de VM part `named=True, target=None` et `_route` la jette en silence ; une ligne sans VM (Bastion, groupe) part « non attribuée », `resource_id` vide, et `source_of` répond `unknown`. L'opération de `azure.execution.vm-run-command` — la technique principale — n'atteindrait jamais l'étiquetage. R2b doit, côté watch :
+
+- nommer **`RowAttribution`, `_route` et `source_of`** comme points de changement ;
+- poser l'étiquetage « exercice » sur le **`SubscriptionId`** de la ligne (quand il vaut l'abonnement dédié **tenu par la config de H0** et qu'une fenêtre est ouverte), pas sur un `resourceId` de VM ;
+- lister les règles **AL1** qui vont tirer sur le `warmup`/`cleanup` : p. ex. `nsg-change-outside-glorfindel` sur le NSG que crée la technique (carte critique) ;
+- dire qu'**aucune règle actuelle** ne détecte Run Command, ni le lien Bastion par un autre appelant — c'est ID1, mais à écrire. Les lignes `AzureActivity` de l'abonnement dédié sont des **données contrôlées** par qui agit dedans ; AL1 décide **sans modèle**, à garder ainsi.
+
+### Le kill — révoquer, puis vider l'abonnement (constats 2, 9)
+
+`orodruin-kill` révoque l'identité (y compris le rôle dédié, § 1) et ferme les fenêtres. Le nettoyage de l'abonnement dédié **ne peut pas** passer par `stratus cleanup --all` depuis le poste de l'opérateur : l'état Terraform de Stratus vit dans le `HOME` d'Orodruin, que le kill vient de désallouer — il n'y a plus d'état. Le bon geste, rendu possible par l'abonnement dédié : **vider l'abonnement** — `az group list --subscription <dédié>` puis `az group delete` de chaque groupe **hors de la liste des groupes qu'Azure crée lui-même** (§ 4), sous le `az login` de l'opérateur, et vérifier qu'il est vide.
 
 ---
 
-## 4. Les majeurs de la relecture
+## 3. Le journal d'activité, le paramètre de diagnostic, sa fraîcheur (constat 10)
 
-- **Gabarit de nom et adresse Terraform par technique, au catalogue.** Le nom du groupe (`<resource_prefix>-rg-<correlation.short>`) et l'adresse Terraform de la ressource (`azurerm_resource_group.lab_environment`) **diffèrent par technique** ; le préfixe **n'est pas configurable** côté Stratus (réponse à la question 4 de la v1). Donc chaque entrée `engine: stratus` du catalogue déclare son `resource_prefix` et l'adresse Terraform du groupe, et l'adaptateur lit l'état à cette adresse pour relever le groupe et la corrélation de ce run. (Sert surtout à nommer la fenêtre et l'indice de remise en état ; la garde, elle, ne dépend plus du nom — c'est le périmètre d'abonnement, § 2.)
-- **`HOME` propre au run.** R2a montait un `HOME` stagé (pour le Terraform pré-installé) partagé. Pour un état Stratus indépendant d'un run à l'autre, R2b donne un **répertoire de travail propre au run** (l'état de la technique, `$HOME/.stratus-red-team/<technique>/`, parti d'un état neuf), tout en gardant le binaire Terraform et le cache de plugins stagés et partagés (hors-ligne, R2a).
-- **`COLD` avant le `warmup`.** Avant de lancer le warmup, vérifier que l'état de la technique et l'abonnement dédié sont **propres** (pas de groupe résiduel d'un run précédent mal nettoyé) — une sonde « COLD » analogue à la sonde d'état initial de R1/R2a. Un résidu → refus (nettoyer d'abord), jamais attaquer par-dessus.
-- **Retrait et expiration.** Plus de tag à retirer (§ 2). Il reste : la **fenêtre** se ferme toujours (teardown robuste de R2a) ; une ressource qui survit à un `cleanup` raté est dans l'abonnement dédié vide (donc sans danger pour le banc) et relève de l'**alerte de budget** + l'indice de remise en état (`stratus cleanup --all`). Une **étiquette d'expiration** sur les ressources du run (proposée par la relecture) permettrait à un balayage périodique de nettoyer les orphelins — à concevoir au code si on l'ajoute.
-- **Le kill depuis le `az login` de l'opérateur** : décrit au § 2 — l'identité révoquée ne nettoie plus, donc le vidage de l'abonnement dédié après kill est un geste opérateur (§ Gestes).
-- **Le jeton masqué** : une technique Stratus imprime un secret (relevé par la relecture). La sortie des phases doit être **masquée** avant journalisation/affichage (le journal d'Orodruin ne doit pas contenir le jeton). À traiter au code.
-- **L'index de `CLAUDE.md`** : lier cette doc de conception à sa place au code, pas avant.
+Pour que la watch voie les techniques **sans droit sur l'abonnement dédié** : un **paramètre de diagnostic** sur l'abonnement dédié route sa catégorie `Administrative` d'`AzureActivity` vers le **Log Analytics workspace du banc** (celui que H0 lit déjà en `Log Analytics Reader`, `infra/glorfindel-host/main.tf:208-210`). Le pont est à sens unique ; H0 n'a aucun droit sur l'abonnement dédié.
+
+Mais **ce workspace est jetable** (il part avec `celebrimbor-down`) : le paramètre pointerait alors sur un workspace détruit et la watch serait **aveugle sans le savoir**. R2b doit donc :
+
+- une **preuve de fraîcheur par run** : l'**événement de création** du `warmup` doit être **vu dans `AzureActivity`** ; sinon le rapport le dit (détection non mesurée, canal muet) ;
+- une ligne d'`orodruin-check` qui **lit le paramètre de diagnostic** (présent, pointant un workspace vivant) comme une garantie.
+
+L'ingestion d'`AzureActivity` est **gratuite** (pas « marginale »).
+
+---
+
+## 4. Les majeurs
+
+- **Gabarit de nom et adresse Terraform par technique, au catalogue.** `<resource_prefix>-rg-<correlation.short>` et l'adresse `azurerm_resource_group.lab_environment` **diffèrent par technique** ; le préfixe **n'est pas configurable** côté Stratus. Chaque entrée `engine: stratus` déclare son `resource_prefix` et l'adresse Terraform ; l'adaptateur lit l'état à cette adresse pour relever le groupe (→ rapport, indice de remise en état). La garde n'en dépend pas (périmètre d'abonnement).
+- **`HOME` propre au run, avec le Terraform stagé lié et revérifié.** Un répertoire de travail neuf par run (état Stratus indépendant), **recevant** le binaire Terraform stagé (copie ou lien) **avec revérification de son empreinte** comme pour le binaire Stratus (R2a). Le cache de plugins reste stagé et partagé (hors-ligne).
+- **`COLD` avant `warmup`, et après `cleanup` (constat 8).** « Appartenir = inscription » suppose « rien d'autre ne vit dans l'abonnement » — **une hypothèse à mesurer**, pas un acquis : à l'armement, à COLD **avant chaque `warmup`**, et **après le `cleanup`** (sonde absente de la v2). Avec une **liste fermée des groupes qu'Azure crée lui-même** (`NetworkWatcherRG` naît avec un VNet ; Defender / `DeployIfNotExists` peuvent créer `DefaultResourceGroup-*`). Un groupe de plus de `MAX_RUN_S` **sans fenêtre vivante** est un orphelin : **`createdTime` suffit** (pas d'étiquette d'expiration). **Un seul run Stratus à la fois** dans l'abonnement dédié (COLD l'implique).
+- **Le lien Bastion masqué (constat 12).** Le secret imprimé par `create-bastion-shareable-link` est un **lien partageable de Bastion** — un accès porteur. Le masquage couvre l'affichage de `stdout` (`stratus_host.py:168`), l'erreur de `stderr` (`stratus_host.py:164-167`) **et** le rapport. Ces endroits sont nommés dès la conception.
+- **Le timeout du `warmup` (constat 13).** Le `warmup` du Bastion (VNet + VM) frôle souvent `PHASE_TIMEOUT_S = 900` ; un timeout tue `stratus` et peut laisser tourner `terraform` et un verrou d'état. À mesurer par technique ; relever le plafond pour ces techniques si besoin.
 
 ---
 
 ## 5. La technique FIC sort du périmètre de R2b
 
-`azure.persistence.backdoor-managed-identity-fic` **ne touche aucune application** (la relecture corrige mon hypothèse de R2a) : elle demande des **écritures privilégiées sur l'annuaire** et des **attributions de rôles**, que le contrat d'Orodruin refuse à raison. Elle **reste `planned`** au catalogue, **hors de R2b**.
-
-Deux corrections à faire (au code, pas dans cette doc) : sa **sonde `graph_probe`** du catalogue (ajoutée à tort en R2a — elle lisait les applications) est à **retirer/corriger** ; et aucun droit Graph d'écriture n'entre dans R2b. Les techniques Entra reviendront dans un lot dédié, avec leur propre modèle de menace.
+`azure.persistence.backdoor-managed-identity-fic` **ne touche aucune application** (ma sonde de R2a était fausse) : elle demande des écritures d'annuaire privilégiées et des attributions de rôles, que le contrat refuse à raison. Elle **reste `planned`**, **hors R2b**. À corriger au code : **retirer/corriger sa `graph_probe`** du catalogue (ajoutée à tort en R2a). Aucun droit Graph d'écriture n'entre dans R2b ; les techniques Entra reviendront dans un lot dédié.
 
 ---
 
-## 6. Les gestes de Jonathan (créer l'abonnement et son cadre)
+## 6. Les gestes de Jonathan — en Terraform (constat 11)
 
-Tous **manuels** (une session n'applique jamais) ; l'`apply`/le plan est montré avant exécution. Chacun a sa vérification. Valeurs réelles (ids d'abonnement, de workspace) **jamais** dans le dépôt — en variables (`EREGION_STRATUS_SUBSCRIPTION`, …).
+Tous **manuels** (une session n'applique jamais) ; le plan montré avant. **En Terraform plutôt qu'`az`** (plan, réversibilité, trace — convention du dépôt) : le rôle personnalisé + son attribution et le paramètre de diagnostic dans `infra/orodruin` (variable vide par défaut) ; le budget via le module `activity_log` avec un **alias de fournisseur** sur l'abonnement dédié. Valeurs réelles jamais dans le dépôt (variables).
 
-1. **Créer l'abonnement de test dédié** (portail ou `az account` selon l'accord d'entreprise), vide. Vérif : `az account show --subscription <id>` répond, et `az resource list --subscription <id>` est **vide**.
-2. **L'identité et son droit** (Option A) : attribuer à l'identité d'Orodruin le rôle du cycle Stratus **au scope de ce seul abonnement**. Montré avant :
-   `az role assignment create --assignee <orodruin-oid> --role <rôle> --scope /subscriptions/<id>`.
-   Vérif : `az role assignment list --assignee <orodruin-oid> --scope /subscriptions/<id>` montre **ce** rôle, et `… --all` n'en montre aucun autre hors du banc. Puis `orodruin-check` s'arme (il accepte ce scope déclaré, et refuserait toute autre attribution hors banc).
-3. **Le diagnostic setting** : router le journal d'activité de l'abonnement dédié vers le workspace du banc.
-   `az monitor diagnostic-settings subscription create --subscription <id> --name stratus-activity --workspace <workspace-resource-id> --logs '[{category: Administrative, enabled: true}]'` (forme exacte à caler).
-   Vérif : après un run, `AzureActivity | where SubscriptionId == "<id>"` renvoie des lignes dans le workspace.
-4. **L'alerte de budget** sur l'abonnement dédié (contre un `cleanup` raté).
-   `az consumption budget create … --subscription <id> …` (forme exacte à caler), seuil bas, notification à Jonathan.
-   Vérif : le budget est listé ; un dépassement notifie.
+1. **L'abonnement de test dédié**, vide, **dans le tenant d'Orodruin**. Vérif : `az account show --subscription <id>` répond, `az resource list --subscription <id>` est vide. Enregistrer **d'avance** les fournisseurs de ressources qu'un rôle étroit ne laissera pas s'enregistrer (azurerm en enregistre beaucoup à l'`init`).
+2. **Le rôle personnalisé fermé + son attribution** (jamais Contributor), au scope `/subscriptions/<id>` :
+   - `Actions` = la liste minimale mesurée par technique ; **`NotActions`** = `Microsoft.Insights/diagnosticSettings/*` (écriture/suppression), `Microsoft.Consumption/*`, `Microsoft.CostManagement/*`, les credentials fédérés ;
+   - attribution avec `--assignee-object-id <oid> --assignee-principal-type ServicePrincipal` ;
+   - **Vérif (le piège M191)** : `az role assignment list --assignee <oid> --subscription <id>` montre ce rôle ; répéter **abonnement par abonnement** (`--all` ne liste que l'abonnement courant de la CLI). Puis `orodruin-check` s'arme.
+3. **Une Azure Policy** sur l'abonnement dédié (le vrai plafond) : types, SKU et régions autorisés, **adresses IP publiques refusées sauf celle du Bastion**.
+4. **Le paramètre de diagnostic** (abonnement dédié → workspace du banc), en Terraform. **Premier test** : avec un groupe vide **créé puis supprimé par Jonathan**, avant tout run Stratus — vérifier que l'événement arrive dans `AzureActivity`.
+5. **Le budget** via Terraform (`azurerm_consumption_budget_subscription` + un groupe d'action, éprouvé par `az monitor action-group test-notifications`) ; dire qu'il est évalué avec **8–24 h de retard** (ce n'est pas un plafond temps réel).
 
-Ces gestes vont dans `docs/operations.md` au code (avec la date), pas dans cette doc de conception.
+Ces gestes iront dans `docs/operations.md` au code (avec la date), pas dans cette doc.
 
 ---
 
 ## Ce que R2b ne fait pas
 
-- **Le run réel au banc** et la mesure de détection (`azure_activity`, AL1) : **ID1 (#281)**, avec Jonathan.
-- **Appliquer** le rôle / le diag setting / le budget : gestes de Jonathan (§ 6), jamais une session.
-- Les techniques **Entra** (dont la FIC) : hors périmètre, restent `planned`.
+- **Le run réel au banc** et la mesure de détection (`azure_activity`, AL1) : **ID1 (#281)**.
+- **Appliquer** le rôle / la policy / le diag setting / le budget : gestes de Jonathan, jamais une session.
+- Les techniques **Entra** (dont la FIC) : hors périmètre, `planned`.
+- Les règles AL1 pour Run Command et le lien Bastion : à écrire (ID1).
 
-## Questions ouvertes pour la relecture — à mesurer au banc
+## À mesurer au banc avant le code
 
-1. **Les droits effectifs de chaque phase, par technique**, sur un abonnement jetable : la liste minimale des actions du rôle (Option A) — Contributor suffit-il, ou veut-on plus étroit ? (Mesure, pas doc.)
-2. **`createdTime` d'un groupe** et la **latence** de l'événement de création au journal d'activité (preuve de fraîcheur / COLD).
-3. La **corrélation** lisible dans l'état après `warmup`, et l'état **propre** avant (COLD), avec un `HOME` propre au run.
-4. Les **`resourceId`/champs** que la watch voit dans `AzureActivity` pour l'abonnement dédié (pour l'étiquetage « exercice » sans lecteur d'inscription par VM).
-5. **Zone** : une zone `stratus` dédiée, ou `bench` réservée à cet abonnement ? (Trancher à la relecture.)
-6. **Identité A ou B** (§ 1) : à trancher à la relecture.
+- Les actions minimales de chaque phase, par technique (`vm-run-command`, `create-bastion-shareable-link`), pour un rôle fermé ; puis le refus effectif sur les paramètres de diagnostic et les budgets.
+- Les variables d'abonnement que lisent Stratus et azurerm, et le 403 attendu si on vise le banc.
+- (B) depuis le bac à sable, une demande de jeton pour l'identité d'Orodruin doit **échouer**.
+- Les groupes qu'Azure crée de lui-même dans l'abonnement dédié (Network Watcher, Defender), avant et **après `cleanup`**.
+- `createdTime` d'un groupe, la **latence** de l'événement de création dans `AzureActivity`, et les champs vus par la watch (`SubscriptionId`, `_ResourceId`, l'appelant).
+- La durée du `warmup` de chaque technique face à `PHASE_TIMEOUT_S`.
+- La sortie Internet d'une VM d'un VNet neuf (depuis le 30/09/2025, pas d'accès sortant par défaut — à confirmer).
+- La forme exacte des commandes/ressources Terraform du paramètre de diagnostic et du budget.
+
+## Décisions en attente de Jonathan
+
+1. **Identité A ou B** (§ 1) — le relecteur recommande **B** (bac à sable sans l'IMDS d'Orodruin, appelant distinct).
+2. **Zone** (§ 2) — le relecteur recommande **`bench` réservée, posée par le scope**, `ZONES` inchangé.

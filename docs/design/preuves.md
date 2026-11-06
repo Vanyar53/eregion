@@ -958,7 +958,7 @@ réattribués à A3 le 27/10).
 La règle de la couche du client du banc (`infra/glorfindel-host/client_rules.bench.yaml`) écarte
 les trois sudo du cron de bree, et rien d'autre. Un mutant par propriété de l'exclusion, chacun
 l'élargit ; mesurés par `tests/unit/test_bench_routine.py`, tous attrapés (06/11), chacun par le
-test de sa propriété. La dérive de la
+test de sa propriété — une cible où le hasard ne joue pas, un seul tour (CI10a). La dérive de la
 copie (`base_sha256`, `_drift` de `glorfindel/detection_rules.py`) a ses mutants aussi, après la
 relecture : une copie périmée écartée, la règle livrée à sa place ; attrapés de même.
 

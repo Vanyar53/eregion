@@ -378,16 +378,29 @@ principal du canari dans l'environnement de la watch, jamais dans le dépôt (`e
 [EREGION_RULE_CANARY_APPID]`, vérifié GUID au chargement). Le geste de Jonathan, **une fois
 déployée une release qui contient CAN2** (avant, la watch ne connaît pas `env_guids` : la copie
 charge son `${…}` tel quel, l'exclusion ne tient jamais, et le canari garde ses cartes — rien de
-caché), depuis le poste :
+caché), depuis le poste, en zsh. L'appid est lu par `az` et écrit par le shell, jamais recopié de
+l'écran (zsh marque d'un `%` une sortie sans fin de ligne : recopié, il entre dans la valeur) ; le
+filtre `displayName eq` est exact, quand `az ad sp list --display-name` prend tout nom qui
+**commence par** `eregion-canary` (et `[0]`, n'importe lequel) :
 
 ```bash
-# 1. L'appid du principal du canari (le même que le secret CANARY_AZURE_CLIENT_ID de
+# 1. L'appid de l'inscription eregion-canary (le même que le secret CANARY_AZURE_CLIENT_ID de
 #    l'environnement `canary` du dépôt) — dans host.env de H0, jamais dans le dépôt :
-az ad sp list --display-name eregion-canary --query "[0].appId" -o tsv
-#    → une ligne EREGION_RULE_CANARY_APPID=<appid> ajoutée à la main à infra/glorfindel-host/host.env
-#      (un host.env neuf la recopie de .envrc ; `make glorfindel-host-env` ne réécrit jamais l'existant)
+cd ~/eregion && source .envrc
+F=infra/glorfindel-host/host.env
+grep -c '^EREGION_RULE_CANARY_APPID=' $F    # → 0 (sinon : la retirer d'abord, sed -i '/^EREGION_RULE_CANARY_APPID=/d' $F)
+N=$(wc -l < $F)
+echo "EREGION_RULE_CANARY_APPID=$(az ad app list --filter "displayName eq 'eregion-canary'" --query '[].appId' -o tsv)" >> $F
+#    Une seule ligne ajoutée, un seul GUID — sinon (deux inscriptions de ce nom, ou aucune),
+#    retirer ce qui vient d'être ajouté, sed -i "$((N+1)),\$d" $F, et s'arrêter :
+echo $(( $(wc -l < $F) - N ))                # → 1
+grep -cE '^EREGION_RULE_CANARY_APPID=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' $F   # → 1
+#    Contrôle croisé : cette valeur est le CallerAppId d'une des cartes nsg-change-outside-glorfindel
+#    du canari du 06/11 (sa ligne, dans la console) — un id, aucun secret :
+grep '^EREGION_RULE_CANARY_APPID=' $F
 make glorfindel-host-push        # host.env → ~/eregion/.env ; --check dit une valeur qui n'est pas un GUID
-# 2. La watch et la console la reçoivent : recréées (un `restart` ne relit pas ~/eregion/.env) :
+# 2. La watch et la console la reçoivent : recréées (un `restart`, celui de l'étape 3 aussi, ne
+#    relit pas ~/eregion/.env) :
 make glorfindel-host-ssh         # puis, sur H0 : cd eregion && docker compose up -d watch war-room
 # 3. La copie dans la couche du client de H0 ; la watch redémarre et `glorfindel rules` s'affiche :
 make glorfindel-host-client-rules
@@ -398,7 +411,10 @@ note « remplacée par celle de la couche du client », et **aucune** note « ER
 absente, vide ou pas un GUID ». Avec cette note, la variable manque à la watch : la copie est
 écartée, la règle livrée tourne (les cartes du canari reviennent) — reprendre les étapes 1 et 2.
 La cible le rappelle : sa relecture sur le poste prend un GUID de remplacement (l'appid de H0 n'y
-est jamais) et dit que la watch de H0 en a besoin. Pour revenir aux cartes du canari : vider la
+est jamais) et dit que la watch de H0 en a besoin. **Après coup** : au run planifié du canari du
+lendemain (06:00 UTC), aucune carte `nsg-change-outside-glorfindel` sur `rg-eregion-canary` ; une
+carte du canari, c'est que l'exclusion ne tient pas (l'appid n'est pas celui du principal du run, ou
+la variable manque à la watch) — reprendre l'étape 1. Pour revenir aux cartes du canari : vider la
 variable (étapes 1 et 2), ou retirer la règle de la couche de H0.
 
 **Après une mise à jour de Glorfindel**, si une règle livrée recopiée a changé (n'importe quel

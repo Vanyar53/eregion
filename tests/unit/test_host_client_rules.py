@@ -30,7 +30,7 @@ from glorfindel.detection_rules import load_config, shipped_rules_path  # noqa: 
 BENCH = ROOT / "infra" / "glorfindel-host" / "client_rules.bench.yaml"
 NAME = "sudo-privilege-escalation"
 CANARY = "nsg-change-outside-glorfindel"      # CAN2: its appid from the environment of H0's watch
-IP ="192.0.2.10"   # TEST-NET-1: no machine answers there
+IP = "192.0.2.10"   # TEST-NET-1: no machine answers there
 APPROVED = {"name": "log-clearing", "ttp": "T1070.002", "assets": ["auto"], "monitoring_backends": ["law-main"],
             "query": 'Syslog\n| where SyslogMessage has "rm -f /var/log"\n'}
 needs_tools = pytest.mark.skipif(not (shutil.which("make") and shutil.which("flock")),

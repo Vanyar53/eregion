@@ -10,10 +10,13 @@ mutant, the code moved) — never counted as caught.
     python scripts/mutation_check.py                       # push budget (60), 3 rounds
     python scripts/mutation_check.py --examples 1000 --rounds 2
     python scripts/mutation_check.py --only M04,M13
-    python scripts/mutation_check.py --examples 500 --rounds 2 --shard 3/10 --json m3.json   # the release gate's
+    python scripts/mutation_check.py --examples 500 --rounds 2 --skip-machine-baseline --shard 3/10 --json m3.json   # the gate's
     python scripts/mutation_check.py --total DIR --shards 10 --control-shards 2 --examples 500 --rounds 2
+    python scripts/mutation_check.py --machines --shard 3/14 --json m3.json                  # the Monday's (CI10b)
+    python scripts/mutation_check.py --narrow tests/unit/test_host_cd.py --rounds 2 --jobs 4
 
-Each round draws new seeds. The table says, per mutant, how many rounds caught it.
+Each round draws new seeds — for Hypothesis only: a target no chance moves has one round (CI10a,
+rounds_of). The table says, per mutant, how many rounds caught it, of its rounds.
 A mutant the invariants can't see by construction says why: EQUIVALENT (no behaviour
 of the fake world tells it apart), MULTI-HOST (needs a second host writing between two of
 our calls — the locks are per host; a unit test covers it). Those two, and STALE, are not
@@ -28,6 +31,7 @@ known survivor caught in every round is said, never red: take its reason off by 
 from __future__ import annotations
 
 import argparse
+import ast
 import concurrent.futures
 import heapq
 import importlib
@@ -42,6 +46,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -10785,6 +10790,42 @@ for _lot in LOTS.values():
     for _mid, _also in _lot["TESTS_ALSO"].items():
         TESTS[_mid] = f"{TESTS.get(_mid, INVARIANTS)} {_also}"
 
+# CI10a (#580): a mutant whose target is a heavy file whole runs on the tests of that file that
+# catch it — the fastest NARROW of them, measured once by `--narrow FILE` (a run of the whole file,
+# without -x) and kept in scripts/mutants/narrowed.json: {id: {"whole": its target, "tests": the
+# nodes}}. An entry applies only while its mutant's target is still `whole`, as written in its lot;
+# WHOLE keeps that target, which `--narrow` measures again. scripts/mutant_anchors.py says an entry
+# that no longer applies, or a node its file no longer defines.
+NARROWED = LOTS_DIR / "narrowed.json"
+NARROW = 2
+
+
+def load_narrowed(path: Path | None = None) -> dict:
+    """{id: {"whole": target, "tests": nodes}} from narrowed.json; absent or unreadable, nothing —
+    each mutant keeps the target of its lot (never a narrower one guessed)."""
+    try:
+        doc = json.loads((NARROWED if path is None else path).read_text(encoding="utf-8"))
+        found = doc["mutants"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    return {str(k): {"whole": v["whole"], "tests": v["tests"]} for k, v in dict(found).items()
+            if isinstance(v, dict) and isinstance(v.get("whole"), str) and isinstance(v.get("tests"), str)
+            and v["tests"].split()}
+
+
+def narrowed(tests: dict, entries: dict) -> dict[str, str]:
+    """{id: its whole target} of each entry that applies — its mutant's target is still its whole;
+    `tests` takes the entry's nodes."""
+    whole = {}
+    for mid, entry in entries.items():
+        if tests.get(mid) == entry["whole"]:
+            whole[mid] = entry["whole"]
+            tests[mid] = entry["tests"]
+    return whole
+
+
+WHOLE = narrowed(TESTS, load_narrowed())
+
 
 
 def _copy_repo(dest: Path) -> None:
@@ -10817,20 +10858,45 @@ def unmeasurable(stdout: str) -> str | None:
 MUTANT_RUN = "EREGION_MUTANT_RUN"
 
 
-def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS) -> bool:
-    """True if `target` (test paths, space-separated) FAILS on this copy (the mutant is caught)."""
+def _pytest(copy: Path, examples: int, target: str, *more: str) -> subprocess.CompletedProcess:
+    """pytest on `target` (test paths, space-separated) in this copy, as the harness runs it."""
     env = {**os.environ, "GLORFINDEL_INVARIANT_EXAMPLES": str(examples), "GLORFINDEL_INVARIANT_NO_SHRINK": "1",
            "PYTHONPATH": str(copy), "PYTHONDONTWRITEBYTECODE": "1"}
     env[MUTANT_RUN] = "1"
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", *target.split(), "-q", "-x", "-p", "no:cacheprovider"],
-        cwd=copy, env=env, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "pytest", *target.split(), "-q", *more, "-p", "no:cacheprovider"],
+                          cwd=copy, env=env, capture_output=True, text=True)
+
+
+def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS) -> bool:
+    """True if `target` (test paths, space-separated) FAILS on this copy (the mutant is caught)."""
+    proc = _pytest(copy, examples, target, "-x")
     missing = unmeasurable(proc.stdout)
     if missing:
         raise RuntimeError(f"{missing}\n{proc.stdout[-2000:]}")
     if show and proc.returncode != 0:
         print("\n".join(line for line in proc.stdout.splitlines() if line.startswith("E ")) or proc.stdout[-3000:])
     return proc.returncode != 0
+
+
+def apply_mutant(mutant, copy: Path) -> str | None:
+    """Re-introduce the mutant's bug in this copy: None, or why it could not (it is STALE)."""
+    _mid, _title, rel, old, new = mutant[:5]
+    target = copy / rel
+    if old is RENAME:
+        if not target.exists():
+            return "file to rename is gone"
+        target.rename(copy / new)
+        return None
+    text = target.read_text()
+    if isinstance(old, tuple) != isinstance(new, tuple) or (isinstance(old, tuple) and len(old) != len(new)):
+        return "old and new replacements do not pair up"
+    pairs = zip(old, new) if isinstance(old, tuple) else [(old, new)]
+    for o, n in pairs:
+        if text.count(o) != 1:
+            return f"{text.count(o)} matches"
+        text = text.replace(o, n)
+    target.write_text(text)
+    return None
 
 
 # ── CI6 (#514): the release gate measures every mutant, in shards ───────────────────────────
@@ -10876,6 +10942,125 @@ SECONDS = re.compile(r"\((\d+(?:\.\d+)?)s\)")     # a row's detail before CI6d: 
 
 def _heavy(target: str) -> bool:
     return "test_invariants" in target
+
+
+# ── CI10a (#580): rounds where chance plays, the machines' baseline where the gate proves it ────
+# A second round draws new seeds for Hypothesis only: on any other test it replays the same test on
+# the same code — in the gate's first three runs (05/11), no mutant of such a target changed its
+# verdict from one round, or one run, to the next. A target keeps its rounds when one of its files
+# draws (imports Hypothesis: the invariant machines, the property tests) or races (TIMED: real
+# processes, real clocks), or when its mutant is TIMING; any other has one round. An unreadable file
+# keeps the rounds. A machine is a file that defines a RuleBasedStateMachine: `--machines` takes the
+# mutants whose target runs one, and `--skip-machine-baseline` leaves the machines out of a shard's
+# unmutated runs — the release gate's `invariants` job runs them on the same tree, at 2 000.
+DRAWS = re.compile(r"^\s*(?:from\s+hypothesis[\s.]|import\s+hypothesis\b)", re.M)
+MACHINE = re.compile(r"^class\s+\w+\(\s*(?:\w+\.)*RuleBasedStateMachine\s*\)\s*:", re.M)
+TIMED = ("tests/unit/test_locks.py", "tests/unit/test_exercise.py")
+_SOURCES: dict[str, str | None] = {}
+
+
+def _source(rel: str) -> str | None:
+    """A test file of this tree, read once; None when it cannot be read."""
+    if rel not in _SOURCES:
+        try:
+            _SOURCES[rel] = (REPO / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            _SOURCES[rel] = None
+    return _SOURCES[rel]
+
+
+def files_of(target: str) -> list[str]:
+    """The test files a target runs: each path of it (a node's file), its options aside."""
+    out = []
+    for word in target.split():
+        path = word.split("::")[0]
+        if path.endswith(".py") and path not in out:
+            out.append(path)
+    return out
+
+
+def machine(target: str) -> bool:
+    """True when the target runs an invariant machine."""
+    return any(MACHINE.search(_source(f) or "") for f in files_of(target))
+
+
+# CI10a, review: a race on real threads draws no seed either, and TIMED did not see it (M1346's
+# stuck race, M3550's two isolations at once). A test races when it starts a thread or a process —
+# in its own body, or through a function of its file it calls (RACES). A target runs the tests it
+# names, or a file's whole, or those of a file whose names hold a word of its `-k`.
+RACES = re.compile(r"threading\.|\bThread\(|Barrier\(|ThreadPoolExecutor|ProcessPoolExecutor|"
+                   r"multiprocessing|\.Popen\(|_Scheduler\(")
+_RACERS: dict[str, frozenset | None] = {}
+
+
+def racers(rel: str) -> frozenset | None:
+    """The tests of a file that start a thread or a process; None when it cannot be read."""
+    if rel not in _RACERS:
+        source = _source(rel)
+        try:
+            tree = ast.parse(source) if source is not None else None
+        except SyntaxError:
+            tree = None
+        if tree is None:
+            _RACERS[rel] = None
+        else:
+            funcs = {n.name: ast.get_source_segment(source, n) or "" for n in ast.walk(tree)
+                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            classes = {n.name: ast.get_source_segment(source, n) or "" for n in ast.walk(tree)
+                       if isinstance(n, ast.ClassDef)}
+            direct = {name for name, text in (classes | funcs).items() if RACES.search(text)}
+            _RACERS[rel] = frozenset(
+                name for name, text in funcs.items() if name.startswith("test")
+                and (name in direct or any(c in direct for c in re.findall(r"\b(\w+)\(", text))))
+    return _RACERS[rel]
+
+
+def races(target: str) -> bool:
+    """True when a test the target runs starts a thread or a process."""
+    words = target.split()
+    keys = {w for i, word in enumerate(words) if word == "-k" and i + 1 < len(words)
+            for w in re.findall(r"[A-Za-z_]\w*", words[i + 1]) if w not in ("and", "or", "not")}
+    for word in words:
+        path, _, rest = word.partition("::")
+        if not path.endswith(".py"):
+            continue
+        found = racers(path)
+        if found is None:
+            return True
+        name = rest.split("::")[-1].split("[")[0] if rest else ""
+        if any(t == name if name else (not keys or any(k in t for k in keys)) for t in found):
+            return True
+    return False
+
+
+def chance(target: str) -> bool:
+    """True when a second round of this target can tell something the first did not."""
+    return any(f in TIMED or (s := _source(f)) is None or DRAWS.search(s) for f in files_of(target)) or races(target)
+
+
+def rounds_of(mutant, target: str, rounds: int, control: bool = False) -> int:
+    """The rounds a mutant takes: all of them where chance plays, and always in the control set
+    (CI10a, review: it measures what the suite was never shaped to find), else one."""
+    if control:
+        return rounds
+    return rounds if mark(mutant) == "TIMING" or chance(target) else min(rounds, 1)
+
+
+def baseline_of(target: str, skip_machines: bool = False) -> str:
+    """The unmutated run of a target: itself; with skip_machines, without its machine files — ''
+    when nothing of it is left to run."""
+    if not skip_machines:
+        return target
+    kept = [w for w in target.split() if not (w.split("::")[0].endswith(".py") and machine(w))]
+    return " ".join(kept) if files_of(" ".join(kept)) else ""
+
+
+def selected(mutants: list, control: bool = False, machines: bool = False) -> list:
+    """The mutants a run measures: with `machines`, those whose target runs an invariant machine —
+    the control set keeps its own."""
+    if control or not machines:
+        return list(mutants)
+    return [m for m in mutants if machine(TESTS.get(m[0], INVARIANTS))]
 
 
 def _seconds(value) -> float | None:
@@ -10926,27 +11111,37 @@ def load_durations(path: Path | None = None, say=print) -> dict:
     return out
 
 
-def costs(todo: list, tests: dict, durations: dict) -> tuple[dict, dict, dict]:
+def costs(todo: list, tests: dict, durations: dict, skip: bool = False) -> tuple[dict, dict, dict]:
     """(mutant id -> seconds, target -> seconds of its unmutated run, target -> its mutants' ids
-    in todo's order), from the durations measured, else estimated."""
+    in todo's order), from the durations measured, else estimated. A run is weighed by what runs
+    (baseline_of): with `skip`, a target's machines left out — nothing left, nothing to weigh."""
     measured, runs = durations.get("mutants") or {}, durations.get("targets") or {}
     groups: dict[str, list] = {}
+    rounds: dict[str, int] = {}
     for m in todo:
-        groups.setdefault(tests.get(m[0], INVARIANTS), []).append(m[0])
+        target = tests.get(m[0], INVARIANTS)
+        groups.setdefault(target, []).append(m[0])
+        rounds[target] = max(rounds.get(target, 1), rounds_of(m, target, DURATIONS_BUDGET[1], m in CONTROL))
     mutant, unmutated = {}, {}
     for target, ids in groups.items():
         estimate = UNIT * (HEAVY if _heavy(target) else 1)
         known = sorted(measured[i] for i in ids if i in measured)
         guess = statistics.median(known) if known else estimate
         mutant.update({i: measured.get(i, guess) for i in ids})
-        unmutated[target] = runs.get(target, max(estimate, max(known, default=0) / DURATIONS_BUDGET[1]))
+        run = baseline_of(target, skip)
+        if not run:
+            unmutated[target] = 0.0
+        elif run != target:
+            unmutated[target] = runs.get(run, UNIT * (HEAVY if _heavy(run) else 1))
+        else:
+            unmutated[target] = runs.get(target, max(estimate, max(known, default=0) / rounds[target]))
     return mutant, unmutated, groups
 
 
-def pieces_of(todo: list, n: int, tests: dict, durations: dict) -> list:
+def pieces_of(todo: list, n: int, tests: dict, durations: dict, skip: bool = False) -> list:
     """The pieces the shards are made of: (seconds, target, index, mutant ids). A target's mutants
     in one piece, or in as many as its weight asks — each the heaviest first to the lightest."""
-    mutant, unmutated, groups = costs(todo, tests, durations)
+    mutant, unmutated, groups = costs(todo, tests, durations, skip)
     share = sum(unmutated[t] + sum(mutant[i] for i in ids) for t, ids in groups.items()) / n
     cap = share / PIECES
     pieces = []
@@ -10963,21 +11158,23 @@ def pieces_of(todo: list, n: int, tests: dict, durations: dict) -> list:
     return pieces
 
 
-def shards_of(todo: list, n: int, tests: dict | None = None, durations: dict | None = None) -> list[set]:
+def shards_of(todo: list, n: int, tests: dict | None = None, durations: dict | None = None,
+              skip: bool = False) -> list[set]:
     """Each shard's mutant ids, the n of them."""
     tests = TESTS if tests is None else tests
     durations = load_durations() if durations is None else durations
     load, mine = [0.0] * n, [set() for _ in range(n)]
-    for cost, _target, _i, part in sorted(pieces_of(todo, n, tests, durations), key=lambda p: (-p[0], p[1], p[2])):
+    for cost, _target, _i, part in sorted(pieces_of(todo, n, tests, durations, skip), key=lambda p: (-p[0], p[1], p[2])):
         j = min(range(n), key=lambda s: (load[s], s))
         load[j] += cost
         mine[j].update(part)
     return mine
 
 
-def shard_of(todo: list, k: int, n: int, tests: dict | None = None, durations: dict | None = None) -> list:
+def shard_of(todo: list, k: int, n: int, tests: dict | None = None, durations: dict | None = None,
+             skip: bool = False) -> list:
     """The mutants of shard k of n (1-based), in todo's order."""
-    mine = shards_of(todo, n, tests, durations)[k - 1]
+    mine = shards_of(todo, n, tests, durations, skip)[k - 1]
     return [m for m in todo if m[0] in mine]
 
 
@@ -10994,29 +11191,31 @@ def _wall(seconds: list, jobs: int) -> float:
     return max(ends)
 
 
-def plan(todo: list, n: int, jobs: int, tests: dict | None = None, durations: dict | None = None) -> list:
-    """Each shard's estimate, as main() runs it: (mutants, targets, seconds) — its unmutated runs,
-    then its mutants, each pool the heaviest first; the installation aside."""
+def plan(todo: list, n: int, jobs: int, tests: dict | None = None, durations: dict | None = None,
+         skip: bool = False) -> list:
+    """Each shard's estimate, as main() runs it: (mutants, targets, seconds) — its unmutated runs
+    and its mutants in one pool, the heaviest first (CI10a); the installation aside."""
     tests = TESTS if tests is None else tests
     durations = load_durations() if durations is None else durations
-    mutant, unmutated, _ = costs(todo, tests, durations)
+    mutant, unmutated, _ = costs(todo, tests, durations, skip)
     out = []
-    for mine in shards_of(todo, n, tests, durations):
+    for mine in shards_of(todo, n, tests, durations, skip):
         targets = {tests.get(i, INVARIANTS) for i in mine}
-        seconds = (_wall([unmutated[t] for t in heaviest_first(sorted(targets), unmutated)], jobs)
-                   + _wall([mutant[i] for i in heaviest_first(sorted(mine), mutant)], jobs))
-        out.append((len(mine), len(targets), seconds))
+        runs = [unmutated[t] for t in targets if baseline_of(t, skip)] + [mutant[i] for i in mine]
+        out.append((len(mine), len(targets), _wall(sorted(runs, reverse=True), jobs)))
     return out
 
 
-def say_plan(todo: list, n: int, jobs: int, durations: dict | None = None) -> int:
+def say_plan(todo: list, n: int, jobs: int, durations: dict | None = None, skip: bool = False) -> int:
     durations = load_durations() if durations is None else durations
     ids = {m[0] for m in todo}
     measured = len(ids & set(durations["mutants"]))
     targets = {TESTS.get(i, INVARIANTS) for i in ids}
+    runs = {baseline_of(t, skip) for t in targets} - {""}
     print(f"{n} shards of {len(todo)} mutants, --jobs {jobs}: measured {measured} mutants of {len(todo)}, "
-          f"{len(targets & set(durations['targets']))} unmutated runs of {len(targets)} (the rest estimated)")
-    shards = plan(todo, n, jobs, durations=durations)
+          f"{len(runs & set(durations['targets']))} unmutated runs of {len(runs)} (the rest estimated)"
+          + (", the machines' left to the invariants job" if skip else ""))
+    shards = plan(todo, n, jobs, durations=durations, skip=skip)
     for k, (count, nt, seconds) in enumerate(shards, 1):
         print(f"  shard {k:2}/{n}: {count:4} mutants, {nt:3} targets, ~{seconds / 60:5.1f} min")
     if shards:
@@ -11039,6 +11238,28 @@ def _result_durations(doc: dict, where: str = "", say=lambda *a, **k: None) -> t
     return mutants, _durations_of(doc.get("targets"), "targets", where, say)
 
 
+def as_today(doc: dict, mutants: dict, tree: dict) -> tuple[dict, set]:
+    """A result's mutant measures as this tree runs them (CI10a): each on the target and in the
+    rounds it was measured with (its fields; before CI10a, its whole target and the result's
+    rounds). One measured on another target than today's is no measure of it — it goes, and so
+    does an older one kept; one measured in other rounds is scaled to today's (its copy aside)."""
+    targets, rounds = dict(doc.get("mutant_targets") or {}), dict(doc.get("mutant_rounds") or {})
+    out, moved = {}, set()
+    for mid, s in mutants.items():
+        if mid not in tree:
+            continue
+        today = TESTS.get(mid, INVARIANTS)
+        then = targets.get(mid, WHOLE.get(mid, today))
+        if then != today:
+            moved.add(mid)
+            continue
+        r_then = rounds.get(mid, doc.get("rounds"))
+        r_now = rounds_of(tree[mid], today, DURATIONS_BUDGET[1], tree[mid] in CONTROL)
+        ok = isinstance(r_then, int) and not isinstance(r_then, bool) and r_then > 0
+        out[mid] = s * r_now / r_then if ok else s
+    return out, moved
+
+
 def update_durations(dirs: list[Path], path: Path | None = None, say=print) -> int:
     """scripts/mutants/durations.json from the shards' results under `dirs` (a run's artifacts):
     each mutant and each target of this tree measured there takes its smallest measure — a slower
@@ -11046,9 +11267,11 @@ def update_durations(dirs: list[Path], path: Path | None = None, say=print) -> i
     Only results at DURATIONS_BUDGET count. 1 when none could be read."""
     path = DURATIONS if path is None else path
     old = load_durations(path, say=say)
-    tree_ids = {m[0] for m in MUTANTS + CONTROL}
-    tree_targets = {TESTS.get(i, INVARIANTS) for i in tree_ids}
+    tree = {m[0]: m for m in MUTANTS + CONTROL}
+    tree_ids = set(tree)
+    tree_targets = {baseline_of(TESTS.get(i, INVARIANTS), skip) for i in tree_ids for skip in (False, True)} - {""}
     new: dict[str, dict] = {"mutants": {}, "targets": {}}
+    moved: set[str] = set()       # measured there on another target than today's: no measure of it
     read = 0
     for where in dirs:
         for result in sorted(Path(where).rglob("*.json")):
@@ -11064,6 +11287,8 @@ def update_durations(dirs: list[Path], path: Path | None = None, say=print) -> i
                     f"{DURATIONS_BUDGET[0]}, {DURATIONS_BUDGET[1]}: left out")
                 continue
             read += 1
+            mutants, gone = as_today(doc, mutants, tree)
+            moved |= gone
             for kind, found, known in (("mutants", mutants, tree_ids), ("targets", targets, tree_targets)):
                 for key, s in found.items():
                     if key in known:
@@ -11073,7 +11298,8 @@ def update_durations(dirs: list[Path], path: Path | None = None, say=print) -> i
         return 1
     out = {}
     for kind, known in (("mutants", tree_ids), ("targets", tree_targets)):
-        merged = {k: v for k, v in old[kind].items() if k in known} | new[kind]
+        merged = {k: v for k, v in old[kind].items() if k in known and not (kind == "mutants" and k in moved)}
+        merged |= new[kind]
         out[kind] = {k: max(1, round(merged[k])) for k in sorted(merged)}
     doc = {"about": "CI6d (#545): seconds measured by the release gate's shards, at its budget. "
                     "Written by: python scripts/mutation_check.py --update-durations DIR...",
@@ -11152,13 +11378,15 @@ def say_never(rows: list, mutants: list, say=print) -> None:
             f"reason names a race test that catches it at times — check that it still does")
 
 
-def total(where: Path, shards: int, control_shards: int, examples: int, rounds: int) -> int:
+def total(where: Path, shards: int, control_shards: int, examples: int, rounds: int,
+          machines: bool = False) -> int:
     """The shards' results under `where` (*.json, as --json writes them), put together. 1 when a
     shard is missing, given twice, or measured at another budget; when the shards together did
     not measure each mutant of this tree (MUTANTS, CONTROL) exactly once; or when a counted
     mutant of MUTANTS survived a round and is no known survivor (CI6e) — a known survivor caught
     is said, never red. The control set is said, never held: it measures what the suite was never
-    shaped to find."""
+    shaped to find. With `machines` (CI10a), the mutants are those whose target runs an invariant
+    machine (selected), each shard of theirs measured so: the others are not this total's."""
     problems: list[str] = []
     found: dict[bool, dict[int, list]] = {False: {}, True: {}}
     for path in sorted(where.rglob("*.json")):
@@ -11175,11 +11403,14 @@ def total(where: Path, shards: int, control_shards: int, examples: int, rounds: 
                             f"{doc.get('rounds')} rounds — not {examples}, {rounds}")
         if n != (control_shards if control else shards):
             problems.append(f"{path.name}: {name} shard {k} of {n}, not of {control_shards if control else shards}")
+        if not control and bool(doc.get("machines")) != machines:
+            problems.append(f"{path.name}: mutants measured {'with' if doc.get('machines') else 'without'} "
+                            f"--machines, not {'with' if machines else 'without'}")
         if k in found[control]:
             problems.append(f"{path.name}: {name} shard {k} given twice")
         found[control].setdefault(k, []).extend(rows)
     said = {}
-    for control, n, every in ((False, shards, MUTANTS), (True, control_shards, CONTROL)):
+    for control, n, every in ((False, shards, selected(MUTANTS, machines=machines)), (True, control_shards, CONTROL)):
         name = "control" if control else "mutants"
         missing = sorted(set(range(1, n + 1)) - set(found[control]))
         if missing:
@@ -11202,7 +11433,8 @@ def total(where: Path, shards: int, control_shards: int, examples: int, rounds: 
     caught, counted = said[False]
     mutant_rows = [r for shard_rows in found[False].values() for r in shard_rows]
     unknown, no_more = judge(mutant_rows, MUTANTS)
-    print(f"\nbudget {examples} sequences, {rounds} rounds, {shards} + {control_shards} shards:")
+    print(f"\nbudget {examples} sequences, {rounds} rounds, {shards} + {control_shards} shards"
+          + (", the mutants of the invariant machines only (--machines):" if machines else ":"))
     print(f"mutants: {caught}/{counted} caught in every round (equivalent and multi-host mutants aside); "
           f"{len(unknown)} survived a round outside the known survivors ({len(known(MUTANTS))} known)")
     print(f"control: {said[True][0]}/{said[True][1]} caught in every round (said, not held)")
@@ -11211,6 +11443,86 @@ def total(where: Path, shards: int, control_shards: int, examples: int, rounds: 
     for p in problems:
         print(f"  ✗ {p}")
     return 1 if problems or unknown else 0
+
+
+def failures_of(xml: Path, file: str) -> list[tuple[float, str]]:
+    """(seconds, node) of each test of `file` that failed or erred in this junit report, the
+    fastest first. A target is split on spaces: a parameter's id with a space in it gives its
+    test whole, every parameter of it (M1010's, a JSON document); a name with one, nothing."""
+    module = file.removesuffix(".py").replace("/", ".")
+    out: dict[str, float] = {}
+    for case in ET.parse(xml).getroot().iter("testcase"):
+        cls, name = case.get("classname") or "", case.get("name") or ""
+        if not name or not any(c.tag in ("failure", "error") for c in case):
+            continue
+        if cls != module and not cls.startswith(module + "."):
+            continue
+        node = "::".join([file, *[p for p in cls[len(module):].split(".") if p], name])
+        if any(ch.isspace() for ch in node):
+            node = node.split("[", 1)[0]
+        if not any(ch.isspace() for ch in node):
+            out[node] = min(out.get(node, math.inf), float(case.get("time") or 0))
+    return sorted((s, node) for node, s in out.items())
+
+
+def narrow(file: str, todo: list, examples: int, rounds: int, jobs: int, path: Path | None = None,
+           say=print) -> int:
+    """`--narrow FILE` (CI10a): each mutant of `todo` (its target, whole, is FILE) on a copy, FILE
+    run whole without -x; the fastest NARROW tests that catch it become its target if they catch it
+    in each of `rounds` rounds — else it keeps FILE whole. narrowed.json keeps the others' entries."""
+    path = NARROWED if path is None else path
+    with tempfile.TemporaryDirectory(prefix="glorfindel-narrow-") as tmp:
+        # Each mutant's copy is made of the pristine one, never of the copy the unmutated run
+        # wrote in (CI10a, review: as main() does, M4188).
+        pristine, base = Path(tmp) / "pristine", Path(tmp) / "base"
+        _copy_repo(pristine)
+        shutil.copytree(pristine, base)
+        if _pytest(base, examples, file).returncode != 0:
+            say(f"{file} fails on the UNMUTATED code — fix that first")
+            return 2
+
+        def one(mutant):
+            mid = mutant[0]
+            copy = Path(tmp) / mid
+            shutil.copytree(pristine, copy)
+            try:
+                if (stale := apply_mutant(mutant, copy)) is not None:
+                    return mid, None, f"STALE ({stale}): keeps {file} whole"
+                xml = copy / "narrow.xml"
+                _pytest(copy, examples, file, f"--junitxml={xml}")
+                found = failures_of(xml, file) if xml.exists() else []
+                if not found:
+                    return mid, None, f"caught by no test of {file}: keeps it whole"
+                tests = " ".join(node for _s, node in found[:NARROW])
+                caught = sum(_run(copy, examples, target=tests) for _ in range(rounds))
+                if caught != rounds:
+                    return mid, None, f"{len(found)} tests catch it, the fastest {caught}/{rounds}: keeps {file} whole"
+                return mid, tests, f"{len(found)} tests catch it: {tests}"
+            finally:
+                shutil.rmtree(copy, ignore_errors=True)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+            results = []
+            for mid, tests, said in pool.map(one, todo):
+                say(f"{mid}  {said}", flush=True)
+                results.append((mid, tests))
+    try:
+        entries = dict(json.loads(path.read_text(encoding="utf-8"))["mutants"])
+    except (OSError, ValueError, KeyError, TypeError):
+        entries = {}
+    tree = {m[0] for m in MUTANTS + CONTROL}
+    entries = {k: v for k, v in entries.items() if k in tree}
+    for mid, tests in results:
+        if tests:
+            entries[mid] = {"whole": file, "tests": tests}
+        else:
+            entries.pop(mid, None)
+    doc = {"about": "CI10a (#580): each mutant whose target is a heavy file whole, on the fastest tests of "
+                    "that file that catch it. Written by: python scripts/mutation_check.py --narrow FILE",
+           "mutants": {k: entries[k] for k in sorted(entries)}}
+    path.write_text(json.dumps(doc, indent=1) + "\n", encoding="utf-8")
+    kept = sum(1 for _m, t in results if t)
+    say(f"{path.name}: {kept} of {len(results)} mutants of {file} narrowed, {len(results) - kept} keep it whole")
+    return 0
 
 
 # CI6b (#538): ChromaDB's embedding model, made ready once, here, before any run in parallel. On a
@@ -11279,87 +11591,106 @@ def main(argv: list[str] | None = None) -> int:
                     help="say each of N shards' estimated time, from the durations measured; measure nothing (CI6d)")
     ap.add_argument("--update-durations", nargs="+", default=[], metavar="DIR",
                     help="scripts/mutants/durations.json from the --json results under these directories (CI6d)")
+    ap.add_argument("--narrow", default="", metavar="FILE",
+                    help="each mutant whose target is FILE whole: on the fastest tests that catch it, "
+                         "into scripts/mutants/narrowed.json (CI10a)")
+    ap.add_argument("--machines", action="store_true",
+                    help="the mutants whose target runs an invariant machine only; with --total, judge "
+                         "those only (CI10a). The control set keeps its own")
+    ap.add_argument("--skip-machine-baseline", action="store_true",
+                    help="no unmutated run of an invariant machine in this shard: the release gate's "
+                         "invariants job runs it on the same tree (CI10a)")
     args = ap.parse_args(argv)
     if args.total:
-        return total(Path(args.total), args.shards, args.control_shards, args.examples, args.rounds)
+        return total(Path(args.total), args.shards, args.control_shards, args.examples, args.rounds,
+                     machines=args.machines)
     if args.update_durations:
         return update_durations([Path(d) for d in args.update_durations])
     only = {m.strip() for m in args.only.split(",") if m.strip()}
+    if args.narrow:
+        todo = [m for m in MUTANTS if WHOLE.get(m[0], TESTS.get(m[0])) == args.narrow and (not only or m[0] in only)]
+        return narrow(args.narrow, todo, args.examples, args.rounds, args.jobs)
     durations = load_durations()
+    skip = args.skip_machine_baseline
+    todo = [m for m in selected(CONTROL if args.control else MUTANTS, args.control, args.machines)
+            if not only or m[0] in only]
     if args.plan:
-        return say_plan([m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only],
-                        args.plan, args.jobs, durations)
+        return say_plan(todo, args.plan, args.jobs, durations, skip=skip)
     k, n = parse_shard(args.shard) if args.shard else (1, 1)
 
     with tempfile.TemporaryDirectory(prefix="glorfindel-mutants-") as tmp:
-        base = Path(tmp) / "base"
-        _copy_repo(base)
-        todo = [m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only]
-        todo = shard_of(todo, k, n, durations=durations) if n > 1 else todo
-        # Each pool takes the heaviest first (CI6d): a long run started last makes the shard's tail.
-        mutant_cost, target_cost, _ = costs(todo, TESTS, durations)
+        pristine = Path(tmp) / "pristine"        # each mutant's copy is made of it, never run in
+        _copy_repo(pristine)
+        todo = shard_of(todo, k, n, durations=durations, skip=skip) if n > 1 else todo
+        mutant_cost, target_cost, _ = costs(todo, TESTS, durations, skip)
         # ChromaDB's model once, here, before any run in parallel (CI6b): never by each of them.
         prepare_embedding_model()
-        # The unmutated copy must pass, or nothing below means anything. Its targets at once, as
-        # the mutants are (CI6: one after the other, they outlasted the Monday run's bound).
-        targets = heaviest_first(sorted({TESTS.get(m[0], INVARIANTS) for m in todo}), target_cost)
+        # The unmutated copy must pass, or nothing below means anything. Its runs in a copy of their
+        # own, in the mutants' pool (CI10a): a long one no longer holds every worker before the first
+        # mutant, and nothing they write reaches a mutant's copy. One that fails makes the whole
+        # shard no measure, said once all have ended.
+        unmutated_copy = Path(tmp) / "base"
+        shutil.copytree(pristine, unmutated_copy)
+        targets = sorted({TESTS.get(m[0], INVARIANTS) for m in todo})
+        runs = {t: baseline_of(t, skip) for t in targets}
+        left = sorted(t for t, r in runs.items() if r != t)
+        if left:
+            print(f"--skip-machine-baseline: {len(left)} target(s) run unmutated without their invariant "
+                  f"machines ({sum(1 for t in left if not runs[t])} not at all) — the release gate's "
+                  f"invariants job runs the machines on this tree", flush=True)
+        baselines = sorted(set(runs.values()) - {""})
 
-        def unmutated(target):
+        def unmutated(run):
             started = time.monotonic()
-            return _run(base, args.examples, show=True, target=target), time.monotonic() - started
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            ran = dict(zip(targets, pool.map(unmutated, targets)))
-        failing = [t for t in sorted(ran) if ran[t][0]]
-        for target in failing:
-            print(f"{target} fails on the UNMUTATED code — fix that first")
-        if failing:
-            return 2
+            return _run(unmutated_copy, args.examples, show=True, target=run), time.monotonic() - started
+
         def measure(mutant):
-            mid, title, rel, old, new = mutant[:5]
+            mid, title = mutant[:2]
             copy = Path(tmp) / mid
-            shutil.copytree(base, copy)
-            target = copy / rel
-            if old is RENAME:
-                if not target.exists():
-                    return mid, title, "STALE", "file to rename is gone"
-                target.rename(copy / new)
-            else:
-                text = target.read_text()
-                if isinstance(old, tuple) != isinstance(new, tuple) or (
-                        isinstance(old, tuple) and len(old) != len(new)):
-                    return mid, title, "STALE", "old and new replacements do not pair up"
-                pairs = zip(old, new) if isinstance(old, tuple) else [(old, new)]
-                for o, n in pairs:
-                    if text.count(o) != 1:
-                        return mid, title, "STALE", f"{text.count(o)} matches"
-                    text = text.replace(o, n)
-                target.write_text(text)
+            shutil.copytree(pristine, copy)
+            if (stale := apply_mutant(mutant, copy)) is not None:
+                return mid, title, "STALE", stale
             started = time.monotonic()
             target = TESTS.get(mid, INVARIANTS)
-            caught = sum(_run(copy, args.examples, target=target) for _ in range(args.rounds))
+            rounds = rounds_of(mutant, target, args.rounds, args.control)
+            caught = sum(_run(copy, args.examples, target=target) for _ in range(rounds))
             # Caught by a fixed sequence only (tests/unit/test_invariant_regressions.py)?
             fixed = (caught == 0 and target == INVARIANTS
                      and _run(copy, 0, target="tests/unit/test_invariant_regressions.py"))
             shutil.rmtree(copy, ignore_errors=True)
-            verdict = "CAUGHT" if caught == args.rounds else ("flaky" if caught else ("FIXED-ONLY" if fixed else "SURVIVES"))
+            verdict = "CAUGHT" if caught == rounds else ("flaky" if caught else ("FIXED-ONLY" if fixed else "SURVIVES"))
             if verdict != "CAUGHT" and mark(mutant):
                 verdict = mark(mutant)      # a known survivor: its reason's mark (CI6e)
-            row = (mid, title, verdict, f"{caught}/{args.rounds} ({time.monotonic() - started:.0f}s)")
+            row = (mid, title, verdict, f"{caught}/{rounds} ({time.monotonic() - started:.0f}s)")
             print(f"{mid} {verdict:8} {row[3]:14} {title}", flush=True)
             return row
 
         def timed(mutant):
             started = time.monotonic()
             return measure(mutant), time.monotonic() - started
+        # One pool, the heaviest first (CI6d, CI10a): a long run started last makes the shard's tail.
+        by_id = {m[0]: m for m in todo}
+        cost = {("run", runs[t]): target_cost[t] for t in targets if runs[t]}
+        cost |= {("mutant", mid): mutant_cost[mid] for mid in by_id}
+        work = heaviest_first([("run", r) for r in baselines] + [("mutant", m[0]) for m in todo], cost)
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            measured = list(pool.map(timed, heaviest_first(todo, mutant_cost, key=lambda m: m[0])))
+            done = list(pool.map(lambda w: unmutated(w[1]) if w[0] == "run" else timed(by_id[w[1]]), work))
+        results = dict(zip(work, done))
+        ran = {r: results[("run", r)] for r in baselines}
+        failing = [r for r in sorted(ran) if ran[r][0]]
+        for run in failing:
+            print(f"{run} fails on the UNMUTATED code — fix that first: this shard measured nothing")
+        if failing:
+            return 2
+        measured = [results[("mutant", m[0])] for m in todo]
         rows = sorted(row for row, _ in measured)
         seconds = {row[0]: s for row, s in measured}
     print(f"\nbudget {args.examples} sequences, {args.rounds} rounds" + (f", shard {k}/{n}:" if n > 1 else ":"))
     for mid, title, verdict, detail in rows:
         print(f"  {mid}  {verdict:8}  {detail:16}  {title}")
     caught, counted = caught_of(rows)
-    print(f"\n{caught}/{counted} caught in every round (equivalent and multi-host mutants aside)")
+    print(f"\n{caught}/{counted} caught in every round of theirs (equivalent and multi-host mutants aside; "
+          f"one round where no chance plays, CI10a)")
     # CI6e: a counted mutant that survived a round, no known survivor, is red — here, or, for a
     # shard (--json), in the total that reads it. The control set is said, never held.
     unknown = []
@@ -11372,12 +11703,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         Path(args.json).write_text(json.dumps({
             "control": args.control, "shard": k, "shards": n, "examples": args.examples,
-            "rounds": args.rounds, "rows": [list(r) for r in rows],
-            # CI6d: each mutant's measure (its copy included) and each target's unmutated run, in seconds.
+            "rounds": args.rounds, "machines": args.machines, "machine_baseline": not skip,
+            "rows": [list(r) for r in rows],
+            # CI6d: each mutant's measure (its copy included) and each unmutated run, in seconds.
             "seconds": {mid: round(seconds[mid], 1) for mid in sorted(seconds)},
-            "targets": {t: round(ran[t][1], 1) for t in sorted(ran)}}, indent=1) + "\n", encoding="utf-8")
+            "targets": {r: round(ran[r][1], 1) for r in sorted(ran)},
+            # CI10a: what each mutant was measured on, and in how many rounds.
+            "mutant_targets": {m[0]: TESTS.get(m[0], INVARIANTS) for m in sorted(todo)},
+            "mutant_rounds": {m[0]: rounds_of(m, TESTS.get(m[0], INVARIANTS), args.rounds, args.control) for m in sorted(todo)},
+        }, indent=1) + "\n", encoding="utf-8")
     return 1 if unknown and not args.json else 0
-
 
 
 if __name__ == "__main__":

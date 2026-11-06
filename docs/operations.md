@@ -58,7 +58,7 @@ make glorfindel-host-tunnel                  # tunnel + « Console → http://lo
                                              # EREGION_CONSOLE_TOKEN s'il n'est pas vide, sinon GLORFINDEL_WARROOM_TOKEN
                                              # (l'ancien nom reste valide, rien à renommer) ; -url : l'URL seule
 make glorfindel-host-status                  # tout tourne ? lit le jeton sur la VM sous l'un ou l'autre nom, sans l'afficher
-make glorfindel-host-push                    # host_env.py --check d'abord : refuse un host.env sans jeton de la console
+make glorfindel-host-push                    # host_env.py --check d'abord : refuse un host.env sans jeton de la console (et dit, sans refuser, une variable de never_target vide, NT1)
 make glorfindel-host-cd-install              # le CD de H0 (H1) : agent dans ~/.eregion-cd/, timer désactivé ; README, « Le CD de H0 »
 make glorfindel-host-cd-check                # à blanc : vérifie, construit à côté, préflight (config sous A3), sans basculer
 make glorfindel-host-cd-enable               # puis : toute release publiée se déploie (5 min), retour arrière si malade
@@ -125,6 +125,9 @@ glorfindel verdict <id> right|wrong|unsure [--note "…"]  # observation : la re
 glorfindel report [--since 7d|4w|all] [--json]  # verdicts par action et par règle, taux de disruptives fausses
                                              # (docs/observation.md — le critère « 4 semaines en human_only »)
 glorfindel check-ttl                         # escalade les isolations au-delà du TTL (ne lève JAMAIS — quatrième passe Q1)
+glorfindel identity-contract                 # IR1b : le contrat de l'exécuteur d'identité, lu avec SON identité
+                                             # (EREGION_IDENTITY_EXECUTOR_* et EREGION_TENANT_ID) : armed ou
+                                             # passive, chaque droit en trop nommé (beyond_contract) ; 0 si armed
 
 # Audit remédiation — vérifier que Glorfindel peut agir avant l'incident
 glorfindel activate <vm|resource_id>         # réponse autonome pour une VM : contrôle de préparation,
@@ -400,6 +403,9 @@ DISCORD_CHANNEL_ID=...              # ID du channel (clic droit → Copy Channel
 DISCORD_PING_ROLE=...               # ID du rôle à pinger à l'ouverture d'un fil (optionnel)
 DISCORD_ALLOWED_USERS=111,222       # M-3 : ids des utilisateurs qui peuvent cliquer les boutons des cartes
 DISCORD_ALLOWED_ROLES=333           # M-3 : ids des rôles autorisés ; les deux vides → tous les boutons refusent (fermé par défaut), refus journalisé
+EREGION_OPERATOR_OBJECT_ID=...      # NT1 : never_target (eregion_core/never_target.py), à la watch seule (plan d'identité, IR1a) ; recopiée dans host.env ; source : terraform -chdir=infra/orodruin output -raw operator_object_id ; vide → liste illisible, tout verbe une étape de l'humain
+EREGION_PROTECTED_IDENTITIES=...    # NT1 : idem ; source : output protected_identities d'Orodruin, plus identity_executor_object_id de H0 (« L'exécuteur d'identité », geste 6)
+EREGION_IDENTITY_EXECUTOR_CLIENT_ID=...  # NT1 : idem ; source : terraform -chdir=infra/glorfindel-host output -raw identity_executor_client_id (vide : exécuteur non activé)
 # L'atelier dans Discord (N1, docs/atelier-discord.md) — à part de la défense : jamais sur H0, host_env.py ne les recopie pas
 EREGION_DISCORD_WEBHOOK_CI=...              # webhook de #ci (secret GitHub : notify.yml)
 EREGION_DISCORD_WEBHOOK_AGENTS=...          # webhook de #agents (poste de l'opérateur : hooks d'elrond)
@@ -835,6 +841,172 @@ Pour un principal de service : les mêmes permissions dans son inscription d'app
 (`*.ReadWrite.*`) : la liste refusée de la conception (§3.4) vaut pour la watch comme pour toute
 identité d'Eregion. La lecture de Graph, ce que voit `Verify`, ce qui manque : `docs/glorfindel.md`.
 
+### L'exécuteur d'identité : son application et son contrat (IR1b, #572)
+
+L'**exécuteur d'identité** répondra à une identité volée (IR1c) : retirer l'identifiant ajouté,
+désactiver puis réactiver un principal, révoquer les sessions, désactiver un utilisateur de test —
+toujours sur l'approbation d'un humain, jamais seul, jamais la watch
+([`design/reponse-identite.md`](design/reponse-identite.md), §3.3 à §3.5). IR1b pose son
+**application** (Terraform de H0, désactivée par défaut) et son **contrat**, lu à son démarrage ;
+il n'écrit encore rien : ses verbes sont le travail d'IR1c.
+
+**Ses droits** — la liste fermée du contrat (`glorfindel/providers/azure/identity_contract.py`) :
+
+| Droit | Où | Posé par | Pour |
+|---|---|---|---|
+| `Application.ReadWrite.OwnedBy` (Graph, application) | les seules applications dont il est **propriétaire** | `infra/glorfindel-host/identity_executor.tf` | retirer un identifiant, désactiver et réactiver un principal ; la propriété des applications inscrites vient d'IDI1 (Celebrimbor), jamais de lui |
+| `User.RevokeSessions.All` (Graph, application) | le tenant ; le code la borne aux utilisateurs inscrits (décision du Q3) | `identity_executor.tf` | révoquer les sessions |
+| `Log Analytics Reader` | le workspace du banc | `identity_executor.tf` | relire lui-même la preuve d'un constat |
+| Directory Readers | le tenant (`/`) | IDI1b (Celebrimbor) | lire ses propres droits ; un principal ne se sert d'un rôle borné qu'avec lui |
+| User Administrator | l'unité administrative du banc seule (`/administrativeUnits/<id>`, l'`id` épinglé) | IDI1b | désactiver un utilisateur de test |
+| Attribute Assignment Reader | l'ensemble d'attributs d'Eregion seul (`/attributeSets/<nom>`) | IDI1b | lire l'inscription d'un utilisateur |
+
+**Ce qu'il ne fait jamais** : tenir un droit de la liste refusée (`RoleManagement.ReadWrite.Directory`,
+`RoleEligibilitySchedule.ReadWrite.Directory`, `RoleAssignmentSchedule.ReadWrite.Directory`,
+`AppRoleAssignment.ReadWrite.All`, `DelegatedPermissionGrant.ReadWrite.All`,
+`Application.ReadWrite.All`, `Directory.ReadWrite.All` ; Global Administrator, Privileged Role
+Administrator, Privileged Authentication Administrator, Application Administrator, Cloud
+Application Administrator, et User Administrator ailleurs qu'à l'unité du banc) ; retirer un rôle
+ou un consentement (un plan, que l'humain exécute avec son compte) ; prendre l'identité managée de
+H0 (celle de la watch : il n'a que son certificat, jamais `DefaultAzureCredential`) ; être
+membre d'un groupe (un groupe peut porter un rôle) ; posséder autre chose qu'une application
+inscrite et son principal (ni lui-même, ni une identité de Glorfindel, d'Orodruin, d'Annatar ou
+d'un opérateur, ni un groupe) ; posséder une identité **privilégiée** (décision du Q6), jugée par
+la garde d'IDI1 elle-même (`eregion_core.inscription.privilege_refusal`) : le principal de chaque
+objet qu'il possède ne tient aucun rôle d'annuaire, actif ou éligible, aucun groupe, **aucune
+permission d'application, pas même une lecture** (posséder une application qui lit toutes les
+boîtes, c'est pouvoir lui ajouter un identifiant et les lire), et ne possède rien à son tour (un
+principal Global Administrator possédé par ce qu'il possède serait à sa portée) ; lu avec les
+mêmes droits de lecture que les siens (hypothèse 10). **La
+limite** : comme la garde d'IDI1, le contrat ne lit ni les rôles Azure (RBAC) d'un objet possédé,
+ni ses consentements délégués (`oauth2PermissionGrants`) — l'identité de test de Celebrimbor n'en a
+aucun (IDI2, #556, lèvera la limite) ; être la cible de qui que ce soit
+(`EREGION_IDENTITY_EXECUTOR_CLIENT_ID` rejoint `eregion_core/never_target.py`).
+
+**Le contrat, lu à son démarrage** (`identity_contract.start`, `glorfindel identity-contract`) —
+comme celui d'Orodruin, rien n'est écrit :
+- son **jeton Graph**, sans appel : un jeton d'application (pas de `scp`), du tenant déclaré
+  (`tid`) et de son application (`appid`) ; ses permissions (`roles`) et ses rôles d'annuaire au
+  tenant (`wids`) dans la liste — Directory Readers seul : `wids` ne porte que les rôles au tenant,
+  et User Administrator ou Attribute Assignment Reader qui y figure (par un groupe compris, que ses
+  attributions ne montrent pas) est un rôle borné tenu au tenant, `beyond_contract` ;
+- **Graph, en lecture seule** (un GET, `graph.GraphReader`) : ses permissions d'application, chacune
+  nommée par sa ressource (Microsoft Graph seule) ; ses rôles d'annuaire, actifs, chacun reconnu par
+  l'`id` de sa définition (jamais son nom, ni le `templateId` qu'un rôle personnalisé peut choisir),
+  à sa seule portée, et aucun rôle éligible (`roleEligibilityScheduleInstances`, sans `$expand`,
+  comme IDI1 : tout rôle éligible est refusé) ; aucun groupe (`transitiveMemberOf`) ; ce qu'il
+  possède, et ce que tient le principal de chaque objet possédé (sept lectures environ par objet :
+  ses rôles, actifs et éligibles, ses groupes, ses permissions, ce qu'il possède, qui tient un rôle
+  sur lui). Une permission ne compte comme tenue que si le jeton **et** les attributions la disent.
+- **Le plafond** : toutes ses lectures tiennent en 60 s (`READ_BUDGET_S`) ; au-delà de **20 objets
+  possédés** (`MAX_OWNED`), ce qu'il possède n'est pas lu en entier, et le contrat reste passif à son
+  démarrage (`contract_unreadable`). Le banc n'en compte qu'un ou deux ; le temps réel par objet est
+  une mesure d'IR1e.
+- **`armed`** : rien en trop. Un droit qui manque n'arme ni ne désarme : il retire seulement les
+  verbes qui en ont besoin (`Verdict.allows`, `VERB_RIGHTS`).
+- **`passive`**, et il refuse de démarrer (`Passive`) : un droit en trop, `beyond_contract` (le
+  droit nommé : refusé, inconnu, hors de sa portée, un rôle borné au tenant, éligible, sur une autre
+  API, un groupe, une identité protégée ou privilégiée possédée) ; un contrat illisible,
+  `contract_unreadable` (une variable absente ou mal formée, un jeton qu'il n'a pas, un jeton d'un
+  autre tenant ou d'une autre application, une lecture de Graph qui échoue — les siennes comme
+  celles d'un objet possédé —, la liste `never_target` illisible alors qu'il possède des objets).
+
+**Son environnement** (jamais dans le dépôt) : `EREGION_TENANT_ID` (le tenant du banc, le nom
+d'IDI1), `EREGION_IDENTITY_EXECUTOR_CLIENT_ID` (`terraform output identity_executor_client_id`),
+`EREGION_IDENTITY_EXECUTOR_CERTIFICATE` (le chemin de son certificat et de sa clé, sur H0), et pour
+ses rôles bornés `EREGION_BENCH_ADMIN_UNIT_ID` (la sortie de l'unité du banc d'IDI1b) et
+`EREGION_IDENTITY_ATTRIBUTE_SET=Eregion` (l'ensemble qu'IDI1b fige : la sortie `entra_attribute_set`
+de Celebrimbor). Aucune n'a de valeur par défaut, fermé : non déclarée, User Administrator ou
+Attribute Assignment Reader le rendent passif. Et `EREGION_OPERATOR_OBJECT_ID`, pour lire
+`never_target`.
+
+**Les gestes de Jonathan, dans l'ordre** (rien n'est appliqué par une session) :
+
+1. **Le plan propre d'abord** : `make glorfindel-host-plan` ne montre rien à changer.
+2. **Activer** : `cp infra/glorfindel-host/identity_executor.auto.tfvars.example
+   infra/glorfindel-host/identity_executor.auto.tfvars` (ignoré par git, sur le poste seulement) ;
+   `identity_executor_enabled = true`, le certificat vide pour l'instant.
+3. **Le plan, relu** : `make glorfindel-host-plan`. Il doit montrer **cinq créations, et rien
+   d'autre** : `azuread_application.identity_executor[0]` (`eregion-glorfindel-identity-executor`,
+   `AzureADMyOrg`), `azuread_service_principal.identity_executor[0]`, deux
+   `azuread_app_role_assignment.identity_executor` (`Application.ReadWrite.OwnedBy`,
+   `User.RevokeSessions.All`, sur le principal de Microsoft Graph), et
+   `azurerm_role_assignment.identity_executor_logs_reader[0]` (`Log Analytics Reader`, à la portée
+   du workspace du banc). Ni la VM de H0 remplacée, ni une autre attribution touchée.
+4. **Appliquer** : `make glorfindel-host-up`, **sans `YES`** (le même plan, confirmé), sous un
+   `az login` qui peut créer une application et **consentir des permissions d'application de
+   Microsoft Graph** (Administrateur des rôles privilégiés, ou Administrateur général) : chaque
+   `azuread_app_role_assignment` est ce consentement.
+5. **Vérifier** : `terraform -chdir=infra/glorfindel-host output identity_executor_client_id` et
+   `output identity_executor_object_id` ; puis
+   `az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/<object id>/appRoleAssignments"`
+   montre les deux permissions, et rien d'autre ; `az role assignment list --assignee <object id>
+   --all -o table` montre `Log Analytics Reader` sur le workspace seul.
+6. **Le protéger** (§3.5 de la conception) : `EREGION_IDENTITY_EXECUTOR_CLIENT_ID=<client id>`
+   dans `orodruin.env` (la garde d'une identité ne le vise jamais) **et** dans `host.env` (la watch
+   lit `never_target` pour écrire son plan, IR1a) ; l'**object id de son principal**
+   (`identity_executor_object_id`) ajouté à `EREGION_PROTECTED_IDENTITIES`, pas seulement le client
+   id : `never_target` compare l'un et l'autre. Puis transmettre l'object id à IDI1b (ses rôles
+   bornés, `entra_identity_executor_object_id` de Celebrimbor) et à IDI1 (la propriété des
+   applications inscrites). **Côté watch** (NT1, #583) : le compose passe à la watch, et à elle
+   seule, les trois variables de `never_target` — `EREGION_OPERATOR_OBJECT_ID`,
+   `EREGION_PROTECTED_IDENTITIES`, `EREGION_IDENTITY_EXECUTOR_CLIENT_ID` ; ni la console ni le bot ne
+   lisent la liste. `host_env.py` les recopie de ton environnement dans `host.env`, comme le reste :
+   pose-les d'abord dans ton `.envrc`, depuis leurs sorties Terraform —
+
+   | Variable | Sa source |
+   |---|---|
+   | `EREGION_OPERATOR_OBJECT_ID` | `terraform -chdir=infra/orodruin output -raw operator_object_id` |
+   | `EREGION_PROTECTED_IDENTITIES` | `terraform -chdir=infra/orodruin output -raw protected_identities`, plus `terraform -chdir=infra/glorfindel-host output -raw identity_executor_object_id`, séparés par des virgules |
+   | `EREGION_IDENTITY_EXECUTOR_CLIENT_ID` | `terraform -chdir=infra/glorfindel-host output -raw identity_executor_client_id` (vide tant que l'exécuteur n'est pas activé) |
+
+   — ou, sur un `host.env` déjà écrit, ajoute les trois lignes à la main (son jeton ne change pas).
+   Un **principal d'Annatar de poste** dans le tenant du banc (`ANNATAR_AZURE_CLIENT_ID`) : son
+   object id s'ajoute aussi à `EREGION_PROTECTED_IDENTITIES`. Ne recopie dans `host.env` ni
+   `ANNATAR_AZURE_CLIENT_ID` ni `GLORFINDEL_AZURE_CLIENT_ID` : le compose en ferait l'`AZURE_CLIENT_ID`
+   d'un service (V-17), et sur H0, `DefaultAzureCredential` chercherait une identité assignée qui
+   n'existe pas.
+   L'écriture de `host.env` et `host_env.py --check` (lancé par `make glorfindel-host-push`) disent
+   une variable vide, ou une entrée qui n'est pas un object id, avec sa source, jamais sa valeur
+   (le client id de l'exécuteur vide, en `ℹ` : rien à faire tant qu'il n'est pas activé) ;
+   **ils ne refusent jamais une absence** : sans la liste, ou mal écrite, elle est illisible et
+   tout verbe d'un plan devient une étape de l'humain — fermé, pas une panne. Ils refusent en
+   revanche une valeur **mal écrite**, de n'importe quelle variable recopiée : un saut de ligne, un
+   retour chariot, un guillemet, un `$` ou une barre oblique inverse dans une valeur (une paire de
+   guillemets autour d'elle est retirée, comme le fait compose), refusés à l'écriture — un saut de
+   ligne ajouterait à `host.env` une variable à lui (la file signée allumée, avec une clé venue de
+   la valeur), un guillemet resté ouvert ferait refuser tout le fichier par compose, et rien ne
+   démarrerait sur H0, un `$` serait interpolé par compose ; `--check` refuse une ligne dont la
+   valeur ouvre un guillemet sans le fermer, ou porte une barre oblique inverse entre guillemets
+   (compose lit `\"` comme un guillemet échappé : la valeur avalerait la ligne suivante). Édité à
+   la main, `host.env` s'écrit donc sans guillemets. La variable est nommée, jamais sa valeur. Puis
+   `make glorfindel-host-push`, et sur H0 `cd ~/eregion && docker compose up -d watch` : la watch
+   est recréée avec le nouvel `.env` — un `docker restart` ne relit pas `.env`, elle garderait son
+   ancien environnement.
+7. **Le certificat** (avec IR1c, qui monte le conteneur) : la clé tirée sur H0, dans un répertoire
+   que seul l'exécuteur monte ; sa partie publique (PEM, `BEGIN CERTIFICATE`, jamais une clé : le
+   plan la refuse) dans `identity_executor_certificate`, puis les gestes 3 et 4 (une création de
+   plus, `azuread_application_certificate.identity_executor[0]`).
+8. **Le contrat, mesuré** : avec son environnement, `glorfindel identity-contract` → `armed` attendu
+   une fois IDI1b appliqué ; avant IDI1b, ses propres lectures de Graph échouent sans Directory
+   Readers (hypothèse 10) : `passive`, `contract_unreadable`, ce qui est juste.
+
+**Retirer**, dans cet ordre : d'abord ses rôles bornés dans Celebrimbor — retirer
+`entra_identity_executor_object_id` (IDI1b), puis son plan et son apply —, sans quoi l'état de
+Celebrimbor viserait un principal supprimé ; ensuite l'exécuteur : `identity_executor_enabled =
+false` (ou le fichier ôté), puis les gestes 3 et 4 : le plan montre les mêmes destructions. `make
+glorfindel-host-down` le retire avec le reste de l'état de H0 (même ordre : Celebrimbor d'abord).
+
+**Les hypothèses** (§5 de la conception, à mesurer sur le tenant du banc) : les droits qu'il faut
+pour lire ses propres droits et ceux de ce qu'il possède (10) — Directory Readers est celui que le
+contrat attend, pour les attributions de rôles, les appartenances, les permissions d'application et
+les instances éligibles de PIM ; **si Directory Readers ne lit pas PIM, le contrat ne s'arme
+jamais**, et un droit de lecture serait à ajouter après la mesure (jamais une écriture) ; `wids` ne
+porte que les rôles au tenant, jamais un rôle borné à une unité ; le temps de ses lectures par objet
+possédé, contre le budget de 60 s et le plafond de 20 objets (IR1e). Les identifiants des rôles intégrés
+que le contrat épingle (`DIRECTORY_READERS`, `USER_ADMINISTRATOR`, `ATTRIBUTE_ASSIGNMENT_READER`,
+`REFUSED_ROLES`) sont ceux de « Microsoft Entra built-in roles » (relus le 05/11).
+
 ## Le canari azurerm, sans secret (P-04, 30/10)
 
 Le canari (`.github/workflows/canary-azurerm.yml`, chaque jour ; `make canary-jit` sur un poste)
@@ -1092,7 +1264,8 @@ Depuis SEC18 (N-05), `runs/` n'est plus un répertoire que chaque service monte 
 | Répertoire | Écrit par | Lu (lecture seule) par |
 |---|---|---|
 | `runs/glorfindel/` | la watch (ses cycles ; sur H0, ce qu'elle tire du canal ; les rapports et le tri des campagnes) | la console |
-| `runs/console/` | la console, la CLI de Glorfindel, le bot (`manual_actions.jsonl`) | la watch |
+| `runs/console/` | la console, la CLI de Glorfindel (`manual_actions.jsonl` ; `queue/`, FS1b) | la watch |
+| `runs/bot/` | le bot et la CLI qu'il lance (`manual_actions.jsonl`, FS1c ; `queue/`, FS1b) | la watch, la console |
 | `runs/annatar/` | Annatar (ses signaux, ses rapports, ses fenêtres, ses campagnes) | la watch, le bot, la console |
 | `runs/gothmog/` | Gothmog (ses signaux, ses rapports, ses fenêtres) | la watch, la console |
 | `runs/orodruin/` | les injecteurs sur Orodruin et le lanceur d'une demande (journal, verrou, statuts) | — |
@@ -1303,11 +1476,12 @@ reste `make glorfindel-host-start REF=<tag>`.
 
 ---
 
-## La file d'actions signée — les clés des services (FS1b, #563)
+## La file d'actions signée — les clés des services (FS1b, #563 ; FS1c, #571)
 
-**Rien à faire tant que `EREGION_ACTION_QUEUE` est vide** : c'est le défaut, l'appel direct de la
-console et du bot reste, et aucune file n'est lue. Le drapeau se pose avec FS1c, mesuré au banc
-(`docs/design/file-actions-signee.md`, §4.2) ; ces gestes sont préparés, **pas encore à faire**.
+**Rien à faire tant que `EREGION_ACTION_QUEUE` est vide** : c'est encore le défaut, l'appel direct
+de la console et du bot reste, et aucune file n'est lue. FS1c prépare la bascule sans la faire : le
+drapeau se pose à la main pour la mesure au banc (ci-dessous, « La mesure au banc »), et le défaut
+ne changera qu'après elle (`docs/design/file-actions-signee.md`, §4.2, §9).
 
 Avec `EREGION_ACTION_QUEUE=1` (dans `.envrc` sur un poste, dans `host.env` sur H0 — pour les trois
 services : la watch le lit aussi), la console et le bot ne font plus que déposer une demande signée
@@ -1320,19 +1494,68 @@ crée au nom de root). La watch **épingle** leurs clés publiques, dans son env
 1. **Ce poste** : `make glorfindel-restart` avec le drapeau, puis `make queue-keys` — la ligne
    `export EREGION_QUEUE_KEYS=console=ed25519:…,bot=ed25519:…` (le bot seulement s'il tourne,
    profil `bot`) dans ton `.envrc`, puis `make glorfindel-restart`. Jamais la clé privée.
-2. **H0** : la release déployée avec le drapeau dans `host.env`, puis
-   `make glorfindel-host-queue-keys` (par SSH, la clé d'hôte épinglée) : la ligne
-   `EREGION_QUEUE_KEYS=…` dans `host.env`, puis `make glorfindel-host-push`.
+2. **H0** : **les clés d'abord, le drapeau ensuite**. `make glorfindel-host-queue-keys` (par SSH,
+   la clé d'hôte épinglée) tire la clé de la console et celle du bot dans leurs conteneurs s'ils n'en
+   ont pas encore (`pin <service> --draw`, sans le drapeau) et imprime `EREGION_QUEUE_KEYS=…` ; cette
+   ligne et `EREGION_ACTION_QUEUE=1` vont dans `host.env` ensemble, puis `make glorfindel-host-push`.
+   `host_env.py --check` (que le push lance) refuse le drapeau sans la clé de la console, ou sans
+   celle du bot quand `DISCORD_BOT_TOKEN` est posé, et un drapeau autre que « 1 ».
+   `make glorfindel-host-env` ne recopie jamais ces deux variables de ton `.envrc` : ce sont les clés
+   de ce poste, H0 a les siennes.
 3. **La copie des autorisés du bot** chez la watch : `DISCORD_ALLOWED_USERS` et
    `DISCORD_ALLOWED_ROLES` passent aussi à la watch (le compose), qui relit l'humain qu'une demande du
    bot nomme ; vides chez elle, le Revert du bot est refusé (`guard`).
 
 Sans clé épinglée pour un service, la watch refuse chacune de ses demandes (`no_key_pinned`) et le
-dit au démarrage ; une clé tirée de nouveau est refusée avec les deux empreintes (`unknown_key`,
+dit au démarrage (chaque clé qui manque ou qui est fausse) ; la console grise ses boutons d'écriture
+et dit pourquoi (le statut signé de la watch) ; une clé tirée de nouveau est refusée avec les deux empreintes (`unknown_key`,
 une carte critique) : épingler la nouvelle. Le registre de la watch (`~/.eregion/watch-queue/`, les
 nonces vus et les propositions exécutées) est à elle seule ; illisible, elle refuse tout et le dit
 (`queue_unavailable`) — le réparer ou le retirer, la watch le recrée. Les reçus et le statut :
 `runs/glorfindel/queue/` (le bot en monte ce seul sous-répertoire, en lecture seule).
+
+**Avec le drapeau, les gestes sont asynchrones (FS1c)** : une route de la console rend aussitôt l'id
+de sa demande, et la page suit son reçu (`GET /api/queue/<id>` : reçue, acceptée, puis faite,
+échouée ou refusée, et pourquoi) ; le bot dit chaque état dans le fil de la VM. Un « Approve »
+grisé dit pourquoi en survol : la watch arrêtée (son statut a plus de 60 s), en lecture seule, ou qui
+n'épingle pas la clé de la console. « signed by … the watch's key pinned here is … » : la clé de la
+watch tirée de nouveau — épingler la nouvelle (`EREGION_WATCH_KEY`, `make glorfindel-host-watch-key`).
+Plus de 4 gestes à la fois dans une console : le cinquième est refusé (503), à refaire — avec ou
+sans le drapeau. Un geste prend sa place à son entrée et la garde jusqu'au bout : refusé, rien n'est
+fait ; accepté, son action, sa vérification et sa note ont toujours lieu.
+
+**Limite connue** : avec le drapeau, un geste de la console n'est noté (`manual_actions.jsonl`, le
+fil, les levées) que lorsqu'une lecture le règle — la page qui suit son reçu, ou l'état d'une page
+ouverte. Si la console est arrêtée au moment du reçu final et qu'aucune page ne relit son état avant
+le balayage de ses demandes (une heure), le geste fait n'est pas noté ; son reçu signé, lui, reste 2 h
+dans `runs/glorfindel/queue/`. La piste, plus tard : une tâche de fond de la console qui règle ses
+demandes sans attendre une lecture. Le Revert du bot, lui, est noté par le bot à la fin de son suivi
+(`runs/bot/manual_actions.jsonl`) ; un bot redémarré pendant ce suivi ne le reprend pas.
+
+### La mesure au banc (FS1c) — l'ordre des gestes de Jonathan
+
+Sur H0 et le banc (gondolin), avec la release de FS1c déployée. Chaque étape se vérifie avant la
+suivante ; aucune n'est faite par une session.
+
+1. **Les clés** : `make glorfindel-host-queue-keys` — la ligne `EREGION_QUEUE_KEYS=console=…,bot=…`
+   (le drapeau n'est pas encore posé : rien ne change sur H0).
+2. **Le drapeau** : cette ligne et `EREGION_ACTION_QUEUE=1` dans `host.env`, puis
+   `make glorfindel-host-push` (le `--check` les tient ensemble), et le redémarrage des trois
+   services. Au démarrage, la watch ne dit aucune clé manquante ; la console dit sa clé, et ses
+   boutons d'écriture ne sont plus grisés une fois le statut de la watch publié (10 s).
+3. **Une approbation de bout en bout** : une carte d'isolation de gondolin approuvée dans la console
+   — la page dit « deposited », « received », « accepted », puis « executed » ; le reçu signé
+   (`runs/glorfindel/queue/console-<id>.json`), la vérification, la carte réglée, le geste au fil.
+   Puis sa levée (Release) par la file, et un Revert du bot sur une carte `verification_failed` : le
+   bot dit le reçu dans le fil de la VM. Et une demande non signée déposée à la main dans
+   `runs/console/queue/` : refusée (`unsigned`), une carte critique `queue_tampered`, rien sur Azure.
+4. **Le retour** : `EREGION_ACTION_QUEUE=` (vide) dans `host.env`, `make glorfindel-host-push` — la
+   console et le bot reprennent l'appel direct, aucune file n'est lue ; `EREGION_QUEUE_KEYS` peut
+   rester (la prochaine bascule n'aura que le drapeau à poser).
+
+**La bascule du défaut**, après cette mesure, est une ligne : `action_queue.enabled` vrai sauf
+`EREGION_ACTION_QUEUE=0` (l'appel direct, le temps d'une release), dans un lot à part — puis FS1d
+(les identités lectrices), dont la release de la bascule doit précéder les gestes.
 
 ---
 
@@ -2538,13 +2761,70 @@ Ce qui change :
   (0, qui veut dire « non mesuré », plus d'un jour — 86 400 s —, une valeur non finie ou hors des
   flottants), est écartée et dite avec le nom du fichier : l'estimation la remplace, jamais une
   exception qui arrête la tranche. `--plan 0` est refusé comme un mauvais `--shard`.
-- **Dans une tranche**, les runs non mutés puis les mutants partent du plus lourd au plus léger : un
-  mutant de 20 min lancé en dernier faisait la queue de la tranche.
+- **Dans une tranche**, les runs non mutés et les mutants partent du plus lourd au plus léger, dans un
+  seul pool depuis CI10a : un mutant de 20 min lancé en dernier faisait la queue de la tranche, et le
+  plus long run non muté retenait les quatre workers avant le premier mutant.
 - **`python scripts/mutation_check.py --plan 14`** dit le temps estimé de chaque tranche, sans rien
   mesurer (`--control --plan 2` pour le jeu de contrôle).
 
-**Sa durée : environ 41 minutes estimées sur un runner ordinaire**, celle de sa tranche de mutants la
-plus lourde, telle que ce fichier la découpe aujourd'hui (05/11, sur les durées mesurées ;
+**La porte, côté harnais : sans le travail en double** (CI10a, #580, l'étude CI9 prise en entier par
+Jonathan le 05/11). Chaque mutant reste mesuré à chaque release, sur l'arbre publié, à 500
+séquences, et aucun n'est retiré (`docs/design/preuves.md`, « Chaque mutant mesuré, sans le travail en
+double »). Ce qui change dans le harnais :
+- **Un tour là où le hasard ne joue pas.** `--rounds 2` reste le nombre de tours d'une cible où le
+  hasard joue : un fichier qui importe Hypothesis (les machines, les tests de propriétés), une course
+  (`test_locks.py`, `test_exercise.py`), un test qui démarre un thread ou un processus, un mutant
+  `TIMING`. Toute autre cible a un tour, puisque le second rejouait le même test sur le même code. Le
+  jeu de contrôle garde ses tours d'office.
+- **Les mutants du CD sur leurs tests.** Les 96 mutants dont la cible était
+  `tests/unit/test_host_cd.py` entier sont mesurés contre ses tests qui les attrapent : les deux plus
+  rapides, mesurés le 05/11 par `python scripts/mutation_check.py --narrow tests/unit/test_host_cd.py
+  --rounds 2 --jobs 4` (un run du fichier entier sans `-x` par mutant, puis deux tours de la cible
+  resserrée), gardés dans `scripts/mutants/narrowed.json`. Les 96 sont resserrés : chacun est attrapé
+  par 1 à 26 tests du fichier (médiane 2 ; 37 par un seul, pour qui rien ne change). Douze ne l'étaient d'abord par aucun nœud lisible : leur test est
+  paramétré par un document JSON, dont l'id a des espaces, et une cible se coupe sur les espaces. Ils
+  ont donc pour cible ce test entier, tous ses paramètres. Le même principe vaut pour les deux autres
+  fichiers lourds, mesurés le même jour : 29 des 30 mutants de `tests/unit/test_release.py` (M1164
+  n'est attrapé que par une erreur d'indentation à la collecte : il garde le fichier entier) et les 51
+  de `tests/unit/test_published_image.py`. M1014 garde sa cible. On relance `--narrow` quand `scripts/mutant_anchors.py` dit qu'une entrée ne
+  s'applique plus, ou qu'un nouveau lot ajoute des mutants sur un fichier entier lourd.
+- **`--skip-machine-baseline`** : la tranche ne refait plus le run non muté des machines
+  d'invariants, et dit combien de cibles l'ont perdu ; le reste de chaque cible tourne encore. Le job
+  `invariants` de la porte fait déjà tourner toute la suite à 2 000 séquences sur le même arbre (un
+  test le vérifie avant que le drapeau soit passé). La porte le passe (câblé par CI10b) ; le lundi et
+  un run local non.
+- **`--machines`** mesure les seuls mutants dont la cible fait tourner une machine (un fichier qui
+  définit une `RuleBasedStateMachine`), avec `--shard` et `--json` ; `--total DIR --machines` juge
+  ceux-là seuls, et refuse une tranche mesurée autrement. Le jeu de contrôle garde sa sélection.
+- **Un seul pool** par tranche, pour ses runs non mutés et ses mutants, du plus lourd au plus léger.
+- **`--update-durations`** prend chaque mesure comme l'arbre la fait aujourd'hui : ramenée à ses tours
+  d'aujourd'hui, écartée si elle a été faite sur une autre cible (un mutant resserré attend la mesure
+  de la prochaine porte, et l'estimation le pèse d'ici là). Le JSON d'une tranche dit, pour chaque
+  mutant, sa cible et ses tours (`mutant_targets`, `mutant_rounds`).
+- Le faux `docker` de `test_host_cd.py` démarre en `python -S`, puisqu'il ne lit que la bibliothèque
+  standard. Mesuré le 05/11 : un lancement passe de 17,8 à 14,3 ms (médiane de 200), et le fichier le
+  lance environ 4 300 fois. Le fichier entier passe vert dans les deux cas (292 tests) ; sur un poste
+  chargé, son gain total reste sous le bruit.
+
+**Le gain, dans le modèle du harnais** (`--plan`, durées des trois portes du 05/11 ramenées aux cibles
+et aux tours d'aujourd'hui ; un mutant resserré sans mesure pèse l'estimation, 13 s ; avant : 3 141 mutants, après : 3 274, `origin/main` fusionné) :
+
+| | Avant CI10a | Après, sans `--skip-machine-baseline` | Après, avec (la porte) |
+|---|---|---|---|
+| `--plan 14`, la tranche la plus lourde | 39,6 min | 25,5 min | **17,9 min** |
+| `--plan 10` | 50,9 min | 35,3 min | 25,0 min |
+| Travail des tranches de mutants | ~34 h de runner (CI9) | 23,0 h | 16,6 h |
+| `--control --plan 2` | ~31 min | 24,3 min | 23,3 min |
+
+Le seul pool (L4) gagne de 1 à 3 min par tranche dans le modèle : 19,9 → 17,9 min à 14 tranches,
+25,9 → 25,0 à 10. Le modèle est optimiste d'un facteur 1,2 à 1,3 (CI9 : 42,5 min prévues, 54
+mesurées pour la 0.5.6) : la tranche la plus lourde devrait mesurer de 22 à 23 min. Le job
+`invariants` (de 22 à 36 min) devient le chemin de la porte ; le scinder, comme ramener la porte à 10
+tranches, est l'affaire de CI10b.
+
+**Sa durée avant CI10a : environ 41 minutes estimées sur un runner ordinaire** (après CI10a, le
+tableau ci-dessus), celle de sa tranche de mutants la plus lourde, telle que ce fichier la découpait
+alors (05/11, sur les durées mesurées ;
 avant CI6d, 60 et 73 min mesurées). L'estimation reprend les mesures des deux runs (la plus petite de
 chaque mutant), et les runs non mutés chronométrés un par un sur un poste, ramenés à un runner par un
 facteur ajusté sur les débuts de tranche des 32 journaux (écart type de 2,9 min). Ses parties tournent
@@ -3021,10 +3301,12 @@ az rest --method GET --url "https://graph.microsoft.com/v1.0/me/memberOf/microso
   --query "value[].displayName" -o tsv        # Privileged Role Administrator (ou Global Administrator) attendu
                                               # — un rôle PIM éligible : l'activer d'abord
 
-# 0 bis. Dès la release qui porte IDI1, avant tout autre geste : la mesure de `wids`.
-make orodruin-check                # le droit Graph n'est pas encore déclaré (EREGION_TENANT_ID absent d'orodruin.env) :
-                                   # « ⚠ graph_directory_role <valeur> » est DIT, sans passer passive — noter la valeur ;
-                                   # rien : l'hypothèse APP_DEFAULT_WIDS tient. Puis IDI1s (#559) rendra ce cas strict
+# 0 bis. FAIT le 05/11 (#559) : la mesure de `wids`, au premier orodruin-check après la v0.5.6, droit Graph
+#        non déclaré — armed, aucune note graph : l'hypothèse APP_DEFAULT_WIDS tient. Depuis IDI1s, un `wids`
+#        inconnu est passive, déclaré ou non ; à refaire seulement sur un nouvel Orodruin :
+make orodruin-check                # armed attendu ; passive « graph_directory_role <valeur> » : un rôle d'annuaire
+                                   # sur l'identité d'Orodruin — le retirer, s'arrêter ; « ⚠ graph_unreadable » :
+                                   # le jeton Graph introuvable, seulement DIT tant que le droit n'est pas déclaré
 
 # 1. Orodruin — la lecture de Graph, seule.
 echo 'graph_read_enabled = true' >> infra/orodruin/terraform.tfvars   # ignoré par git
@@ -3047,9 +3329,13 @@ terraform -chdir=infra/orodruin output -raw protected_identities   # → EREGION
 make orodruin-push REF=<le commit de main de ce lot, ou la release qui le porte>   # l'image et orodruin.env
 
 # 3. Le contrat, relu : armed attendu.
-make orodruin-check                # passive « graph_directory_role <valeur> » : la valeur `wids` d'un principal
-                                   # sans rôle n'est pas celle qu'on croyait (hypothèse) — la noter, s'arrêter ;
-                                   # passive « graph_unlisted_right » : un droit de plus dans Graph, le retirer
+make orodruin-check                # passive « graph_directory_role <valeur> » : un rôle d'annuaire posé sur l'identité
+                                   # d'Orodruin (à retirer), ou une valeur par défaut changée par Microsoft — les
+                                   # rôles d'application vont dans `roles`, pas dans `wids`. S'arrêter, comparer le
+                                   # GUID à la liste des rôles intégrés, vérifier dans Graph qu'aucun rôle n'est
+                                   # attribué à l'identité ;
+                                   # passive « graph_unlisted_right » : un droit de plus dans Graph, le retirer ;
+                                   # passive « graph_unreadable » : le droit déclaré, le jeton Graph introuvable
 
 # 4. Celebrimbor — l'identité de test et la clé du groupe, seules.
 echo 'entra_test_identity_enabled = true' >> infra/terraform/terraform.tfvars
@@ -3089,11 +3375,14 @@ les attributions ARM d'Orodruin, pas son rôle dans Graph : le retirer ainsi, à
 éligible, une appartenance à un groupe, un objet possédé, une permission d'application (aucune n'est
 admise) — la garde le dit (`make orodruin-identity`). L'identité de test n'en a aucun ; ne lui en donner aucun.
 
-**À mesurer au banc** : la valeur `wids` du jeton Graph d'Orodruin, au premier `make orodruin-check`
-après la release (geste 0 bis : dite, sans passer passive tant que le droit Graph n'est pas déclaré),
-puis IDI1s (#559) rendra strict ce cas non déclaré ; la lecture des rôles éligibles (PIM) sur un tenant sans Entra ID P2 — si elle
-échoue, toute identité est refusée, et c'est dit (une décision de Jonathan, alors) ; la valeur `wids` du jeton Graph d'une identité managée (le contrat la suppose,
-`APP_DEFAULT_WIDS`) ; qu'`AzureActiveDirectory` couvre bien `graph.microsoft.com` depuis Orodruin (la
+**Mesuré le 05/11** (#559, geste 0 bis) : la valeur `wids` du jeton Graph d'Orodruin, droit Graph non
+déclaré — `armed`, aucune note `graph` : absente, ou `APP_DEFAULT_WIDS`. IDI1s a rendu strict le cas non
+déclaré : un `wids` inconnu est `passive` ; seul un jeton Graph introuvable reste dit sans déclaration
+(un Orodruin sans droit Graph ne tombe pas, et l'absence de jeton n'est pas un privilège).
+
+**À mesurer au banc** : le `wids` une fois les deux rôles d'application posés et le droit déclaré
+(geste 3 : `armed` attendu) ; la lecture des rôles éligibles (PIM) sur un tenant sans Entra ID P2 — si elle
+échoue, toute identité est refusée, et c'est dit (une décision de Jonathan, alors) ; qu'`AzureActiveDirectory` couvre bien `graph.microsoft.com` depuis Orodruin (la
 documentation des service tags le dit) ; le délai du jeton en cache après l'attribution (jusqu'à 24 h :
 `make orodruin-check` peut dire l'ancien jeton) ; les tags d'une application lus par Graph tels que
 Terraform les pose.

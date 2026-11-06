@@ -35,8 +35,11 @@ eregion_core/action_queue.py    → FS1a (#551) : la file d'actions signée, son
                                    le disque (deposit, read_receipt, await_receipt, ask : le geste d'un service, son reçu
                                    attendu), le drapeau EREGION_ACTION_QUEUE (enabled : « 1 », faux par défaut), le
                                    registre durable (SeenFile, ConsumedFile, fsync), le débit avant le registre,
-                                   proposal_fresh ; `python -m eregion_core.action_queue public|pin` (make queue-keys)
-                                   — docs/design/file-actions-signee.md
+                                   proposal_fresh ; `python -m eregion_core.action_queue public|pin` (make queue-keys).
+                                   FS1c (#571) : deposit_request (déposée, jamais attendue), follow (une lecture : reçu,
+                                   waiting, not_taken, untrusted — un reçu d'une autre clé dit avec les deux empreintes —,
+                                   unknown), receipt_said, posture (le statut signé de la watch : frais, en écriture, qui
+                                   épingle cette clé), pin_problems, `pin <service> --draw` — docs/design/file-actions-signee.md
 glorfindel/queue_watch.py       → FS1b (#563) : la watch relève la file (derrière EREGION_ACTION_QUEUE=1), dans un fil
                                    à elle — reçu received, vérification, rattachement, gardes rejouées, posture,
                                    proposition consommée, accepted, exécution sous _vm_lock, done/failed ; reçus et
@@ -49,9 +52,11 @@ glorfindel/approval.py          → FS1b : les gardes d'un geste humain, un seul
 glorfindel/gestures.py          → FS1b : la levée et le reset de la CLI en fonctions (release_needed, reset_targets,
                                    reset_apply), appelées par la CLI et par la watch
 eregion_console/action_requests.py → FS1b : le côté console de la file (ask, answer) — les routes d'écriture, derrière
-                                   EREGION_ACTION_QUEUE=1
+                                   EREGION_ACTION_QUEUE=1. FS1c : deposit, follow, withdraw, waiting, posture — la route
+                                   rend l'id de sa demande, la page suit le reçu (GET /api/queue/<id>)
 eregion_core/runs_layout.py     → SEC18 (N-05) : runs/ un répertoire par écrivain — glorfindel/, console/, annatar/,
-                                   gothmog/, orodruin/, verdicts/, bot/ (FS1b : ses demandes de la file, queue/) ; ce que chacun tient (belongs), où un lecteur trouve les
+                                   gothmog/, orodruin/, verdicts/, bot/ (FS1b : ses demandes de la file, queue/ ; FS1c : ses gestes,
+                                   manual_actions.jsonl — HANDS, hand(), EREGION_RUNS_WRITER) ; ce que chacun tient (belongs), où un lecteur trouve les
                                    campagnes et les rapports (campaign_dirs, find_campaign, run_reports), où l'analyse
                                    écrit (campaign_output), ce qui n'est pas lu, dit une fois (survey, say_strays), le
                                    rapport d'un run tenu contre son répertoire (report_refusal), la migration de
@@ -135,7 +140,12 @@ glorfindel/
                           graph.py (IR1a : Microsoft Graph en lecture seule, un GET et rien d'autre ; Unreadable : un droit,
                           une erreur, un délai), entra_plan.py + entra_items.py + entra_grants.py (IR1a : le plan d'une carte
                           identity_change, par le code, ses ids lus dans Graph, jamais inventés), entra_check.py (IR1a : Verify,
-                          held / not_held / unreadable, jamais held sans la réponse de Graph)
+                          held / not_held / unreadable, jamais held sans la réponse de Graph),
+                          identity_contract.py (IR1b : le contrat de l'exécuteur d'identité, lu à son
+                          démarrage — son jeton Graph puis ses droits relus en lecture seule, contre la
+                          liste fermée ; beyond_contract, contract_unreadable : passif, il refuse de
+                          démarrer ; `glorfindel identity-contract`. Son application : Terraform de H0,
+                          infra/glorfindel-host/identity_executor.tf, désactivée par défaut)
                           backup.py : check_backup_points ; list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
                           indépendant de l'état des VMs (source de vérité backup même VM éteinte). Cheap leg : 1 appel
                           paginé, pas de count RP par item (count = check_backup_points par VM, opt-in). Read-only OK.
@@ -566,7 +576,8 @@ Le rouge écrivait donc où le bleu écrit ses décisions, et lisait le raisonne
 | Répertoire | Écrivain | Ce qu'il y écrit | Monté en lecture seule par |
 |---|---|---|---|
 | `runs/glorfindel/` | la watch, et ce qui tourne dans son conteneur : le tirage du canal, le rapport de campagne, l'analyse ; la CLI de Glorfindel quand elle rejoue des signaux (`respond`) | `*_debug.jsonl`, `campaigns/<id>/` (tirées sur H0 ; `report.md`, `report.error`, `triage.*`, `replay.json` partout), `<run_id>.json` et `.pulled-runs/` tirés, `exercises/` tirées, `orodruin/` tiré | la console |
-| `runs/console/` | la console, la CLI de Glorfindel, le bot | `manual_actions.jsonl` | la watch (l'analyse des levées) |
+| `runs/console/` | la console, la CLI de Glorfindel | `manual_actions.jsonl`, `queue/` (FS1b) | la watch (l'analyse des levées, la file) |
+| `runs/bot/` | le bot, et la CLI qu'il lance (`EREGION_RUNS_WRITER=bot`, FS1c) | `manual_actions.jsonl`, `queue/` (FS1b) | la watch, la console (le fil, les levées) |
 | `runs/annatar/` | Annatar | `*_signals.jsonl`, `<run_id>.json`, `exercises/`, `campaigns/<id>/` | la watch, le bot (le moment d'un restore), la console |
 | `runs/gothmog/` | Gothmog | `*_signals.jsonl`, `<run_id>.json`, `exercises/` | la watch, la console |
 | `runs/orodruin/` | les injecteurs sur l'hôte d'Orodruin et son lanceur | `audit.jsonl`, `requests/` (statuts, registre, verrou), `.watch_seen.json` (SEC19 : le plus haut compteur de battement vu par clé, contre un rejeu) | — |
@@ -580,7 +591,7 @@ Il n'existe pas sur Orodruin, où le canal du stockage suffit (`make orodruin-pu
 `--orodruin`).
 
 Un lecteur ne cherche un fichier que dans le répertoire de son écrivain : un signal dans
-`runs/annatar/`, un cycle dans `runs/glorfindel/`, un geste dans `runs/console/`, une fenêtre dans
+`runs/annatar/`, un cycle dans `runs/glorfindel/`, un geste dans `runs/console/` ou `runs/bot/` (FS1c), une fenêtre dans
 `exercises/` d'Annatar, de Gothmog ou de la watch, un rapport dans le répertoire d'un injecteur (qui
 doit le nommer) ou de la watch. Ce qui est ailleurs — l'ancienne disposition, un fichier d'un autre
 écrivain dans un répertoire — n'est jamais lu, et dit une fois (`runs_layout.survey`).
@@ -589,9 +600,9 @@ Montages après SEC18 (`tests/unit/test_runs_mounts.py` les tient) :
 
 | Où | Service | En écriture | En lecture seule |
 |---|---|---|---|
-| compose (poste, H0, une équipe) | `watch` | `glorfindel`, `verdicts` | `annatar`, `gothmog`, `console` |
-| compose | `war-room` (la console) | `console` | `glorfindel`, `annatar`, `gothmog` |
-| compose | `bot` | `console` | `annatar` |
+| compose (poste, H0, une équipe) | `watch` | `glorfindel`, `verdicts` | `annatar`, `gothmog`, `console`, `bot` |
+| compose | `war-room` (la console) | `console` | `glorfindel`, `annatar`, `gothmog`, `bot` (FS1c) |
+| compose | `bot` | `bot` (FS1c : plus `console`) | `annatar`, `glorfindel/queue` |
 | compose | `annatar` | `annatar`, `orodruin` | `verdicts` |
 | compose | `gothmog` | `gothmog`, `orodruin` | `verdicts` |
 | Makefile `ANNATAR_VOLS` | Annatar à la main | `annatar`, `orodruin` | `verdicts` |

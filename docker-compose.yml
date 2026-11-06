@@ -152,6 +152,14 @@ services:
       EREGION_QUEUE_KEYS: ${EREGION_QUEUE_KEYS:-}
       DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       DISCORD_ALLOWED_ROLES: ${DISCORD_ALLOWED_ROLES:-}
+      # NT1 (#583) : qui n'est jamais une cible (eregion_core/never_target.py) — la watch lit la liste
+      # pour écrire le plan d'une carte d'identité (IR1a, entra_plan.never_target_protected). Des ids,
+      # aucun secret ; à elle seule : ni la console ni le bot ne la lisent, et les injecteurs ont la
+      # leur sur Orodruin (orodruin.env). Vide ou mal écrite, la liste est illisible : chaque verbe
+      # d'un plan devient une étape de l'humain — fermé, jamais une panne (host_env.py --check le dit).
+      EREGION_OPERATOR_OBJECT_ID: ${EREGION_OPERATOR_OBJECT_ID:-}
+      EREGION_PROTECTED_IDENTITIES: ${EREGION_PROTECTED_IDENTITIES:-}
+      EREGION_IDENTITY_EXECUTOR_CLIENT_ID: ${EREGION_IDENTITY_EXECUTOR_CLIENT_ID:-}
     volumes:
       # SEC18 : son répertoire en écriture (ses cycles ; sur H0, ce qu'elle tire du canal et les
       # rapports de campagne ; FS1b : ses reçus de la file et son statut, queue/) ; ceux des
@@ -207,7 +215,7 @@ services:
     restart: unless-stopped
     profiles: ["bot"]
     # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Il
-    # n'écrit que dans ses montages (runs/console, ~/.glorfindel, ~/.cache/chroma) et /tmp ; la CLI qu'il lance aussi.
+    # n'écrit que dans ses montages (runs/bot, ~/.glorfindel, ~/.cache/chroma, ~/.eregion/bot) et /tmp ; la CLI qu'il lance aussi.
     read_only: true
     tmpfs:
       - /tmp
@@ -220,14 +228,17 @@ services:
       # M-3 : qui peut cliquer les boutons (ids Discord). Vides : tous refusent (fermé par défaut).
       DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       DISCORD_ALLOWED_ROLES: ${DISCORD_ALLOWED_ROLES:-}
+      # FS1c : la CLI lancée dans ce conteneur (ses boutons, un `docker exec`) note ses gestes dans
+      # runs/bot, jamais dans runs/console, que le bot ne monte plus.
+      EREGION_RUNS_WRITER: bot
     volumes:
-      # SEC18 : runs/console en écriture — ses boutons lancent la CLI de Glorfindel (restore,
-      # revert), qui y note l'action (manual_actions.jsonl) pour le fil de la console (SEC3) ;
-      # runs/annatar en lecture seule : le moment d'un restore d'exercice (son attack_started).
-      - ${EREGION_RUNS:-./runs}/console:/app/runs/console
+      # SEC18 : runs/annatar en lecture seule — le moment d'un restore d'exercice (son attack_started).
+      # FS1c : plus runs/console — un bot pris ne remplace ni ne noie les demandes de la console.
       - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro
       # FS1b : son propre répertoire, un écrivain à lui — ses demandes de la file d'actions, signées
-      # par sa clé ; et des reçus de la watch, ce seul sous-répertoire, en lecture seule.
+      # par sa clé ; FS1c : ses gestes aussi (manual_actions.jsonl : la CLI que lancent ses boutons,
+      # restore, revert), pour le fil de la console (SEC3). Et des reçus de la watch, ce seul
+      # sous-répertoire, en lecture seule.
       - ${EREGION_RUNS:-./runs}/bot:/app/runs/bot
       - ${EREGION_RUNS:-./runs}/glorfindel/queue:/app/runs/glorfindel/queue:ro
       - ./glorfindel/rules:/app/glorfindel/rules:ro
@@ -283,6 +294,8 @@ services:
       - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel:ro
       - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro
       - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro
+      # FS1c : les gestes du bot (runs/bot/manual_actions.jsonl), en lecture seule, pour le fil.
+      - ${EREGION_RUNS:-./runs}/bot:/app/runs/bot:ro
       - ./eregion_console/static:/app/eregion_console/static:ro
       - ./glorfindel/rules:/app/glorfindel/rules:ro
       - ${HOME}/.glorfindel:/root/.glorfindel

@@ -78,11 +78,11 @@ COMPONENTS: dict[str, Component] = {
             "test_bot.py", "test_chat_escaping.py", "test_cli.py", "test_config.py", "test_detection_authoring.py",
             "test_detection_rules.py", "test_detectors.py", "test_discovery.py", "test_entries_calls.py",
             "test_auditd.py", "test_correlation.py", "test_expected_sudo.py", "test_forged_logs.py",
-            "test_glorfindel.py", "test_identity_plan.py",
+            "test_glorfindel.py", "test_identity_contract.py", "test_identity_plan.py",
             "test_invariant_regressions.py", "test_invariant_regressions_aws.py", "test_invariants.py",
             "test_invariants_aws.py",
             "test_jobs.py", "test_llm_smoke.py", "test_locks.py", "test_memory_age.py", "test_orphan_sweep.py", "test_posture.py", "test_proposed_rules.py", "test_readiness.py",
-            "test_promotion_guard.py", "test_reassert.py", "test_reassert_status.py", "test_reassert_verified.py", "test_release_away.py", "test_rule_layers.py", "test_rules_check.py", "test_runs_channel.py", "test_tui_actions.py", "test_turned_names.py", "test_unexpected_decision.py", "test_unreadable_state.py",
+            "test_promotion_guard.py", "test_reassert.py", "test_reassert_reread.py", "test_reassert_status.py", "test_reassert_verified.py", "test_release_away.py", "test_rule_layers.py", "test_rules_check.py", "test_runs_channel.py", "test_tui_actions.py", "test_turned_names.py", "test_unexpected_decision.py", "test_unreadable_state.py",
         ),
     ),
     # Annatar — its executors, engines (Atomic Red Team), campaigns, signals.
@@ -110,7 +110,7 @@ COMPONENTS: dict[str, Component] = {
 # runs, the analysis AI over a campaign and Glorfindel's decisions, the gate seen from both
 # sides, the host and the Makefile — and the repository-wide checks. The full suite runs them.
 TOGETHER = (
-    "test_action_proposal.py", "test_action_queue_watch.py", "test_activity_logs.py", "test_own_run_command.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
+    "test_action_proposal.py", "test_action_queue_async.py", "test_action_queue_watch.py", "test_activity_logs.py", "test_own_run_command.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
     "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_console_shots.py", "test_docs_home.py", "test_console_dagorlad_request.py", "test_console_dagorlad_drills.py", "test_console_dagorlad_follow.py", "test_console_dagorlad_annatar.py", "test_console_blocks.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_console_signed_detections.py", "test_console_identity_plan.py", "test_profiles.py",
     "test_coverage.py",
@@ -121,6 +121,7 @@ TOGETHER = (
     "test_experiment_schema.py", "test_vm3_pairs.py", "test_vm3b_suites.py", "test_fault_rate.py", "test_glorfindel_host.py", "test_host_console.py",
     "test_host_cd.py", "test_host_deploy.py", "test_hosted_report.py", "test_indicators.py",
     "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_exercise.py", "test_makefile_secrets.py", "test_bench_logs.py", "test_bench_auditd.py", "test_bench_identity.py", "test_bench_users.py",
+    "test_identity_executor_host.py",
     "test_notify_discord.py", "test_observation.py", "test_orodruin_kill.py", "test_orodruin_word.py", "test_palantir.py",
     "test_pip_audit_issues.py",
     "test_provider_boundary.py", "test_roadmap_discord.py",

@@ -373,6 +373,78 @@ M3969 (le code du harnais reformulé sans réancrer ses mutants) n'était attrap
 par le méta-test : il est retiré. Après la seconde relecture, M4020 (les runs d'une copie sans la
 marque du harnais) et M4021 (le méta-test qui ne se saute plus dans une copie mutée).
 
+### Chaque mutant mesuré, sans le travail en double (CI10a)
+
+Décision de Jonathan du 05/11 (« Tout le paquet », #580), sur l'étude CI9 : la porte confirmait sans
+rien trouver de neuf, en 42 h de runner, dont une bonne part refaisait ce qu'une autre partie faisait
+déjà. Ce qui ne change pas : **chaque mutant reste mesuré à chaque release, sur l'arbre publié, à 500
+séquences** ; aucun n'est retiré, la liste connue de CI6e tient. Deux choses changent dans le calcul,
+et le verdict reste le même :
+
+- **Un tour là où le hasard ne joue pas** (`rounds_of`). Un second tour ne tire de nouvelles graines
+  que pour Hypothesis : sur tout autre test, il rejoue le même test sur le même code. Aux trois
+  premières portes (05/11), aucun mutant d'une telle cible n'a changé de verdict d'un tour à l'autre,
+  ni d'une porte à l'autre. La règle se lit sur les fichiers de la cible, jamais mutant par mutant :
+  - une cible garde ses tours quand l'un de ses fichiers importe Hypothesis (les machines, les tests
+    de propriétés : `DRAWS`) ;
+  - ou quand il court contre de vrais processus et de vraies horloges (`TIMED` : `test_locks.py`,
+    `test_exercise.py`) ;
+  - ou quand un test qu'elle lance démarre un thread ou un processus, dans son corps ou par une
+    fonction ou une classe de son fichier qu'il appelle (`RACES`, relecture de CI10a : la course
+    bloquée de M1346, les deux isolations en même temps de M3550 et M3553, les huit threads de
+    `test_ensure_clients_thread_safe_single_init`, les gardes de `test_runs_channel.py`, le thread de
+    la watch dans `test_action_queue_watch.py`). Une cible lance les tests qu'elle nomme, un fichier
+    entier, ou ceux d'un fichier dont le nom porte un mot de son `-k`. Une simple mention compte aussi
+    (`test_release.py` nomme `multiprocessing` dans une liste) : la règle penche vers deux tours ;
+  - ou quand son mutant est `TIMING`, ou qu'un de ses fichiers est illisible.
+
+  Toute autre cible a un tour. M3289 en garde un : son test épie les verrous du balayage sur un seul
+  thread, les mêmes appels dans le même ordre à chaque fois. La ligne d'un mutant dit ses tours
+  (`1/1`), et le JSON d'une tranche aussi (`mutant_rounds`). **Le jeu de contrôle garde ses tours
+  d'office**, quelle que soit sa cible : il mesure ce que la suite n'a jamais été faite pour trouver.
+- **Les mutants du CD contre les tests qui les attrapent** (`--narrow FILE`). Un mutant dont la cible
+  est un fichier lourd entier est mesuré une fois sur ce fichier, sans `-x` : ses deux tests les plus
+  rapides qui l'attrapent (`NARROW`) deviennent sa cible, s'ils l'attrapent à chaque tour ; sinon il
+  garde le fichier entier. `scripts/mutants/narrowed.json` garde ces cibles, sans toucher aux fichiers
+  des lots. Une entrée ne vaut que tant que la cible écrite dans son lot est encore ce fichier entier
+  (`WHOLE` la garde, et `--narrow` la remesure). `scripts/mutant_anchors.py` dit une entrée qui ne
+  s'applique plus, ou un test que son fichier ne définit plus. Ce qu'on perd : la redondance. Un
+  mutant que 21 tests attrapaient n'est plus mesuré que contre 2 ; si l'un s'affaiblit, la porte dit
+  `SURVIVES` (visible, jamais silencieux), et on le remesure. Un id de paramètre est positionnel
+  (`[twice0-True]`) : un lot qui réordonne les paramètres garde la fonction et perd le nœud. Une
+  collecte de leurs fichiers (`pytest --collect-only`, environ 1 s) dit chaque nœud resserré qui n'est
+  plus collecté, dans `mutant_anchors.py` et dans la suite. Les copies des mutants de `--narrow` sont
+  faites d'une copie vierge, jamais de celle où son run non muté a tourné. Resserrés le 05/11 : les 96 mutants
+  de `test_host_cd.py` entier (M1014 garde sa cible), 29 des 30 de `test_release.py` (M1164 n'est
+  attrapé que par une erreur d'indentation à la collecte), les 51 de `test_published_image.py`. Un
+  test dont l'id de paramètre a des espaces (un document JSON) est pris entier, tous ses paramètres.
+
+Ce qui ne change rien au verdict :
+- **Les machines ne tournent plus non mutées dans les tranches de la porte**
+  (`--skip-machine-baseline`). Le job `invariants` de la même porte les fait tourner à 2 000 séquences
+  sur le même arbre. Le reste d'une cible tourne encore non muté, et la tranche dit combien de cibles
+  ont perdu leur machine. La mesure du lundi et un run local ne passent pas ce drapeau, et gardent leur
+  run non muté.
+- **Un seul pool** pour les runs non mutés et les mutants d'une tranche, du plus lourd au plus léger.
+  Les runs non mutés ont leur propre copie, et rien de ce qu'ils écrivent n'atteint la copie d'un
+  mutant. Un run non muté rouge invalide toujours toute la tranche, dit une fois tous les runs finis.
+- **`--machines`** mesure les seuls mutants dont la cible fait tourner une machine, et `--total DIR
+  --machines` juge ceux-là seuls : les autres ne sont pas dits « jamais mesurés ». Un total refuse une
+  tranche mesurée autrement. Sans `--machines`, rien ne change.
+
+**Mesures.** Mutants M4170–M4189 (`scripts/mutants/CI10a.py`), attrapés à chaque tour par
+`tests/unit/test_mutation_shards.py` et `tests/unit/test_mutant_anchors.py` : un test Hypothesis, une
+course ou un `TIMING` mesurés en un tour, la règle jamais appliquée ou jamais lue par `main()`, aucune
+machine reconnue, le drapeau sans effet, une cible qui contient une machine jamais lancée non mutée,
+le plan qui pèse les runs laissés au job `invariants`, `--machines` qui prend tout, `--total
+--machines` qui exige tout ou mêle deux mesures, une entrée resserrée appliquée à un mutant déplacé,
+des tests qui manquent un tour gardés, une erreur jamais comptée, les plus lents gardés, une mesure
+de deux tours prise pour un, une mesure sur le fichier entier prise pour celle de la cible resserrée,
+les copies des mutants faites de celle des runs non mutés, une entrée qui ne s'applique plus jamais
+dite. Après la relecture, M4255–M4259 : un nœud que pytest ne collecte plus jamais dit, le jeu de
+contrôle en un tour, les copies de `--narrow` faites de celle de son run non muté, une course sur
+de vrais threads en un tour, des threads démarrés par une fonction ou une classe jamais vus.
+
 ### Les pannes des dépendances (G2)
 
 Les invariants modélisent les pannes d'Azure sous l'isolation (429, crash, 403, disque plein).

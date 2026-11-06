@@ -80,7 +80,7 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
      sections publiées restent intactes. Un fragment ne bouge jamais à la fusion : c'est son intérêt.
    - Puis lance :
      - `ruff check .` ;
-     - la suite complète ;
+     - la suite complète (`pytest -n 4` au plus : plus bas, « La charge du poste ») ;
      - `python scripts/mutant_anchors.py`, qui vérifie, jeu de contrôle compris, que chaque mutant a un
        id unique et que le harnais pourra l'appliquer (son texte présent une seule fois, dans un fichier
        suivi), et que la garde `if __name__ == "__main__"` reste la dernière instruction de
@@ -169,6 +169,19 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
      - aucune protection n'est contournée : un prompt n'est ni reformulé, ni découpé, ni relancé pour
        l'éviter (`docs/elrond.md`).
    - Une CI rouge sans lien avec ta PR se dit à l'Orchestre. Pas de saut ni de `xfail` sans lot.
+   - **La charge du poste** (06/11). Les sessions et leurs sous-agents partagent le WSL de Jonathan :
+     quand il sature (mémoire ou processeurs), VS Code tue son hôte d'extensions, et les onglets Claude Code
+     décrochent avec leurs demandes de permission. D'où trois règles :
+     - la suite en local à `pytest -n 4` au plus, jamais `-n auto`, et `mutation_check.py --jobs 2` ;
+       jamais deux suites complètes en même temps dans un même agent ; l'Orchestre tient au plus trois
+       lots à la fois (`Parallel` du plan elrond) ;
+     - **aucune tâche de fond laissée derrière soi** : un agent ou un sous-agent qui rend la main a fini
+       ses commandes ; au retour d'un sous-agent, l'Orchestre vérifie (`ps`) qu'il ne reste rien ;
+     - **jamais `az … --help` sur une commande d'extension** (par exemple `az monitor log-analytics
+       query`) : sans terminal, `az` installe l'extension d'office et se relance, et une commande restée
+       introuvable recommence sans fin (le 06/11 : environ 26 Go en 85 min, VS Code tué trois fois). Lire
+       la doc d'`az`, ou `az extension add` explicite ; `AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no` est posé
+       dans l'environnement des sessions.
 7. **Après.**
    - Mets à jour ton status (`collab/<rôle>_status.md`).
    - Écris dans l'inbox des sessions qu'un changement touche.
@@ -298,7 +311,8 @@ Code lancées dans `~/eregion` basculent. Ce sont tes fichiers : une session ne 
        "EREGION_AGENT_SESSION": "1",
        "GIT_CONFIG_GLOBAL": "/home/<toi>/.config/eregion-agents/gitconfig",
        "GIT_TERMINAL_PROMPT": "0",
-       "GH_CONFIG_DIR": "/home/<toi>/.config/eregion-agents/gh"
+       "GH_CONFIG_DIR": "/home/<toi>/.config/eregion-agents/gh",
+       "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no"
      }
    }
    ```

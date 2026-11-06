@@ -62,11 +62,12 @@ Index :
    - le chemin de la fiche ;
    - la racine du dépôt ;
    - la base ;
-   - les contraintes de la session.
+   - les contraintes de la session, dont celles de la charge du poste (`docs/sessions.md`, « La charge du poste ») : `pytest -n 4` au plus, `mutation_check.py --jobs 2`, jamais `az … --help` sur une commande d'extension, aucune tâche de fond en rendant la main. Elles valent aussi pour le prompt d'un relecteur.
 
    Ils tournent en arrière-plan, au plus `Parallel` à la fois.
 
 3. **Au retour d'un exécutant :**
+   - Vérifie qu'il ne laisse aucune tâche de fond (`ps` : ni suite, ni passe de mutants, ni boucle).
    - Mets à jour sa ligne dans l'index : état et branche.
    - Lance `palantir.py agent "elrond <ID> · <titre>" --json`.
      - Verdict `expected-model-only` : le modèle est `5.5`. Relecture seulement si la politique est `always`.
@@ -75,6 +76,7 @@ Index :
    - Range les impacts transverses de son rapport dans `collab/inbox_<rôle>.md`, pour chaque session concernée.
 
 4. **Au retour d'un relecteur, lance aussi palantir.**
+   - Vérifie qu'il ne laisse aucune tâche de fond (`ps`), comme au retour d'un exécutant.
    - Si la relecture est restée en 5.5, note son verdict :
      - `ok` : le lot passe à `done` ;
      - `changes` ou `blocking` : le lot passe à `fix`. Relance un `elrond-worker` sur la même branche, avec les constats et la description `elrond <ID> · correction`, puis fais relire à nouveau, sur le nouveau commit à relire (noté de nouveau, étape 3).

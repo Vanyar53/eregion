@@ -1,6 +1,6 @@
 # Stratus — l'abonnement de test dédié et la cible (R2b)
 
-_Conception — 2026-11-06 (re-décision de Jonathan ; v3 après deux relectures Opus 5.5 — v1 `blocking`, v2 `changes`) — statut : **conception, à relire avant tout code** (R2b, #608, « Partie de #79 »). Fait suite à R2a (fusionné le 06/11, `3f6ae335`). **En attente d'une décision de Jonathan** sur deux points, marqués ⏳ : l'identité (A ou B) et la zone._
+_Conception — 2026-11-06 (v4 — identité et zone **tranchées par Jonathan le 06/11**, après les relectures Opus 5.5 v1 `blocking` et v2 `changes`) — statut : **conception, à relire avant tout code** (R2b, #608, « Partie de #79 »). Fait suite à R2a (fusionné le 06/11, `3f6ae335`)._
 
 ## La décision (Jonathan, 06/11, en interactif)
 
@@ -14,31 +14,32 @@ Le cycle de R2a est inchangé — `warmup → detonate → revert → cleanup` ;
 
 ---
 
-## 1. ⏳ L'identité qui agit, et le contrat
+## 1. L'identité qui agit (B — identité dédiée + bac à sable), et le contrat
 
-### Le choix d'identité (à trancher par Jonathan)
+### La décision : une identité propre à Stratus, dans un bac à sable (Jonathan, 06/11)
 
-Stratus s'authentifie avec l'identité que l'adaptateur lui donne. Deux options :
+**Stratus n'agit pas sous l'identité d'Orodruin.** Une **seconde identité**, dédiée à Stratus, porte un **rôle personnalisé fermé sur le seul abonnement dédié** (jamais Contributor ; `NotActions` : `diagnosticSettings`, `Consumption`/`CostManagement`, les credentials fédérés — § 6). Stratus, son Terraform et azurerm tournent dans un **bac à sable qui ne peut pas obtenir le jeton propre d'Orodruin** : Stratus n'a aucune entrée de cible, seul le RBAC le borne, donc son identité doit être strictement la sienne.
 
-- **Option A** — l'identité d'Orodruin, plus un rôle sur le seul abonnement dédié. *Contre* : `assess_identity` (`orodruin.py:226-227`) refuse toute attribution hors banc ; A élargit donc le périmètre du jeton d'Orodruin, et ne donne pas d'appelant distinct dans `AzureActivity`.
-- **Option B** — une identité propre à Stratus, dans un bac à sable **sans l'IMDS d'Orodruin** (depuis le bac à sable, une demande de jeton pour l'identité d'Orodruin doit échouer — à mesurer). *Pour* : l'identité banc d'Orodruin reste intacte ; Stratus apparaît comme un **appelant distinct** dans le journal d'activité (utile à la détection).
+**Le mécanisme du bac à sable est une hypothèse à mesurer au banc** (écrite comme telle) : soit un conteneur ou un espace réseau avec un **proxy de jeton limité au `client_id` de Stratus**, soit une fédération « identité managée comme credential » d'une application. **Mesure, avant le code** : depuis le bac à sable, une **demande de jeton pour l'identité d'Orodruin doit échouer**.
 
-**Le relecteur recommande B.** Stratus n'a aucune entrée de cible : seul le RBAC le borne, donc une identité à périmètre propre est plus sûre qu'un élargissement de l'identité d'Orodruin. **Décision en attente de Jonathan** ; la suite de la doc tient pour A comme pour B — seul « quelle identité le contrat lit » change.
+**À écarter explicitement** : une UAMI attachée à la VM **sans** bac à sable n'isole rien (le code d'Orodruin pourrait toujours demander le jeton de l'UAMI, et réciproquement) — ce n'est pas la solution.
 
-### Ce que le contrat doit faire (vaut pour A et B)
+L'identité distincte donne un **appelant distinct** dans `AzureActivity`, ce qui fonde un invariant à écrire : **une identité Stratus vue agir hors de l'abonnement dédié = critique**.
 
-Aujourd'hui `orodruin-check` ne liste les attributions que sur l'abonnement du banc (`read_identity`, `orodruin.py:417-420`) : il ne verrait pas, et ne jugerait pas, un rôle sur l'abonnement dédié. R2b doit :
+### Ce que le contrat doit faire
 
-- **une seconde lecture**, à la portée de l'abonnement dédié, avec sa propre preuve d'absence (`roleAssignments/read` sur `/subscriptions/<EREGION_STRATUS_SUBSCRIPTION>`) — en A sur l'identité d'Orodruin, en B sur l'identité de Stratus ;
-- **un rôle tenu à une liste fermée d'actions** (l'esprit de SEC11) : jamais un joker, jamais `Microsoft.Authorization/*/write` ; les actions minimales par technique, mesurées au banc (§ Questions) ;
-- **refuser si `EREGION_STRATUS_SUBSCRIPTION` vaut l'abonnement du banc ou celui de la VM** : sans ce refus, une ligne d'`orodruin.env` ramène exactement le bloquant v1 (un rôle large sur le banc). `orodruin-check` → `passive` ;
-- **dire que les autres abonnements du tenant restent improuvables**, en A comme en B (la seconde lecture ne prouve l'absence que sur l'abonnement dédié et le banc, pas sur un troisième).
+Le contrat d'Orodruin pour **sa propre identité reste tel quel** (`orodruin.py:226-227` : il refuse toujours toute attribution hors banc — l'identité d'Orodruin ne gagne **aucun** rôle en B). R2b ajoute une **garantie nouvelle** : `orodruin-check` lit **la seconde identité** (celle de Stratus) et prouve qu'elle est bornée.
 
-### Le kill révoque aussi le rôle dédié (constat 2)
+- **Lire les attributions de l'identité Stratus** à la portée de l'abonnement dédié, avec preuve d'absence **ailleurs** (sur le banc et sur l'abonnement de la VM : rien) — la seconde identité ne tient qu'un rôle, sur le seul abonnement dédié.
+- **Un rôle tenu à une liste fermée d'actions** (l'esprit de SEC11) : jamais un joker, jamais `Microsoft.Authorization/*/write` ; les actions minimales par technique, mesurées au banc (§ Questions).
+- **Refuser si `EREGION_STRATUS_SUBSCRIPTION` vaut l'abonnement du banc ou celui de la VM** : sans ce refus, une ligne d'`orodruin.env` ramènerait le bloquant v1 (un rôle large sur le banc). `orodruin-check` → `passive`.
+- **Dire que les autres abonnements du tenant restent improuvables** (la lecture ne prouve l'absence que sur l'abonnement dédié, le banc et la VM, pas sur un troisième).
 
-`orodruin-kill` (`orodruin-contract.md`, `orodruin.py` `kill`) ne révoque aujourd'hui que l'abonnement du contrat et celui de la VM : après un kill, l'identité **garde** son rôle sur l'abonnement dédié. R2b doit :
+### Le kill coupe l'identité Stratus seule (constat 2)
 
-- **révoquer** l'attribution sur `EREGION_STRATUS_SUBSCRIPTION` ;
+`orodruin-kill` ne révoque aujourd'hui que les scopes du contrat et de la VM : il ne toucherait pas le rôle de l'identité Stratus sur l'abonnement dédié. R2b doit :
+
+- **révoquer** l'attribution de l'identité Stratus sur `EREGION_STRATUS_SUBSCRIPTION` — l'identité d'Orodruin, elle, n'a rien à y révoquer (elle n'y a aucun rôle, B) ;
 - prouver **« rien à révoquer »** en relisant cet abonnement (le patron M191) ;
 - des mutants.
 
@@ -54,11 +55,11 @@ Aujourd'hui `orodruin-check` ne liste les attributions que sur l'abonnement du b
 - l'environnement du sous-processus **remplace** `AZURE_SUBSCRIPTION_ID` et `ARM_SUBSCRIPTION_ID` par l'abonnement dédié (noms exacts à mesurer ; un 403 attendu si on vise l'abonnement du banc) ;
 - le repli sur l'abonnement du banc **disparaît**.
 
-### La garde — ⏳ zone `bench` réservée, posée par le scope
+### La garde — zone `bench` réservée, posée par le scope (Jonathan, 06/11)
 
 Le moteur Stratus a son propre `Scope`, borné à l'abonnement dédié (`EREGION_STRATUS_SUBSCRIPTION`), construit par lui seul — **jamais** le chemin VM, qui garde `Scope.for_bench()` et `rg-celebrimbor`. `Scope.check` autorise toute ressource de cet abonnement et refuse le reste. Les deux périmètres sont disjoints (abonnements différents).
 
-**Zone (à trancher par Jonathan ; le relecteur recommande) :** la zone `bench`, **réservée** et **posée par le scope** (pas par une étiquette), la faute refusée. `ZONES` et `check_zone` (`inscription.py:77, 224-236`) restent **inchangés** — une zone étiquetable (p. ex. une zone `stratus` lue d'un tag) rouvrirait `enrollment()` au moteur Stratus, ce qu'on ne veut pas. Pas de tag : le scope impose la zone.
+**Zone : `bench`, réservée, posée par le scope Stratus lui-même — sans étiquette.** `ZONES`, `check_zone`, `Scope.for_bench()` et O0 restent **inchangés** (`inscription.py:77, 224-236`) — une zone étiquetable (une zone `stratus` lue d'un tag) rouvrirait `enrollment()`, ce qu'on ne veut pas. Le scope impose `bench` ; en plus, le scope Stratus **refuse explicitement `kind: fault`** (sans quoi `check_zone("bench")` accepterait une panne) : Stratus ne joue que des techniques, jamais une panne. Un champ **« périmètre » (`stratus-subscription`)** dans la fenêtre d'exercice et le rapport distingue les runs Stratus des autres.
 
 ### La fenêtre — une seule, avant le `warmup`, sur l'abonnement (constats 3, 4)
 
@@ -146,7 +147,7 @@ Ces gestes iront dans `docs/operations.md` au code (avec la date), pas dans cett
 - La sortie Internet d'une VM d'un VNet neuf (depuis le 30/09/2025, pas d'accès sortant par défaut — à confirmer).
 - La forme exacte des commandes/ressources Terraform du paramètre de diagnostic et du budget.
 
-## Décisions en attente de Jonathan
+## Décisions de Jonathan (06/11, tranchées)
 
-1. **Identité A ou B** (§ 1) — le relecteur recommande **B** (bac à sable sans l'IMDS d'Orodruin, appelant distinct).
-2. **Zone** (§ 2) — le relecteur recommande **`bench` réservée, posée par le scope**, `ZONES` inchangé.
+1. **Identité : B** (§ 1) — une identité dédiée à Stratus, dans un bac à sable sans l'IMDS d'Orodruin ; rôle fermé sur le seul abonnement dédié ; `orodruin-check` lit cette seconde identité ; le kill la coupe seule ; le contrat de l'identité d'Orodruin reste inchangé.
+2. **Zone : `bench` réservée** (§ 2) — posée par le scope Stratus, sans étiquette, `kind: fault` refusé dans ce scope ; `ZONES`/`check_zone`/`Scope.for_bench()`/O0 inchangés ; un champ « périmètre » (`stratus-subscription`) dans la fenêtre et le rapport.

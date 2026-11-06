@@ -238,10 +238,67 @@ def _embed_body(esc: dict) -> tuple[str, list[tuple[str, str, bool]]]:
     why = reason.replace(explanation, "", 1).strip() if explanation and explanation in reason else reason
     if explanation and why and reason != explanation:
         fields.append(("Pourquoi rien n'est exécuté", discord_text(why)[:1024], False))
-    if esc.get("suggested_steps"):
+    plan = esc.get("identity_plan")
+    if isinstance(plan, dict) and plan.get("items"):
+        fields += _plan_fields(plan)
+    elif esc.get("suggested_steps"):
         steps = "\n".join(f"• {discord_text(s)}" for s in esc["suggested_steps"][:3])
         fields.append(("Prochaines étapes", steps[:1024], False))
     return discord_text(explanation or reason)[:2048], fields
+
+
+_FIELD_MAX = 1024          # a field's value (Discord)
+_STEP_FIELDS = 2           # the plan's fields at most: the embed stays under its 6000 characters
+_TAIL_ROOM = 120           # kept in the last one, to say what did not fit
+
+
+def _plan_block(i: dict) -> list[str]:
+    """One item: what, its command as code, then what is not read (by why), what to keep before,
+    the command that finds what is missing."""
+    head = f"• {discord_text(i.get('n', '?'))}. {discord_text(i.get('what') or '')}"
+    lines = [head + (f" : {discord_code(i['command'])}" if i.get("command") else "")]
+    unread: dict[str, list[str]] = {}
+    for p in i.get("params") or []:
+        if isinstance(p, dict) and not p.get("read"):
+            unread.setdefault(str(p.get("why") or "non lu"), []).append(str(p.get("name") or "?"))
+    if unread:
+        lines.append("  ↳ non lu : " + discord_text(" ; ".join(f"{', '.join(n)} ({w})" for w, n in unread.items())))
+    if i.get("before"):
+        lines.append(f"  ↳ avant : {discord_code(i['before'])}")
+    if i.get("find"):
+        lines.append(f"  ↳ pour le trouver : {discord_code(i['find'])}")
+    return lines
+
+
+def _plan_fields(plan: dict) -> list[tuple[str, str, bool]]:
+    """The plan of an identity card (IR1a) in « Prochaines étapes », its commands as code (C2b, #607).
+
+    Its steps as prose — every backtick escaped (SEC6) — left each command to Discord's
+    Markdown: its URL became a link, and the backslash of an escape a `/` in it
+    (`…/roleAssignments//<id>`, 06/11): a command no one could paste. Here a command is in
+    Glorfindel's own backticks (`discord_code`: one line, no backtick of its own, nothing
+    rendered), its text written by the code (ids only, or a template that says what to replace);
+    the rest — what, a parameter not read, a name from outside — escaped as before. An item stays
+    whole, in two fields of 1024 characters at most: what does not fit is said, the console holds
+    it all (with the side effects, the ways back and « Verify »)."""
+    blocks = [[f"• {discord_text(plan['confirm'])}"]] if plan.get("confirm") else []
+    blocks += [_plan_block(i) for i in plan.get("items") or [] if isinstance(i, dict)]
+    fields: list[list[str]] = [[]]
+
+    def fits(lines: list[str]) -> bool:
+        room = _FIELD_MAX - (_TAIL_ROOM if len(fields) == _STEP_FIELDS else 0)
+        return len("\n".join(fields[-1] + lines)) <= room
+
+    for k, block in enumerate(blocks):
+        if not fits(block) and fields[-1] and len(fields) < _STEP_FIELDS:
+            fields.append([])
+        if not fits(block):
+            fields[-1].append(f"• … {len(blocks) - k} de plus, avec effets de bord et retours : "
+                              "la carte dans la console")
+            break
+        fields[-1].extend(block)
+    names = ["Prochaines étapes", "Prochaines étapes (suite)"]
+    return [(names[n], "\n".join(f)[:_FIELD_MAX], False) for n, f in enumerate(fields) if f]
 
 
 def _load_messages() -> dict[str, int]:

@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.markup import escape as _esc_markup
 
 from glorfindel import escalations as esc_module
+from glorfindel.card_target import IDENTITY_PREFIX as _IDENTITY_PREFIX
 from glorfindel.chat_text import discord_code, discord_text
 from glorfindel.escalations import _ACTION_LABELS, _ESCALATION_LABELS
 
@@ -63,7 +64,29 @@ def _save_threads(threads: dict[str, int]) -> None:
 
 # Escalation types whose card is anchored on a VM the detection may not concern (AL1;
 # an identity detection names no VM — C2): never a command, nor a button, aimed at that VM.
+# Since AL1c a card of the control plane or of an identity is filed on what it names, never on a
+# VM it has nothing to do with — still never a command nor a button: the answer is a human's.
 _ANCHORED_TYPES = {"control_plane_change", "identity_change", "unattributed_signal"}
+
+# Every identity card in one thread (AL1c): an identity's name is chosen by whoever registers
+# it — never a thread's name — and one thread per identity would spread them.
+_IDENTITY_THREAD = ("entra:identities", "Entra ID — identités")
+
+
+def _thread_key(esc: dict) -> str:
+    """The card's thread: the resource it is filed on — its VM, its NSG, its group, the control
+    plane —, or the identities' one thread (AL1c). By its `resource_id` alone: a card posted
+    before AL1c, filed on a VM, stays in that VM's thread, where its message is."""
+    if str(esc.get("resource_id") or "").startswith(_IDENTITY_PREFIX):
+        return _IDENTITY_THREAD[0]
+    return str(esc.get("resource_id") or "")
+
+
+def _thread_name(key: str) -> str:
+    """What the thread is called: the resource's short name, or « Entra ID — identités »."""
+    if key == _IDENTITY_THREAD[0]:
+        return _IDENTITY_THREAD[1]
+    return key.split("/")[-1] or key.strip("/").split("/")[-1] or "unknown"
 
 
 def _cli_command(esc: dict) -> str:
@@ -129,6 +152,59 @@ def _embed_title(esc: dict) -> str:
     return f"🚨 Recommandé : {rec} (non exécuté)"
 
 
+_TARGET_KINDS = {"vm": "VM", "nsg": "NSG", "resource_group": "groupe de ressources"}
+_NAME_MAX = 120          # a name from outside, cut before it is escaped: never a cut escape
+_VMS_SHOWN = 8           # the VMs an NSG covers, named; beyond, counted
+
+
+def _target_fields(esc: dict) -> list[tuple[str, str, bool]]:
+    """What the card is about (AL1c, #597): the resource a card of the control plane is filed on
+    — the NSG and the VMs it covers, the VM of a disk, a role's scope, the group, the control
+    plane —, or the identity of an identity card, then what the row could not say. A card of
+    either type filed before AL1c, on a VM it may have nothing to do with, says so, as the console
+    does.
+    Every name from outside cut, then escaped (SEC6)."""
+    def name(v) -> str:
+        return discord_code(str(v or "?")[:_NAME_MAX])
+
+    t = esc.get("target")
+    rid = str(esc.get("resource_id") or "")
+    if not isinstance(t, dict) or not t.get("kind"):
+        short = name(rid.split("/")[-1])
+        if esc.get("escalation_type") in ("control_plane_change", "identity_change"):
+            # Filed before AL1c: on the first VM online — or on the VM itself (a role on the VM,
+            # `attribution: asset`; a signal of `respond`): the card cannot tell which (review).
+            return [("Ressource", f"{short} — rangée là, la détection peut ne pas la viser", False)]
+        return [("Ressource", short, True)]
+    kind = t["kind"]
+    via = f" — {discord_text(str(t['via'])[:_NAME_MAX])}" if t.get("via") else ""
+    if kind == "identity":
+        oid = f" ({discord_code(t['object_id'])})" if t.get("object_id") else ""
+        what = f"{discord_text(t.get('identity_type') or 'identité')} {name(t.get('name'))}{oid}"
+        out = [("Identité visée", what, False)]
+    elif kind in _TARGET_KINDS:
+        vms = [str(v) for v in (t.get("vm_names") or [])]
+        head = f"{_TARGET_KINDS[kind]} {name(t.get('name'))}{via}"
+        value = head
+        # A field Discord refuses past 1024 characters (the whole embed would not be sent): the
+        # VMs named up to _VMS_SHOWN while the field holds them, whole — never a cut escape —,
+        # the rest counted.
+        for n in range(min(len(vms), _VMS_SHOWN), -1, -1):
+            if n:
+                more = f" et {len(vms) - n} autre(s)" if len(vms) > n else ""
+                value = f"{head} ; couvre {', '.join(name(v) for v in vms[:n])}{more}"
+            else:
+                value = f"{head} ; couvre {len(vms)} VM" if vms else head
+            if len(value) <= 1024:
+                break
+        out = [("Ressource visée", value, False)]
+    else:
+        out = [("Ressource visée", f"le plan de contrôle{via}", False)]
+    if t.get("limit"):
+        out.append(("Limite", discord_text(str(t["limit"])[:900]), False))
+    return out
+
+
 def _embed_body(esc: dict) -> tuple[str, list[tuple[str, str, bool]]]:
     """The description and fields: the evidence to judge on (the model's explanation, the
     IP a block targets, the rule, the confidence), then why it did not run.
@@ -139,7 +215,7 @@ def _embed_body(esc: dict) -> tuple[str, list[tuple[str, str, bool]]]:
     reason = (esc.get("reason") or "").strip()
     fields: list[tuple[str, str, bool]] = [
         ("Action", discord_code(esc.get("action") or "—"), True),
-        ("Ressource", discord_code((esc.get("resource_id") or "").split("/")[-1]), True),
+        *_target_fields(esc),
     ]
     params = esc.get("action_params") or {}
     if params.get("ip"):
@@ -157,8 +233,11 @@ def _embed_body(esc: dict) -> tuple[str, list[tuple[str, str, bool]]]:
     type_label = _ESCALATION_LABELS.get(esc.get("escalation_type", ""), esc.get("escalation_type", ""))
     fields.append(("Contexte", discord_text(" · ".join(filter(None, [
         str(esc.get("ttp") or ""), str(esc.get("severity") or ""), type_label]))), False))
-    if explanation and reason and reason != explanation:
-        fields.append(("Pourquoi rien n'est exécuté", discord_text(reason)[:1024], False))
+    # The reason of a decision built by the code (AL1, C2) begins with the explanation the
+    # description already shows: said once (AL1c) — what is left says why nothing runs.
+    why = reason.replace(explanation, "", 1).strip() if explanation and explanation in reason else reason
+    if explanation and why and reason != explanation:
+        fields.append(("Pourquoi rien n'est exécuté", discord_text(why)[:1024], False))
     if esc.get("suggested_steps"):
         steps = "\n".join(f"• {discord_text(s)}" for s in esc["suggested_steps"][:3])
         fields.append(("Prochaines étapes", steps[:1024], False))
@@ -621,7 +700,7 @@ async def _execute_and_report(esc: dict, cli_args: list[str], channel, run, card
         # Archive thread if no more pending escalations for this resource
         remaining = [
             e for e in esc_module.pending()
-            if e["resource_id"] == esc["resource_id"]
+            if _thread_key(e) == _thread_key(esc)
         ]
         if not remaining and isinstance(channel, discord.Thread):
             await channel.edit(
@@ -844,7 +923,7 @@ class _VerdictButton(discord.ui.Button):
         await interaction.followup.send(
             f"{_VERDICT_WORDS[self.verdict]} — jugé par **{discord_text(interaction.user.display_name)}**"
         )
-        remaining = [e for e in esc_module.pending() if e["resource_id"] == self.esc["resource_id"]]
+        remaining = [e for e in esc_module.pending() if _thread_key(e) == _thread_key(self.esc)]
         if not remaining and isinstance(interaction.channel, discord.Thread):
             await interaction.channel.edit(archived=True, reason="All escalations handled")
 
@@ -891,7 +970,7 @@ class EscalationView(discord.ui.View):
         )
         remaining = [
             e for e in esc_module.pending()
-            if e["resource_id"] == self.esc["resource_id"]
+            if _thread_key(e) == _thread_key(self.esc)
         ]
         if not remaining and isinstance(interaction.channel, discord.Thread):
             await interaction.channel.edit(
@@ -1037,8 +1116,7 @@ class GlorfindelBot(discord.Client):
     async def _get_or_create_thread(
         self, channel: discord.TextChannel, resource_id: str
     ) -> discord.Thread:
-        last = resource_id.split("/")[-1]
-        vm_name = last or resource_id.strip("/").split("/")[-1] or "unknown"
+        vm_name = _thread_name(resource_id)
         thread_id = self._threads.get(resource_id)
         if thread_id:
             thread = self.get_channel(thread_id)
@@ -1122,7 +1200,7 @@ class GlorfindelBot(discord.Client):
     async def _post_escalation(
         self, channel: discord.TextChannel, esc: dict
     ) -> None:
-        thread = await self._get_or_create_thread(channel, esc["resource_id"])
+        thread = await self._get_or_create_thread(channel, _thread_key(esc))
 
         message = await thread.send(embed=_build_embed(esc), view=_build_view(esc))
         self._messages[esc["id"]] = message.id
@@ -1140,7 +1218,7 @@ class GlorfindelBot(discord.Client):
             sig = _card_signature(esc)
             if self._synced.get(esc["id"]) == sig:
                 continue
-            thread = await self._thread_of(esc.get("resource_id", ""))
+            thread = await self._thread_of(_thread_key(esc))
             if thread is None:
                 continue
             # One attempt per state change, whatever happens: a failing edit retried every
@@ -1172,11 +1250,11 @@ class GlorfindelBot(discord.Client):
                 _console.print(f"[yellow]Sync {esc['id'][:8]}: {exc}[/yellow]")
                 continue
             finally:
-                touched.add(esc.get("resource_id", ""))
+                touched.add(_thread_key(esc))
             edited += 1
         if changed:
             _save_synced(self._synced)
-        pending_rids = {e.get("resource_id", "") for e in esc_module.pending()}
+        pending_rids = {_thread_key(e) for e in esc_module.pending()}
         for rid in touched - pending_rids:
             thread = await self._thread_of(rid)
             if thread is not None and not thread.archived:

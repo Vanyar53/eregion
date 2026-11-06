@@ -77,7 +77,7 @@ COMPONENTS: dict[str, Component] = {
             "test_actions_split.py", "test_agent_nodes.py", "test_audit.py", "test_aws_adapter.py",
             "test_bot.py", "test_chat_escaping.py", "test_cli.py", "test_config.py", "test_detection_authoring.py",
             "test_detection_rules.py", "test_detectors.py", "test_discovery.py", "test_entries_calls.py",
-            "test_auditd.py", "test_correlation.py", "test_expected_sudo.py", "test_forged_logs.py",
+            "test_auditd.py", "test_bench_routine.py", "test_correlation.py", "test_expected_sudo.py", "test_forged_logs.py",
             "test_glorfindel.py", "test_identity_cards.py", "test_identity_contract.py", "test_identity_plan.py",
             "test_invariant_regressions.py", "test_invariant_regressions_aws.py", "test_invariants.py",
             "test_invariants_aws.py",
@@ -129,7 +129,7 @@ TOGETHER = (
     "test_repo_hermetic.py",
     "test_run_channel.py", "test_runs_mounts.py", "test_red_mounts.py", "test_local_verdicts.py", "test_state_writes.py", "test_watch_channel.py", "test_watch_gate.py", "test_watch_key.py", "test_signed_detections.py", "test_beat_covers.py",
     "test_workflows.py", "test_readme.py", "test_image_check.py", "test_release.py", "test_published_image.py",
-    "test_host_ssh.py", "test_azure_roles.py", "test_agent_token.py", "test_review_verdict.py",
+    "test_host_ssh.py", "test_host_client_rules.py", "test_azure_roles.py", "test_agent_token.py", "test_review_verdict.py",
     "test_mutant_anchors.py", "test_mutation_shards.py", "test_doctor.py", "test_doc_anchors.py",
 )
 

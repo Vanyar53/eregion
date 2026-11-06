@@ -252,6 +252,15 @@ Après I1F, AL1, C2 et A3 (27/10) :
   `_ANCHORED_TYPES` du bot) porte sur une VM que la détection ne nomme pas. Elle n'a ni « 🔄 Restore »
   ni commande visant cette VM (seulement `glorfindel ack`), et la console dit « ⚓ filed on …, not about
   it ».
+- **Une carte sur ce qu'elle vise** (AL1c, #597) : depuis AL1c, une carte du plan de contrôle ou
+  d'identité porte sa cible (`target`, `glorfindel/card_target.py`) et n'est plus ancrée sur une VM.
+  La carte dit « 🎯 about NSG nsg-… · règle … · covers vm-a, vm-b », puis ce que la ligne n'a pas
+  pu dire (« limit: … »). Une carte sur un NSG est sur la tuile du NSG **et** sur chaque VM qu'il
+  couvre, la même carte (un Ack) ; sur un groupe ou sur le plan de contrôle, sa propre tuile
+  (`GROUP`, `CONTROL PLANE`, `_TILE_BADGES`) ; une carte d'identité, sur la tuile « Entra ID —
+  identities » (`IDENTITIES`), jamais celle d'une VM. TO JUDGE nomme la cible (« 🎯 NSG … »,
+  « 🎯 Application … »), le verdict par le même chemin. Aucune de ces tuiles ne compte parmi les VM
+  « unprotected » de RECOVER. Une carte d'avant AL1c, sans cible, garde son « ⚓ ».
 - **Détection seule** (AL1, C2) : la décision vient du code, sans action ni confiance. La carte et
   TO JUDGE donnent son titre, sa règle et sa sévérité (`critical` en rouge) ; le fil dit « escalate →
   control plane » (`held_by` de la ligne de debug).

@@ -326,7 +326,7 @@ se fait quand FS1e ferme l'appel direct ([`file-actions-signee.md`](file-actions
 
 _SEC12 (#418), 02/11. Décision de Jonathan : une identité propre aux sessions (une GitHub App sur ce seul dépôt), des fusions autonomes, les tags `v*` réservés au mainteneur._
 
-**De confiance** : le mainteneur, pour ce qui déploie (publier une release, créer un tag `v*`, les réglages du dépôt, un retour arrière de H0) ; les sessions d'agents, pour le code qu'elles fusionnent, après une CI verte et une relecture Opus 5.5 « ok ». **Pas de confiance** : un commentaire sur une PR publique, une session hors de son lot, la sortie d'un modèle dans un rapport de relecture.
+**De confiance** : le mainteneur, pour ce qui déploie (publier une release, créer un tag `v*`, les réglages du dépôt, un retour arrière de H0) ; les sessions d'agents, pour le code qu'elles fusionnent, après une CI verte et une relecture Opus 5.5 « ok » (ou, quand une protection arrête 5.5 deux fois, une relecture 4.8 « ok » et le mot de Jonathan pour cette PR : `docs/sessions.md`). **Pas de confiance** : un commentaire sur une PR publique, une session hors de son lot, la sortie d'un modèle dans un rapport de relecture.
 
 **Ce qui la traverse** : les branches et les PR des sessions, leurs fusions sur `main` (la racine de confiance du CD : ce qui est fusionné est publié comme image signée, CI3), les verdicts de relecture, les releases en brouillon ; puis la release que le mainteneur publie, que H0 tire.
 

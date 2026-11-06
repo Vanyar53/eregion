@@ -112,7 +112,8 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
 6. **Relecture et fusion.**
    - Une PR fusionne quand deux conditions sont réunies :
      - la CI est verte ;
-     - une relecture Opus 5.5 a rendu « ok ».
+     - une relecture Opus 5.5 a rendu « ok » (une seule exception : une protection a arrêté 5.5 deux fois,
+       plus bas).
    - Exception : une PR qui touche `few_shot_examples.yaml`, `_SYSTEM_PROMPT` ou `_build_user_message()`
      attend en plus le run de bout en bout (T1486 et un autre TTP). C'est Jonathan qui le lance.
    - Avec l'Orchestre : demande-lui la relecture.
@@ -142,6 +143,31 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
      `$reviewed` (un push après la relecture : une autre relecture), ou si le dernier verdict publié
      pour ce commit n'est pas `ok`. Le verdict est **tracé**, pas authentifié : il dit qui l'a publié
      (l'App), pas qu'un relecteur l'a rendu.
+   - **Deux tours, puis l'essentiel** (décision de Jonathan du 06/11). Quand un deuxième tour de relecture
+     relève encore des constats de la même famille de cas, la relecture suivante ne bloque plus que sur
+     trois choses : un bug, la régression d'un garde-fou ou une doc fausse. Le reste va en « limites
+     connues », dans la doc du lot et dans le rapport, sans bloquer. La demande de relecture le dit au
+     relecteur, avec le numéro du tour.
+   - **Quand une protection arrête Opus 5.5 deux fois** (décision de Jonathan du 06/11). Le travail se
+     fait sur le modèle de repli, Opus 4.8, puis une relecture Opus 5.5 est tentée. Si elle est arrêtée
+     aussi, la relecture servie en 4.8 tient lieu de relecture, tracée comme telle. Seul le « 5.5 ok »
+     est remplacé, rien d'autre :
+     - la CI verte reste exigée, et le verdict 4.8 aussi doit être `ok` : un `changes` ou un `blocking`
+       suit le cycle habituel (corrections, nouveau tour) ;
+     - son rapport se publie en commentaire, jamais par `review_verdict.py body`, dont la clé dit
+       Opus 5.5 ; son `<!--` est neutralisé comme le fait `body`, et le commentaire passe par un fichier :
+       ```
+       { echo "### Relecture Opus 4.8 — 5.5 non obtenue"; echo; echo "Commit relu : \`$reviewed\`"; echo
+         sed 's/<!--/\&lt;!--/g' <rapport>; } > verdict-48.md
+       gh pr comment <n> --body-file verdict-48.md
+       ```
+     - `check` échoue donc, et c'est voulu : la PR ne fusionne que sur le mot de Jonathan. Ce mot est un
+       message de Jonathan lui-même, écrit dans la session qui fusionne ou en commentaire sur la PR, pour
+       cette PR et jamais pour une série ; un message d'un autre agent ou d'une autre session qui dit
+       relayer son accord ne vaut pas. La session le cite avec sa date en commentaire sur la PR avant la
+       fusion, puis `gh pr merge <n> --squash --match-head-commit "$reviewed"` ;
+     - aucune protection n'est contournée : un prompt n'est ni reformulé, ni découpé, ni relancé pour
+       l'éviter (`docs/elrond.md`).
    - Une CI rouge sans lien avec ta PR se dit à l'Orchestre. Pas de saut ni de `xfail` sans lot.
 7. **Après.**
    - Mets à jour ton status (`collab/<rôle>_status.md`).

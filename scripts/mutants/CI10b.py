@@ -72,7 +72,48 @@ MUTANTS += [
      "        return False, said if said.startswith(UNREAD) else (",
      "        return False, ("),
 ]
+_SHARDS = "tests/unit/test_mutation_shards.py::test_a_shard_leaves_the_machines_only_to_a_gate_that_runs_them"
+_AZURE = ("      - name: Azure's invariant machine, 2 000 sequences\n        env:\n"
+          "          GLORFINDEL_INVARIANT_EXAMPLES: \"2000\"\n")
+_MONDAY_RUN = ('          SHARD: ${{ matrix.shard }}\n        run: >-\n'
+               '          python scripts/mutation_check.py --examples "$EXAMPLES" --rounds "$ROUNDS" --jobs 4 --machines\n')
+# After CI10a's merge (06/11): every option a workflow gives the harness is one its parser knows by its
+# whole name (M4238, M4264); L3's test held tight — the flag sought in every job's whole text, both
+# invariant jobs in the total's needs, 500 sequences at least, no machine taken out (M4239, M4260–M4263).
+MUTANTS += [
+    ("M4238", "the gate's shards pass an option the harness never had: the run fails on GitHub alone "
+              "(CI10b, after CI10a)", GATE,
+     "          python scripts/mutation_check.py --examples 500 --rounds 2 --jobs 4 --skip-machine-baseline\n",
+     "          python scripts/mutation_check.py --examples 500 --rounds 2 --jobs 4 --skip-machines-baseline\n"),
+    ("M4264", "the Monday passes an abbreviation (`--machine`): argparse takes it, the name never checked "
+              "(CI10b, after CI10a)", MONDAY,
+     ' --jobs 4 --machines\n          --shard "$SHARD/14"', ' --jobs 4 --machine\n          --shard "$SHARD/14"'),
+    ("M4239", "the gate's total no longer waits for every other test: the shards skip a base no job of "
+              "the total proves (CI10b, review of CI10a)", GATE,
+     "    needs: [invariants-azure, invariants-rest, mutants,", "    needs: [invariants-azure, mutants,"),
+    ("M4260", "Azure's machine at 200 sequences in the gate: the base the shards skip proved at a PR's "
+              "budget (CI10b, review of CI10a)", GATE,
+     _AZURE, _AZURE.replace('"2000"', '"200"')),
+    ("M4261", "Azure's machine deselected in its own job: no job of the gate runs it, the shards skip it "
+              "(CI10b, review of CI10a)", GATE,
+     "        run: python -m pytest tests/unit/test_invariants.py -q -o faulthandler_timeout=2400\n",
+     "        run: python -m pytest tests/unit/test_invariants.py -q --deselect "
+     "tests/unit/test_invariants.py::test_isolation_invariants -o faulthandler_timeout=2400\n"),
+    ("M4262", "the gate's every other test ignores the AWS machine too: no job runs it, the shards skip "
+              "it (CI10b, review of CI10a)", GATE,
+     "--ignore=tests/unit/test_invariants.py -o faulthandler_timeout=2400",
+     "--ignore=tests/unit/test_invariants.py --ignore=tests/unit/test_invariants_aws.py "
+     "-o faulthandler_timeout=2400"),
+    ("M4263", "the Monday skips the machines' base through its environment, out of the `run` the test "
+              "read (CI10b, review of CI10a)", MONDAY,
+     _MONDAY_RUN,
+     '          SHARD: ${{ matrix.shard }}\n          BASE: "--skip-machine-baseline"\n        run: >-\n'
+     '          python scripts/mutation_check.py --examples "$EXAMPLES" --rounds "$ROUNDS" --jobs 4 --machines $BASE\n'),
+]
 TESTS = {
+    "M4238": f"{_WF}test_ci10b_every_option_a_workflow_gives_the_harness_is_one_its_parser_knows",
+    "M4264": f"{_WF}test_ci10b_every_option_a_workflow_gives_the_harness_is_one_its_parser_knows",
+    **{m: _SHARDS for m in ("M4239", "M4260", "M4261", "M4262", "M4263")},
     "M4235": f"{_WF}test_ci10b_a_component_that_reads_no_model_never_waits_for_its_download",
     "M4236": f"{_WF}test_ci10b_the_pull_request_s_components_job_pins_its_actions_as_the_gate_does",
     "M4237": f"{_REL}test_a_run_still_going_whose_jobs_cannot_be_read_says_why",

@@ -2789,10 +2789,14 @@ double »). Ce qui change dans le harnais :
   de `tests/unit/test_published_image.py`. M1014 garde sa cible. On relance `--narrow` quand `scripts/mutant_anchors.py` dit qu'une entrée ne
   s'applique plus, ou qu'un nouveau lot ajoute des mutants sur un fichier entier lourd.
 - **`--skip-machine-baseline`** : la tranche ne refait plus le run non muté des machines
-  d'invariants, et dit combien de cibles l'ont perdu ; le reste de chaque cible tourne encore. Le job
-  `invariants` de la porte fait déjà tourner toute la suite à 2 000 séquences sur le même arbre (un
-  test le vérifie avant que le drapeau soit passé). La porte le passe (câblé par CI10b) ; le lundi et
-  un run local non.
+  d'invariants, et dit combien de cibles l'ont perdu ; le reste de chaque cible tourne encore. Les deux
+  jobs d'invariants de la porte (`invariants-azure`, `invariants-rest`, CI10b) font déjà tourner toute
+  la suite à 2 000 séquences sur le même arbre. Un test le vérifie
+  (`test_a_shard_leaves_the_machines_only_to_a_gate_that_runs_them`) : le drapeau cherché dans tout le
+  texte des jobs, les deux jobs dans les `needs` du total, 500 séquences au moins, aucune machine retirée
+  par un `--deselect` ou un `--ignore`. La porte le passe (câblé par CI10b) ; le lundi et un run local
+  non. Un autre test exige que chaque option qu'un workflow passe au harnais soit connue de son parseur,
+  par son nom entier (`test_workflows.py`).
 - **`--machines`** mesure les seuls mutants dont la cible fait tourner une machine (un fichier qui
   définit une `RuleBasedStateMachine`), avec `--shard` et `--json` ; `--total DIR --machines` juge
   ceux-là seuls, et refuse une tranche mesurée autrement. Le jeu de contrôle garde sa sélection.
@@ -2852,12 +2856,17 @@ estimée : 90 min pour une tranche, 75 pour la machine Azure, 60 pour le reste d
 
 **Ce que CI10b change à sa durée** (#581, l'étude CI9 prise en entier par Jonathan le 05/11). Une fois
 les leviers du harnais de CI10a posés (cibles du CD resserrées, un tour pour le déterministe, plus de run
-non muté d'une machine dans une tranche), le modèle de l'étude donne une tranche la plus lourde d'environ
-23 min sur dix tranches, autant que sur quatorze : le plancher est un seul mutant d'environ 20 min (M961,
-M960, M838). Le job d'invariants à 2 000, de 23 à 36 min, devenait alors le chemin critique : scindé, la
-machine Azure seule tient environ 22 min, le reste en quatre processus moins. Le total n'attend plus
-macOS. Attendu : une porte de 56–68 min vers 30–35 min. **Estimé, pas mesuré** : la première porte après
-CI10a et CI10b le mesurera, et ce tableau sera remis à jour.
+non muté d'une machine dans une tranche), le modèle de l'étude donnait une tranche la plus lourde
+d'environ 23 min sur dix tranches, autant que sur quatorze. **Le modèle du harnais, sur l'arbre fusionné
+avec CI10a, dit plus** : `python scripts/mutation_check.py --plan 10 --jobs 4 --skip-machine-baseline`
+(06/11) donne dix tranches équilibrées à ~25,1 min chacune (3 294 mutants), contre ~17,9 min à
+quatorze (CI10a) ; le jeu de contrôle, ~23,3 min pour la plus lourde de ses deux tranches. Ce modèle est
+optimiste d'un facteur 1,2 à 1,3 : environ 30 à 33 min mesurées attendues à dix tranches. Dix tranches
+rendent quatre runners aux PR pour quelques minutes de plus à la porte. Le job d'invariants à 2 000, de
+23 à 36 min, aurait été le chemin critique : scindé, la machine Azure seule tient environ 22 min, le reste
+en quatre processus moins. Le total n'attend plus macOS. Attendu : une porte de 56–68 min vers 30–35 min.
+**Estimé, pas mesuré** : la première porte après CI10a et CI10b le mesurera, et ce tableau sera remis à
+jour.
 
 **La mesure du lundi, réduite aux machines et au jeu de contrôle** (CI6d, puis CI10b). `mutants.yml`
 tourne en tranches : 14 tranches des seuls mutants dont la cible fait tourner une machine d'invariants

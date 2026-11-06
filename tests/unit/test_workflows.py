@@ -2242,6 +2242,44 @@ def test_ci10b_a_component_that_reads_no_model_never_waits_for_its_download():
         assert s["if"] == f"${{{{ !cancelled() && steps.{needs}.outcome == 'success' }}}}", s
 
 
+def _harness_options() -> set[str]:
+    """The options scripts/mutation_check.py's parser knows, as its `--help` says them."""
+    import subprocess
+    import sys
+    out = subprocess.run([sys.executable, str(ROOT / "scripts" / "mutation_check.py"), "--help"],
+                         capture_output=True, text=True, cwd=ROOT, check=True).stdout
+    # The options' column only, never a word of a description (« with --total: … »).
+    options = out.split("\noptions:\n", 1)[1]
+    return set(re.findall(r"^ {2}(?:-\w, )?(--[a-z][a-z0-9-]*)", options, re.M))
+
+
+def _harness_calls() -> list[tuple[str, str, list[str]]]:
+    """(workflow, job, the options) of each call to scripts/mutation_check.py in a workflow's `run`."""
+    calls = []
+    for wf, job, step in _job_steps():
+        # A folded scalar (`>-`) is one line already; a backslash goes on with the next.
+        words = str(step.get("run") or "").replace("\\\n", " ").split()
+        for i, w in enumerate(words):
+            if not w.endswith("scripts/mutation_check.py"):
+                continue
+            tail = words[i + 1:]
+            end = next((k for k, x in enumerate(tail) if x in ("&&", "||", ";", "|")), len(tail))
+            calls.append((wf, job, [x.split("=", 1)[0] for x in tail[:end] if x.startswith("--")]))
+    return calls
+
+
+def test_ci10b_every_option_a_workflow_gives_the_harness_is_one_its_parser_knows():
+    """After CI10a's merge: each option a workflow passes to scripts/mutation_check.py (the gate's,
+    the Monday's) is one its parser knows by its whole name — argparse would take an abbreviation
+    (`--machine` for `--machines`), and an option it does not know only fails the run on GitHub."""
+    known = _harness_options()
+    assert {"--machines", "--skip-machine-baseline", "--total", "--shard", "--json"} <= known, known
+    calls = _harness_calls()
+    assert {wf for wf, _job, _opts in calls} == {"release-gate.yml", "mutants.yml"}, calls
+    for wf, job, opts in calls:
+        assert opts and set(opts) <= known, (wf, job, sorted(set(opts) - known))
+
+
 def test_ci10b_the_pull_request_s_components_job_pins_its_actions_as_the_gate_does():
     """Review of CI10b: the new job's actions pinned by commit, each one the release gate already
     pins — no action added. The matrix kept its tags (a debt said, for a SEC lot)."""

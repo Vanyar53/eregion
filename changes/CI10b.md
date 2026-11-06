@@ -22,5 +22,9 @@
     the only verdicts a budget moves; the gate still measures every mutant at each release.
   - Unchanged: the night at 10 000 sequences, both Pythons, 200 sequences on a pull request, the gate's
     budget (500, two rounds).
-  - Tests: `tests/unit/test_workflows.py`, `tests/unit/test_release.py`; mutants M4190–M4199 and
-    M4235–M4237 (`scripts/mutants/CI10b.py`); M1441, M3597, M3604 and M3605 retargeted to the new workflows.
+  - Every option a workflow passes to `scripts/mutation_check.py` is one its parser knows, by its whole
+    name; L3's test holds tight (the flag sought in every job's text, both invariant jobs in the total's
+    needs at 500 sequences or more, no machine taken out by `--deselect` or `--ignore`).
+  - Tests: `tests/unit/test_workflows.py`, `tests/unit/test_release.py`,
+    `tests/unit/test_mutation_shards.py`; mutants M4190–M4199, M4235–M4239 and M4260–M4264
+    (`scripts/mutants/CI10b.py`); M1441, M3597, M3604 and M3605 retargeted to the new workflows.

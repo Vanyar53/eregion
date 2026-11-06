@@ -1,4 +1,4 @@
-# La corrélation, brique du produit (COR1, COR2), et ce qu'auditd y ajoute (AUD1)
+# La corrélation, brique du produit (COR1, COR2, B3a), et ce qu'auditd y ajoute (AUD1)
 
 Décision de Jonathan (02/11), après la relecture d'ADM1 : « faire le meilleur ». Une détection qui
 relie deux événements vaut plus que deux détections isolées. La corrélation fait donc partie du produit :
@@ -137,6 +137,31 @@ texte, l'identité de la ligne ne bouge pas. Le cycle le dit à un humain comme 
 une action autonome, une carte `compromise_unchecked` (une par adresse) ; sinon, la carte du cycle
 commence par « Connexion après brute force non vérifiée ». Les comptes portés par la carte sont bornés
 à 64 caractères.
+
+## Troisième usage : le brute force réussi puis root, un plancher de la décision (B3a)
+
+Décision de Jonathan (06/11), issue #609 : quand la corrélation a confirmé, **sur une même VM**, un
+brute force qui a réussi puis une élévation vers root, `decide` propose **au moins `isolate_vm`**,
+quel que soit le choix du modèle. Le harnais du CD de H0 tirait `block_suspicious_ip` une fois sur
+trois sur ce cas, au-dessus de la porte : l'attaquant bloqué, la VM où il a pris root laissée debout.
+
+- **Les faits, pas le modèle.** Chaque détection résolue dit ce qu'elle confirme sur sa VM
+  (`confirmed_facts`, nœud `confirm_facts` après `poll_detection`), gardé par l'incident de la VM
+  (`Incident.confirmed`) : `login_after_brute_force` pour une ligne T1110.001 marquée
+  `Correlation: ssh-login-after-brute-force` (ci-dessus), `root_elevation` pour une détection T1548.003
+  (la ligne de sudo vers root, après l'écart d'ADM1). Un `attack_started`, un `detection_timeout`, une
+  détection non attribuée ne confirment rien. Jamais dans le prompt.
+- **Les deux, sur la même VM.** `_root_compromise_floor` réunit les faits de la détection en cours et
+  ceux de son incident (même `resource_id`), dans les deux ordres d'arrivée. Un brute force seul (même
+  réussi), un sudo seul, deux VM, des échecs sans connexion vue, une vérification impossible
+  (`LoginCheck: unchecked`) : pas de plancher, le choix du modèle reste.
+- **Les gardes et le mode s'appliquent ensuite.** En `human_only`, rien ne s'exécute, la carte propose
+  `isolate_vm` et dit pourquoi (« Plancher déterministe (B3a) : … »). Le détail : `docs/glorfindel.md`,
+  les gardes de `decide`.
+- **Limites.** L'ordre des deux faits n'est pas vérifié, seulement leur présence dans l'incident en
+  cours (TTL de l'incident). Une commande sensible en root lue par auditd (AUD1, T1059.004) ne compte
+  pas encore comme élévation. Une ligne forgée sur la VM peut faire isoler la VM (jamais l'inverse ;
+  l'isolation est réversible).
 
 ## Ses limites, assumées
 

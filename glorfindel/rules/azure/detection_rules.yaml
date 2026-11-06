@@ -515,6 +515,67 @@ rules:
       | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
 
+  # La sœur de la règle des instantanés (AL2, #598) : les points de restauration. Mesuré au
+  # banc le 05/11 (A2) : une sauvegarde Azure Backup de gondolin passe par des points de
+  # restauration (RESTOREPOINTS/WRITE, puis RETRIEVESASURIS), jamais par SNAPSHOTS/WRITE ni
+  # GETACCESS — la règle des instantanés ne la voit pas, et aucune règle ne lisait la sortie
+  # de données qu'elle ouvre. Azure Backup en est exclu, et lui seul, par l'identifiant
+  # public de son application, le même dans tous les tenants du cloud public (Microsoft
+  # Learn, « Back up and restore Azure VMs with PowerShell », backup-azure-vms-automation :
+  # Set-AzKeyVaultAccessPolicy … -ServicePrincipalName 262044b1-e2ce-469f-a196-69ab7ada62d3,
+  # « the Azure Backup service » ; Azure Government en a un autre). Une opération est la
+  # sienne quand une de ses lignes le nomme et qu'aucune n'en nomme un autre : la dernière
+  # ligne (Success) peut ne porter ni Claims ni Caller, et un CorrelationId se choisit
+  # (l'en-tête x-ms-correlation-request-id) — repris d'une sauvegarde, il ne cache pas
+  # l'appelant qui le reprend. L'identité de Glorfindel reste traitée par l'adaptateur, comme
+  # dans les autres règles : aucune de ces opérations n'est à lui — sous son identité, la
+  # ligne reste, critique. RESTOREPOINTCOLLECTIONS/WRITE n'est pas lue : une collection seule
+  # ne contient rien, son premier point de restauration fait la carte.
+  - name: restorepoint-by-unexpected-caller
+    description: >
+      Point de restauration d'une VM créé, ou accès de téléchargement (URL SAS) aux disques
+      d'un point de restauration, par un autre appelant qu'Azure Backup — T1578.001 (Modify
+      Cloud Compute Infrastructure: Create Snapshot), et T1530 (Data from Cloud Storage) :
+      la même sortie de données qu'un instantané suivi d'un accès de téléchargement. Pourquoi :
+      mesure A2 du 05/11, une sauvegarde passe par les points de restauration, que la règle
+      des instantanés ne lit pas ; quiconque peut écrire sur une VM peut en créer un, puis en
+      tirer les disques. Lit RESTOREPOINTS/WRITE, RESTOREPOINTS/RETRIEVESASURIS/ACTION (ce que
+      fait Azure Backup) et DISKRESTOREPOINTS/BEGINGETACCESS/ACTION (la même URL, par l'API
+      publique). Azure Backup exclu par l'identifiant public de son application, et lui seul.
+      Ne voit pas : la création d'une collection seule (elle ne contient rien), un retrait, les
+      URL SAS de stockage (LISTSERVICESAS), le téléchargement lui-même (plan des données du
+      stockage), une restauration ou une récupération de fichiers depuis le coffre (Recovery
+      Services), ce qu'Azure Backup fait sous son identité — exclu : qui tient le coffre en
+      tire les disques sans carte —, ni rien sans le journal d'activité dans le workspace.
+    enabled: true
+    source: azure_activity
+    ttp: T1578.001
+    assets: [auto]
+    interval_s: 60
+    expected_latency_s: 1200
+    query: |
+      AzureActivity
+      | where TimeGenerated > ago(1h)
+      | where OperationNameValue in~ (
+          "MICROSOFT.COMPUTE/RESTOREPOINTCOLLECTIONS/RESTOREPOINTS/WRITE",
+          "MICROSOFT.COMPUTE/RESTOREPOINTCOLLECTIONS/RESTOREPOINTS/RETRIEVESASURIS/ACTION",
+          "MICROSOFT.COMPUTE/RESTOREPOINTCOLLECTIONS/RESTOREPOINTS/DISKRESTOREPOINTS/BEGINGETACCESS/ACTION")
+      | extend CallerAppId = tostring(parse_json(Claims).appid),
+               CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
+      // Azure Backup: its public application id, in Claims or as the Caller. Never its object
+      // id (one per tenant), never a name.
+      | extend AzureBackup = CallerAppId =~ "262044b1-e2ce-469f-a196-69ab7ada62d3" or Caller =~ "262044b1-e2ce-469f-a196-69ab7ada62d3"
+      // A line that names someone else: a user, another application.
+      | extend OtherCaller = not(AzureBackup) and (isnotempty(Caller) or isnotempty(CallerAppId) or isnotempty(CallerObjectId))
+      // One row per operation, its latest line. Azure Backup's when one of its lines names it
+      // and none names anyone else: a correlation id is the client's to choose.
+      | summarize arg_max(TimeGenerated, *), AzureBackupLines = countif(AzureBackup), OtherLines = countif(OtherCaller)
+          by CorrelationId, OperationNameValue, _ResourceId
+      | where AzureBackupLines == 0 or OtherLines > 0
+      | where ActivityStatusValue !in~ ("Failure", "Failed")
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+                CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
+
   # Notre propre identité surveillée (SID1, #409). Le rôle de réponse tient runCommand pour
   # la coupure des sessions d'une isolation (ss -K) ; sur un hôte, une identité managée
   # partagée par la watch, la console et le bot. La règle garde chaque Run Command de

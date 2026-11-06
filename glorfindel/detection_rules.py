@@ -1557,7 +1557,10 @@ class RulePoller:
                 logger.warning("detection rule '%s': target unreadable (%s)", rule.name, exc)
                 target = card_target.control_plane_target(
                     limit=f"Ce que la ligne vise n'a pas pu être lu ({type(exc).__name__}).")
-        if target is not None and (plane == "identity" or tgt is None):
+        # The VM the row was routed to is its own only when the row names it (a role on the VM):
+        # one found by the address that made the call is the caller (review, AL1c).
+        named = tgt is not None and card_target.names_vm(row, tgt[0])
+        if target is not None and (plane == "identity" or not named):
             # An identity's name is chosen by whoever registers it: its pseudo id, never its name.
             resource_id = target["id"]
             asset_name = target["id"] if target["kind"] == "identity" else target["name"]

@@ -3,7 +3,8 @@ a VM it has nothing to do with. The NSG and the VMs it covers, a snapshot's sour
 said, a role's scope, an unknown resource's group, an identity by its object id; what Azure did not
 answer said, never read as « nothing »; the card keeps its target; the Discord card names it and
 says its paragraph once. M4270–M4279, and M4310–M4314 (the review: no VM watched, a limit that
-says only what was read, the VMs of an NSG capped, a tile of its own), measured by
+says only what was read, the VMs of an NSG capped, a tile of its own), M4355–M4359 (the second:
+the VM that made the call is the caller, a VM the rule does not watch, a field under 1024), measured by
 tests/unit/test_card_target.py."""
 POLLER = "glorfindel/detection_rules.py"
 TARGET = "glorfindel/card_target.py"
@@ -14,7 +15,7 @@ _TESTS = "tests/unit/test_card_target.py"
 
 MUTANTS = [
     ("M4270", "a card of the control plane anchored again on the first VM online (AL1c)", POLLER,
-     '        if target is not None and (plane == "identity" or tgt is None):\n',
+     '        if target is not None and (plane == "identity" or not named):\n',
      '        if target is not None and plane == "identity":\n'),
     ("M4271", "the VMs an NSG covers looked up by its rule's id: none said (AL1c)", TARGET,
      '    covered = _lookup(topology, "nsg_vms", nsg_id)\n',
@@ -60,5 +61,22 @@ MUTANTS = [
     ("M4314", "a group's or the control plane's tile shares a VM's cards of the same name (AL1c)", JS,
      "  if (own || r.kind) return own === r.vm_name;\n",
      ""),
+    # The second review (c3c4cb90): the VM that made the call is the caller, never the target;
+    # a VM the rule does not watch is not « unknown to the discovery »; a field under 1024.
+    ("M4355", "an NSG written from a watched VM filed on that VM, the NSG unsaid (AL1c)", TARGET,
+     "    if tgt is not None and names_vm(row, tgt[0]):\n",
+     "    if tgt is not None:\n"),
+    ("M4356", "a card on what a VM wrote attributed to the VM that made the call (AL1c)", POLLER,
+     "        named = tgt is not None and card_target.names_vm(row, tgt[0])\n",
+     "        named = tgt is not None\n"),
+    ("M4357", "a VM excluded from the rule said unknown to the discovery (AL1c)", TARGET,
+     '_UNWATCHED = "que la règle ne surveille pas (absente de la découverte, exclue de la règle, ou d\'un autre backend)"\n',
+     '_UNWATCHED = "que la découverte ne connaît pas"\n'),
+    ("M4358", "the « Ressource visée » field past Discord's 1024: the embed refused (AL1c)", BOT,
+     "{via}{covers}\"[:1024], False)]\n",
+     "{via}{covers}\", False)]\n"),
+    ("M4359", "the VM that made the call left unsaid on a card filed on what it wrote (AL1c)", TARGET,
+     "        t[\"via\"] = \", \".join(filter(None, [t.get(\"via\"), f\"appel depuis {tgt[1] or _short(tgt[0])}\"]))\n",
+     "        pass\n"),
 ]
-TESTS = {f"M{n}": _TESTS for n in [*range(4270, 4280), *range(4310, 4315)]}
+TESTS = {f"M{n}": _TESTS for n in [*range(4270, 4280), *range(4310, 4315), *range(4355, 4360)]}

@@ -188,7 +188,8 @@ def _target_fields(esc: dict) -> list[tuple[str, str, bool]]:
         if vms:
             more = f" et {len(vms) - _VMS_SHOWN} autre(s)" if len(vms) > _VMS_SHOWN else ""
             covers = f" ; couvre {', '.join(name(v) for v in vms[:_VMS_SHOWN])}{more}"
-        out = [("Ressource visée", f"{_TARGET_KINDS[kind]} {name(t.get('name'))}{via}{covers}", False)]
+        # A field Discord refuses past 1024 characters: the whole embed would not be sent.
+        out = [("Ressource visée", f"{_TARGET_KINDS[kind]} {name(t.get('name'))}{via}{covers}"[:1024], False)]
     else:
         out = [("Ressource visée", f"le plan de contrôle{via}", False)]
     if t.get("limit"):

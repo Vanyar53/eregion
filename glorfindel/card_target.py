@@ -7,14 +7,17 @@ cards of ID1 sat on a VM none of them was about. The card is now filed on what t
 read in its ``_ResourceId`` and the type of the resource:
 
   - **an NSG, or one of its rules**: on the NSG — and shown on each VM it covers (by its subnet
-    or its network interface), the VMs the discovery knows, an offline one included;
-  - **a disk** (a download access): on the VM the disk is attached to, when the discovery knows
+    or its network interface), the VMs the rule watches, an offline one included;
+  - **a disk** (a download access): on the VM the disk is attached to, when the rule watches
     it; **a snapshot** (its write, a download access): the row names the snapshot only, never
     its source disk — the source is read on Azure (the snapshot's ``creationData``) while the
     snapshot still exists, then the disk's VM; otherwise the group, the limit said;
   - **a role assignment**: on its scope — the VM when the scope is the VM (the RulePoller's own
     attribution), else the group;
   - **anything else**: on its resource group, or on « the control plane » when there is none.
+
+A VM the row was routed to only by the address that made the call (an NSG written from a VM)
+is the caller, said in ``via`` — never the target.
 
 An identity card (Entra ID) is filed on the identity — the application, the service principal,
 the user the row is about (for a sign-in, the service principal that signed in) — never on a VM.
@@ -67,6 +70,9 @@ UNREAD = object()      # a section of the topology Azure did not answer
 # list (on H0, `Reader` on the bench's group), and a listing over the subscription is filtered by
 # them — never « gone » on that alone (review, AL1c).
 _GONE_OR_HIDDEN = "supprimé, ou hors des droits de la watch"
+# What a VM missing from `targets` may be: `targets` are the rule's (RulePoller._targets), not the
+# whole discovery — never « unknown to the discovery » on that alone (second review, AL1c).
+_UNWATCHED = "que la règle ne surveille pas (absente de la découverte, exclue de la règle, ou d'un autre backend)"
 
 
 class Topology:
@@ -187,10 +193,10 @@ def _nsg(m, row: dict, known: dict, topology) -> dict:
             unknown += 1
     said = []
     if not t["vms"]:
-        said.append("Aucune VM connue de la découverte n'a été lue sous ce NSG "
+        said.append("Aucune VM que la règle surveille n'a été lue sous ce NSG "
                     "(cartes réseau lisibles par la watch).")
     if unknown:
-        said.append(f"Sous ce NSG, {unknown} VM lue(s) sur Azure que la découverte ne connaît pas.")
+        said.append(f"Sous ce NSG, {unknown} VM lue(s) sur Azure {_UNWATCHED}.")
     if said:
         t["limit"] = " ".join(said)
     return t
@@ -207,7 +213,7 @@ def _disk_vm(disk_id: str, known: dict, topology):
     if not vm:
         return None, "Le disque n'est attaché à aucune VM."
     if vm not in known:
-        return None, f"Le disque est attaché à {_short(vm)}, que la découverte ne connaît pas."
+        return None, f"Le disque est attaché à {_short(vm)}, {_UNWATCHED}."
     return known[vm], ""
 
 
@@ -252,16 +258,18 @@ def control_target(row: dict, targets=(), topology=None) -> dict:
         scope = m.group("scope") or "/"
         via = f"attribution de rôle, portée {_short(scope) or '/'}"
         if _VM_RE.search(scope):
-            # On a VM the RulePoller did not route the row to (not in the discovery): its group.
-            return _group_target(scope, row, via=via, limit="La VM de la portée n'est pas dans la découverte.")
+            # On a VM the RulePoller did not route the row to: its group. Never reached from the
+            # poller — a row naming a VM the rule does not watch is dropped (`_route`, AL1).
+            return _group_target(scope, row, via=via, limit=f"La VM de la portée est une VM {_UNWATCHED}.")
         if _GROUP_RE.match(scope):
             return _group_target(scope, row, via=via)
         return control_plane_target(limit="La portée de l'attribution n'est pas un groupe de ressources "
                                           "(l'abonnement, un groupe d'administration).")
     if _VM_RE.search(rid):
         # A VM the RulePoller did not route the row to: never filed on it as if it were known.
+        # Never reached from the poller either (`_route` drops the row), only from a direct call.
         return _group_target(rid, row, via=_short(rid),
-                             limit="La VM nommée n'est pas dans la découverte.")
+                             limit=f"La VM nommée est une VM {_UNWATCHED}.")
     return _group_target(rid, row, via=_short(rid) if rid else "")
 
 
@@ -288,14 +296,28 @@ def identity_target(row: dict) -> dict:
     return t
 
 
+def names_vm(row: dict, vm_id: str) -> bool:
+    """The row's own resource (`_ResourceId`) is the VM `vm_id`, or one of its sub-resources (a
+    role on the VM, an extension) — never a VM only found by the address that made the call."""
+    row = row if isinstance(row, dict) else {}
+    rid = str(row.get("_ResourceId") or row.get("ResourceId") or "")
+    m = _VM_RE.search(rid)
+    return bool(m) and rid[:m.end()].rstrip("/").lower() == str(vm_id or "").rstrip("/").lower()
+
+
 def of_row(row: dict, plane: str, tgt=None, targets=(), topology=None) -> dict:
     """The card's target for a row of the control plane or of an identity: the VM the RulePoller
-    routed it to (`tgt`, the row names it), else what the row names."""
+    routed it to (`tgt`) when the row itself names it (a role on the VM), else what the row names.
+    A VM the row was routed to by the address that made the call (`CallerIpAddress`: an NSG
+    written from bree) is the caller, never the target: said in `via` (review, AL1c)."""
     if plane == "identity":
         return identity_target(row)
-    if tgt is not None:
+    if tgt is not None and names_vm(row, tgt[0]):
         return vm_target(tgt[0], tgt[1])
-    return control_target(row, targets, topology)
+    t = control_target(row, targets, topology)
+    if tgt is not None:
+        t["via"] = ", ".join(filter(None, [t.get("via"), f"appel depuis {tgt[1] or _short(tgt[0])}"]))
+    return t
 
 
 def is_identity_id(rid: str) -> bool:

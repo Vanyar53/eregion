@@ -119,13 +119,13 @@ def _shipped(name):
                 if r.name == name)
 
 
-def _poll(rule_name, rows, azure=AZURE, vms=(BREE, GONDOLIN), fresh=True):
+def _poll(rule_name, rows, azure=AZURE, vms=(BREE, GONDOLIN), fresh=True, owners=None):
     """One poll of a shipped rule over forged rows, BREE first online and GONDOLIN offline —
     the discovery keeps both (an offline VM stays a valid target)."""
     rule = _shipped(rule_name)
     sent: list = []
     topology = Topology(lambda: azure) if azure is not None else None
-    p = RulePoller([rule], sent.append, topology=topology)
+    p = RulePoller([rule], sent.append, topology=topology, ip_owners=owners)
     if fresh:
         p._status = {}                       # each poll of a test reads its rows anew
     p._detector = lambda _rule: _Workspace(rows)
@@ -163,7 +163,7 @@ def test_an_nsg_whose_coverage_azure_did_not_answer_is_still_the_nsg_and_says_so
     azure = {**AZURE, "nsg_vms": {_low(NSG): [_low(BREE), f"{SUB}/x/virtualmachines/elsewhere"]}}
     t = _poll("nsg-change-outside-glorfindel", [_activity(NSG_OP, NSG)], azure=azure)[0]["context"]["target"]
     assert t["vm_names"] == ["vm-celebrimbor-bree"]
-    assert "1 VM lue(s) sur Azure que la découverte ne connaît pas" in t["limit"]
+    assert "1 VM lue(s) sur Azure que la règle ne surveille pas (absente de la découverte, exclue de la règle, ou d'un autre backend)" in t["limit"]
     # An NSG the listing does not hold: never « gone » on that alone — the watch reads what its
     # rights let it list (on H0, `Reader` on the bench's group): it says both (review, AL1c).
     azure = {**AZURE, "nsg_vms": {}}
@@ -209,7 +209,7 @@ def test_a_download_access_to_a_disk_is_filed_on_its_vm():
     # A disk of a VM the discovery does not know: its group, said.
     azure = {**AZURE, "disk_vm": {_low(DISK): f"{SUB}/x/virtualmachines/elsewhere"}}
     t = _poll("snapshot-by-unexpected-caller", [_activity(DISK_ACCESS_OP, DISK)], azure=azure)[0]["context"]["target"]
-    assert t["kind"] == "resource_group" and "que la découverte ne connaît pas" in t["limit"]
+    assert t["kind"] == "resource_group" and card_target._UNWATCHED in t["limit"]
     azure = {**AZURE, "disk_vm": {_low(DISK): ""}}
     t = _poll("snapshot-by-unexpected-caller", [_activity(DISK_ACCESS_OP, DISK)], azure=azure)[0]["context"]["target"]
     assert t["kind"] == "resource_group" and "attaché à aucune VM" in t["limit"]
@@ -235,6 +235,47 @@ def test_a_role_is_filed_on_its_scope():
     assert sig["context"]["target"]["kind"] == "control_plane" and sig["context"]["target"]["limit"]
 
 
+BREE_IP = "10.10.1.4"
+
+
+def _bree_owns_its_ip():
+    return {BREE_IP: _low(BREE)}
+
+
+def test_a_write_made_from_a_watched_vm_is_filed_on_what_it_writes_the_vm_named_as_the_caller():
+    """The RulePoller routes a row by the address that made the call (`CallerIpAddress`, T1041):
+    an NSG written from bree was filed on bree, the NSG unsaid. The VM that made the call is the
+    caller, named in `via`, never the target; the card stays unattributed (second review, AL1c)."""
+    row = _activity(NSG_OP, f"{NSG}/securityRules/allow-ssh-admin", CallerIpAddress=BREE_IP)
+    sig = _poll("nsg-change-outside-glorfindel", [row], owners=_bree_owns_its_ip)[0]
+    t = sig["context"]["target"]
+    assert sig["resource_id"] == NSG and t["kind"] == "nsg" and sig["resource_type"] == "nsg"
+    assert t["via"] == "règle allow-ssh-admin, appel depuis vm-celebrimbor-bree"
+    assert sorted(t["vm_names"]) == ["vm-celebrimbor-bree", "vm-celebrimbor-gondolin"]
+    assert sig["context"]["attribution"] == "unattributed" and sig["context"]["asset_name"] == "nsg-celebrimbor"
+    # A disk read from bree — gondolin's, then bree's own: on the disk's VM, never attributed to
+    # it — the row names the disk, not the VM.
+    for vm, name in ((GONDOLIN, "vm-celebrimbor-gondolin"), (BREE, "vm-celebrimbor-bree")):
+        azure = {**AZURE, "disk_vm": {_low(DISK): _low(vm)}}
+        sig = _poll("snapshot-by-unexpected-caller", [_activity(DISK_ACCESS_OP, DISK, CallerIpAddress=BREE_IP)],
+                    azure=azure, owners=_bree_owns_its_ip)[0]
+        t = sig["context"]["target"]
+        assert sig["resource_id"] == vm and t["kind"] == "vm" and t["name"] == name
+        assert t["via"] == "disque disk-celebrimbor-gondolin-data, appel depuis vm-celebrimbor-bree"
+        assert sig["context"]["attribution"] == "unattributed"
+    # A role on gondolin, written from bree: the row names gondolin — its card, attributed (AL1).
+    on_vm = f"{GONDOLIN}/providers/Microsoft.Authorization/roleAssignments/abc"
+    sig = _poll("role-assignment-write", [_activity(ROLE_OP, on_vm, CallerIpAddress=BREE_IP)],
+                owners=_bree_owns_its_ip)[0]
+    assert sig["resource_id"] == GONDOLIN and sig["context"]["attribution"] == "asset"
+    assert sig["context"]["target"] == {"kind": "vm", "id": GONDOLIN, "name": "vm-celebrimbor-gondolin"}
+    # What names a VM: the row's own resource, or one of its sub-resources — never the caller's.
+    assert card_target.names_vm({"_ResourceId": on_vm.upper()}, GONDOLIN)
+    assert not card_target.names_vm({"_ResourceId": on_vm}, BREE)
+    assert not card_target.names_vm({"_ResourceId": NSG, "CallerIpAddress": BREE_IP}, BREE)
+    assert not card_target.names_vm({"_ResourceId": f"{GONDOLIN}-old"}, GONDOLIN)
+
+
 def test_a_rule_of_the_control_plane_or_of_an_identity_speaks_with_no_vm_watched():
     """No VM watched — every VM excluded from the rule, or the discovery still empty just after
     a start — is no reason to leave a card of the control plane or of an identity unsaid: it is
@@ -253,7 +294,7 @@ def test_a_rule_of_the_control_plane_or_of_an_identity_speaks_with_no_vm_watched
         sig = _poll("snapshot-by-unexpected-caller", [row], vms=())[0]
         t = sig["context"]["target"]
         assert sig["resource_id"] == GROUP and t["kind"] == "resource_group"
-        assert "disk-celebrimbor-gondolin-data" in t["via"] and "que la découverte ne connaît pas" in t["limit"]
+        assert "disk-celebrimbor-gondolin-data" in t["via"] and card_target._UNWATCHED in t["limit"]
     # A row that names a VM the rule does not watch is still dropped (AL1, unchanged).
     on_vm = f"{GONDOLIN}/providers/Microsoft.Authorization/roleAssignments/abc"
     assert _poll("role-assignment-write", [_activity(ROLE_OP, on_vm)], vms=()) == []
@@ -481,6 +522,10 @@ def test_the_discord_card_names_eight_vms_an_nsg_covers_and_counts_the_rest():
     assert all(f"`vm-{i:02d}`" in shown for i in range(8))
     assert "`vm-08`" not in shown and "`vm-09`" not in shown
     assert shown.endswith(" et 2 autre(s)")
+    # Long names: the field stays under Discord's 1024, or the whole embed is refused.
+    long = {"kind": "nsg", "id": NSG, "name": "n" * 300, "via": "v" * 300, "vm_names": ["x" * 300] * 10}
+    shown = dict((n, v) for n, v, _ in _embed_body({**_card(sig), "target": long})[1])["Ressource visée"]
+    assert len(shown) == 1024 and shown.startswith("NSG `" + "n" * 120)
 
 
 def test_a_card_filed_before_al1c_says_it_may_not_be_about_its_vm():

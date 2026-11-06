@@ -4,7 +4,7 @@ as written, on lines the test writes (SEC2). No Log Analytics, no Azure.
 Only what the Syslog rules use: a table, then `where`, `extend`, `summarize` (`arg_max(col, *)`
 alone or followed by named aggregations — AL2 —, or `name = count()`, `countif(p)`, `min(col)`,
 `max(col)`, `take_any(col)`, `make_set_if(col, p, n)` — AUD1 —, several of them), `project`,
-`order by`, `limit`; predicates `==`, `!=`, `=~`, `!~`, `<`, `<=`, `>`, `>=`, `has`, `!has`,
+`order by`, `limit`; predicates `==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`, `!has`,
 `in (…)`, `in~ (…)`, `!in~ (…)`, `matches regex`, `startswith`, `and`, `or`, `not(…)`; functions
 `ago()`, `extract()`, `isnotempty()`, `isnotnull()`, `toint()`, `tolong()`, `tostring()`,
 `parse_json()` with a member (`.appid`) or an index (`["…"]`) — the Activity Log's `Claims`, AL2.
@@ -27,7 +27,7 @@ _TOKEN = re.compile(r"""
   | (?P<str>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')
   | (?P<span>\d+(?:\.\d+)?(?:d|h|m|s|ms|min|days?|hours?|minutes?|seconds?)\b)
   | (?P<num>\d+(?:\.\d+)?)
-  | (?P<op>==|!=|>=|<=|=~|!~|!in~|in~|!has\b|!contains\b|[|(),=<>*.\[\]])
+  | (?P<op>==|!=|>=|<=|=~|!in~|in~|!has\b|!contains\b|[|(),=<>*.\[\]])
   | (?P<ident>[A-Za-z_][A-Za-z0-9_]*)
 """, re.VERBOSE)
 
@@ -131,13 +131,12 @@ class _Parser:
         left = self.primary()
         tok = self.peek()
         op = tok[1]
-        if op in ("==", "!=", "=~", "!~", ">=", "<=", ">", "<") and tok[0] == "op":
+        if op in ("==", "!=", "=~", ">=", "<=", ">", "<") and tok[0] == "op":
             self.take()
             right = self.primary()
             ops = {"==": lambda a, b: a == b, "!=": lambda a, b: a != b,
                    # KQL's case-insensitive equality, on strings (COR2: a resource id).
                    "=~": lambda a, b: isinstance(a, str) and isinstance(b, str) and a.lower() == b.lower(),
-                   "!~": lambda a, b: not (isinstance(a, str) and isinstance(b, str) and a.lower() == b.lower()),
                    ">=": lambda a, b: a is not None and a >= b, "<=": lambda a, b: a is not None and a <= b,
                    ">": lambda a, b: a is not None and a > b, "<": lambda a, b: a is not None and a < b}
             f = ops[op]

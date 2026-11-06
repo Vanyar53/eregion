@@ -5029,11 +5029,7 @@ MUTANTS += [
     ("M1645", "the uncovered card marked with the drift marker: acknowledged, the perimeter's later "
               "disappearance neither put back nor said (RB1, third review)", R,
      "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=None)\n",
-     "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=now)\n",
-     "EQUIVALENT: since L2C a disappearance reads « already said » only with its episode open in this "
-     "process (reassert_cards.drift_said, _EPISODE_OPEN), and the uncovered card never opens one — the "
-     "mark left by the mutant silences nothing, the later disappearance is put back or said; its other "
-     "readers end an episode or narrow a baseline no card holds (MUT3, #599)"),
+     "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=now)\n"),
     ("M1646", "the uncovered card checked after the drift marker: an episode before it silences it, and the "
               "next disappearance (RB1, third review)", R,
      '        if b.get("uncovered_said") != nics or b.get("drift_alerted_at"):\n',

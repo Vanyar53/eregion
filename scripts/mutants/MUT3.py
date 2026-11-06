@@ -14,8 +14,9 @@ kept; CI6e's rule unchanged for every other mutant.
 - Rewritten in the harness: M864 called `_held_in_quarantine`, no longer imported by quarantine.py since
   SEC4b — a NameError, an isolation that failed safe, never the bug it names; with the module's own name
   (`_held_or_unreadable`), test_a_429_on_our_tag_doesnt_overwrite_a_valid_original catches it.
-- Equivalent, said in the harness: M1645 (since L2C a disappearance reads « already said » only with its
-  episode open, which the uncovered card never opens).
+- M1645, taken for equivalent at first, is not (MUT3's review): a re-block clears the entry's marks
+  but not the episode open in memory, and the uncovered card's mark under the same alert then reads the
+  pair's next disappearance « already said ». Killed by a test of its own.
 The two mutants of this lot hold M3282's and M3153's properties under another form (M4290, M4291).
 """
 _RA = "glorfindel/reassert.py"
@@ -56,6 +57,9 @@ TESTS_ALSO = {
     # Their tests of their own.
     "M3153": f"{_RE}test_a_perimeter_whose_write_fails_again_narrows_its_baseline_before_a_refused_card",
     "M3282": f"{_RE}test_a_rule_this_check_did_not_read_is_never_read_deleted",
+    # Not equivalent (MUT3's review): a re-block clears the entry's marks, not the episode open in
+    # memory — the uncovered card's mark then silences the pair's next disappearance.
+    "M1645": f"{_RE}test_a_reblock_then_an_uncovered_card_never_silences_the_pairs_next_disappearance",
     # The AWS machine's races never showed the instance's lock gone: its property, held directly.
     "M613": "tests/unit/test_aws_adapter.py::test_every_write_of_an_operation_holds_the_instances_lock",
 }

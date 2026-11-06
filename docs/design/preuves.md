@@ -400,12 +400,19 @@ autre mesure. MUT3 (#599) les traite tous :
   — une `NameError`, une isolation qui échouait sans danger, jamais le bug qu'il nomme. Avec le nom du
   module (`_held_or_unreadable`), le test de régression qui le décrit l'attrape. Un mutant qui ne
   produit qu'une exception de nom passe pour un survivant ou pour attrapé à tort : à voir avec MUT2.
-- **M1645 `EQUIVALENT`** : depuis L2C, une disparition n'est « déjà dite » qu'avec son épisode ouvert
-  dans ce processus, et la carte « ne couvre pas » n'en ouvre jamais ; la marque que pose le mutant ne
-  fait taire rien. La liste connue compte maintenant trois `EQUIVALENT` (M11, M25, M1645).
+- **M1645**, pris d'abord pour équivalent, ne l'est pas (relecture de MUT3) : une disparition n'est
+  « déjà dite » qu'avec son épisode ouvert en mémoire (L2C), mais un nouveau blocage du même IP efface
+  les marques de l'entrée sans fermer cet épisode. La carte « ne couvre pas » écrite ensuite, sous la
+  même alerte, pose alors avec le mutant la marque de dérive, et la disparition suivante de la paire se
+  lit « déjà dite » : ni remise ni dite. Un test le fige
+  (`test_a_reblock_then_an_uncovered_card_never_silences_the_pairs_next_disappearance`). La liste
+  connue reste à deux `EQUIVALENT` (M11, M25). L'épisode qu'un nouveau blocage laisse ouvert est sans
+  effet tant qu'aucune marque n'est posée sans sa carte : une défense de plus serait de le fermer au
+  nouveau blocage (hors de ce lot).
 
 **Mesures.** Mutants M4290 (une règle absente de cette lecture lue supprimée) et M4291 (un périmètre
-dont l'écriture échoue encore saute son resserrement), attrapés par les deux tests de MUT3.
+dont l'écriture échoue encore saute son resserrement), attrapés par les deux tests de MUT3. Au budget
+de la porte (500 séquences, deux tours), avant la relecture : 18/18 à chaque tour.
 
 ### Chaque mutant mesuré, sans le travail en double (CI10a)
 

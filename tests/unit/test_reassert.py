@@ -2749,6 +2749,43 @@ def test_a_rule_this_check_did_not_read_is_never_read_deleted():
     assert not after, [e["reason"] for e in after]
 
 
+@pytest.mark.parametrize("acknowledged", [True, False], ids=["acknowledged", "pending"])
+@pytest.mark.parametrize("how", ["blocked again", "unblocked then blocked"])
+def test_a_reblock_then_an_uncovered_card_never_silences_the_pairs_next_disappearance(acknowledged, how):
+    """MUT3's review (#599, M1645): a perimeter block's pair gone, said — its episode open in memory;
+    the IP blocked again (as the card asks), which clears the entry's marks, not the episode; then a
+    NIC on another subnet, said uncovered, its card under the same alert, acknowledged or not; then
+    the pair gone again. The uncovered card's own mark (`uncovered_said`), never `drift_alerted_at`:
+    with it, the stale episode and the uncovered card read « already said », the pair neither put
+    back nor said."""
+    from glorfindel.response.state import _clear_block_state
+
+    def block():
+        _save_block_state("vm", _IP, _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair", scoped=False,
+                          threat_port=22)
+    human = AutonomyConfig(default="human_only")
+    gone = {"verified": False, "missing_rules": ["pair", "pair-out"], "open_nics": ["nic-a"]}
+    block()
+    c = MagicMock()
+    c.verify_block_ip.return_value = gone
+    reassert_active(c, human)
+    assert _block_cards() and _load_block_entries(_RID)[0].get("drift_alerted_at")
+    if how == "unblocked then blocked":
+        _clear_block_state(_RID, _IP)
+    block()                                                              # a new block: its marks cleared
+    assert not _load_block_entries(_RID)[0].get("drift_alerted_at")
+    c.verify_block_ip.return_value = {"verified": False, "uncovered_nics": ["nic-b"]}
+    reassert_active(c, human)
+    if acknowledged:
+        for e in escalations.pending():
+            escalations.resolve(e["id"])
+    n = len(escalations.all_escalations())
+    c.verify_block_ip.return_value = {**gone, "uncovered_nics": ["nic-b"]}
+    report = reassert_active(c, human)
+    assert [e for e in escalations.all_escalations()[n:] if e.get("action") == "block_suspicious_ip"], (
+        "the pair gone again after an uncovered card, unsaid", report)
+
+
 def test_the_first_time_decides_on_an_acknowledged_episode_as_the_second():
     """The first time decides as the second (L1Qs, `_to_write`): a merged entry's acknowledged drift
     whose pair was written again is over — what is gone is written, never left to a card that no

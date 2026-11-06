@@ -3,9 +3,10 @@ allow-list, the pinned binary checked at run time, the warmup/detonate/revert/cl
 from an armed Orodruin with every phase journaled, and a read-only Graph probe of the initial
 state. M4315–M4354, measured by tests/unit/test_annatar_stratus.py — M4315–M4334 the adapter;
 M4335–M4344 review 1 (control-plane guard, bench-only zone, warmup cleanup, per-phase binary
-check); M4345–M4351 reviews 2–3 (report never PASSes without a detonation, legacy tag refused,
-accurate phase labels); M4352–M4354 review 4 (an interrupt mid-teardown still cleans up and
-reports). M4350 is EQUIVALENT (its reason is its 6th field)."""
+check); M4345–M4351 reviews 2–3 (report never PASSes without a detonation — a double Ctrl-C can leave an
+all-PASS teardown with no detonation, so the `detonated` guard is necessary —, legacy tag
+refused, accurate phase labels); M4352–M4354 review 4 (an interrupt mid-teardown still cleans up
+and reports)."""
 ENG = "annatar/engines/stratus.py"
 HOST = "annatar/executors/stratus_host.py"
 RUN = "annatar/runner/engine.py"
@@ -141,10 +142,7 @@ MUTANTS = [
      '        overall = ("PASS" if detonated and checks\n'
      '                   and all("PASS" in v for v in checks.values()) else "FAIL")',
      '        overall = ("PASS" if checks\n'
-     '                   and all("PASS" in v for v in checks.values()) else "FAIL")',
-     "EQUIVALENT: since round 4 the teardown labels every no-detonation path (detonate=SKIPPED "
-     "on a lost watch, ERROR/INTERRUPTED on an exception), so no all-PASS report reaches here "
-     "without a detonation; `detonated` is defence-in-depth, kept for a future code path"),
+     '                   and all("PASS" in v for v in checks.values()) else "FAIL")'),
     ("M4351", "a failure after a successful detonation is mislabelled the before-probe", RUN,
      '            elif not tried_detonate:\n'
      '                checks["initial_state_before"] = "ERROR"   # the before-probe raised',
@@ -202,6 +200,7 @@ TESTS = {
     "M4347": f"{_T}::test_run_stratus_cycle_cleans_up_even_when_detonate_fails",
     "M4348": f"{_T}::test_run_stratus_cycle_after_probe_error_surfaces_an_error",
     "M4349": f"{_T}::test_run_stratus_refuses_a_legacy_enrolled_group",
+    "M4350": f"{_T}::test_stratus_report_never_passes_without_detonation",
     "M4351": f"{_T}::test_run_stratus_cycle_error_after_detonation_is_not_before_probe",
     "M4352": f"{_T}::test_run_stratus_cycle_interrupt_in_any_phase_cleans_up_and_reports",
     "M4353": f"{_T}::test_run_stratus_cycle_interrupt_in_any_phase_cleans_up_and_reports",

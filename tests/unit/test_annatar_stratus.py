@@ -504,21 +504,47 @@ def test_run_stratus_cycle_error_after_detonation_is_not_before_probe(tmp_path, 
 
 
 # A Ctrl-C in ANY phase cleans the bench and writes a FAIL report, then re-raises (round 4).
+# "emit" is the attack_started signal, between detonate and the teardown — engine-internal, so
+# it is interrupted by patching the emitter rather than the fake executor.
 _PHASE_CHECK = {"warmup": "warmup", "before": "initial_state_before", "detonate": "detonate",
-                "revert": "revert", "cleanup": "cleanup", "after": "initial_state_after"}
+                "emit": "attack_started", "revert": "revert", "cleanup": "cleanup",
+                "after": "initial_state_after"}
 
 
 @pytest.mark.parametrize("phase", list(_PHASE_CHECK))
 def test_run_stratus_cycle_interrupt_in_any_phase_cleans_up_and_reports(tmp_path, monkeypatch,
                                                                         phase):
     monkeypatch.chdir(tmp_path)
-    fake, r, calls = _fake_executor(tmp_path, interrupt_in=phase)
+    if phase == "emit":
+        fake, r, calls = _fake_executor(tmp_path)   # detonate succeeds; the emit is interrupted
+        import annatar.runner.engine as eng
+
+        def boom(*a, **k):
+            raise KeyboardInterrupt("interrupted during emit")
+
+        monkeypatch.setattr(eng.SignalEmitter, "emit", boom)
+    else:
+        fake, r, calls = _fake_executor(tmp_path, interrupt_in=phase)
     with pytest.raises(KeyboardInterrupt):
         Engine()._run_stratus_cycle(_scenario(), fake, "20260101T000021Z", r)
     rpt = _report(tmp_path)
     assert rpt["result"] == "FAIL"                             # an interrupt is never a PASS
     assert rpt["checks"][_PHASE_CHECK[phase]] == "INTERRUPTED"  # the phase in flight, labelled
     assert "cleanup" in calls                                  # the bench is always cleaned up
+
+
+def test_stratus_report_never_passes_without_detonation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    binary, digest = _fake_binary(tmp_path)
+    r = resolve(TID, binary_path=binary, stratus_dir=_stratus_dir(tmp_path, digest),
+                catalog=_catalog())
+    # A double Ctrl-C can leave the attack phase unlabelled while the teardown is all-PASS
+    # (a second interrupt lands inside the except BaseException handler, before its label); only
+    # the `detonated` guard keeps the report FAIL. Not an equivalent mutant (M4350).
+    Engine()._stratus_report("20260101T000030Z", _scenario(), r,
+                             {"cleanup": "PASS", "initial_state_after": "PASS"}, {},
+                             detonated=False)
+    assert _report(tmp_path)["result"] == "FAIL"
 
 
 def test_run_stratus_cycle_does_not_detonate_on_a_dirty_initial_state(tmp_path, monkeypatch):

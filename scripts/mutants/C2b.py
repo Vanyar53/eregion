@@ -2,7 +2,7 @@
 gives the id, else a template that says what to replace (never `//`); Graph not read, the ids the
 row names fill the commands; Discord shows each command as code, whole; a consent said in one line
 (the permission, the application, its nature, for whom), never its raw diff.
-M4370–M4374 and M4405–M4409 (the first review), measured by tests/unit/test_identity_cards.py
+M4370–M4374, M4405–M4409 (the first review) and M4435–M4437 (the second), measured by tests/unit/test_identity_cards.py
 (M4409 also by tests/unit/test_chat_escaping.py)."""
 ITEMS = "glorfindel/providers/azure/entra_items.py"
 GRANTS = "glorfindel/providers/azure/entra_grants.py"
@@ -47,6 +47,16 @@ MUTANTS = [
     ("M4409", "a plan's step, a name from outside in it, posted raw to Discord (C2b r1)", BOT,
      "    head = f\"• {discord_text(i.get('n', '?'))}. {discord_text(i.get('what') or '')}\"\n",
      "    head = f\"• {discord_text(i.get('n', '?'))}. {i.get('what') or ''}\"\n"),
+    # Relecture 2 (06/11): M4435–M4437 — a forged line never freezes the watch.
+    ("M4435", "the diff's entries no longer atomic: an ambiguous entry backtracks ~2^n (C2b r2)", CONSENT,
+     '    atomic = f"(?>{entry})"\n',
+     '    atomic = f"(?:{entry})"\n'),
+    ("M4436", "a Permissions value of any length parsed: no ceiling on what a forged line costs (C2b r2)", CONSENT,
+     "    if len(s) > MAX_PERMISSIONS:\n",
+     "    if False:\n"),
+    ("M4437", "an empty PrincipalId's space read two ways: the entry ambiguous again (C2b r2)", CONSENT,
+     "            rf\"PrincipalId:\\s*(?:{g('principal', _G)}\\s*)?,\\s*ResourceId:",
+     "            rf\"PrincipalId:\\s*{g('principal', _G + '|')}\\s*,\\s*ResourceId:"),
 ]
-TESTS = {f"M{n}": _TESTS for n in list(range(4370, 4375)) + list(range(4405, 4410))}
+TESTS = {f"M{n}": _TESTS for n in list(range(4370, 4375)) + list(range(4405, 4410)) + list(range(4435, 4438))}
 TESTS["M4409"] = f"{_TESTS} tests/unit/test_chat_escaping.py"

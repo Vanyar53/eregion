@@ -34,14 +34,27 @@ def _entry(named: bool) -> str:
     read. `named`: its fields as groups (to read one entry), else plain (to match a whole side)."""
     def g(name: str, body: str) -> str:
         return f"(?P<{name}>{body})" if named else f"(?:{body})"
+    # Never two ways to read the same text (C2b r2): an empty PrincipalId's space is its own `\s*`'s
+    # only, a LastModifiedDateTime's trailing space its value's — else a side that fails tries ~2^n.
     return (rf"\[\s*Id:\s*{g('id', '[A-Za-z0-9_-]+')}\s*,\s*ClientId:\s*{g('client', _G)}\s*,\s*"
-            rf"PrincipalId:\s*{g('principal', _G + '|')}\s*,\s*ResourceId:\s*{g('resource', _G)}\s*,\s*"
+            rf"PrincipalId:\s*(?:{g('principal', _G)}\s*)?,\s*ResourceId:\s*{g('resource', _G)}\s*,\s*"
             rf"ConsentType:\s*{g('ctype', 'AllPrincipals|Principal')}\s*,\s*Scope:{g('scope', _FREE)},\s*"
-            rf"CreatedDateTime:{_FREE},\s*LastModifiedDateTime(?::{_FREE})?\s*\]")
+            rf"CreatedDateTime:{_FREE},\s*LastModifiedDateTime(?::{_FREE}|\s*)\]")
 
 
-_SIDE_RE = re.compile(rf"\[\s*(?:{_entry(False)}(?:\s*,\s*{_entry(False)})*)?\s*\]")
+def side_re(entry: str) -> re.Pattern:
+    """One side of the diff, its entries `entry` each: atomic (`(?>…)`, Python ≥ 3.11) — once
+    read, an entry is never read again another way, so a forged line that fails fails at once,
+    never in a backtracking that would freeze the watch (`re` holds the GIL). A second lock: it
+    holds even if an edit made `entry` ambiguous again."""
+    atomic = f"(?>{entry})"
+    return re.compile(rf"\[\s*(?:{atomic}(?:\s*,\s*{atomic})*)?\s*\]")
+
+
+_SIDE_RE = side_re(_entry(False))
 _ENTRY_RE = re.compile(_entry(True))
+# What `parse` reads at most: a consent of ~60 grants. Beyond, nothing of it is read (`unknown`).
+MAX_PERMISSIONS = 16384
 _DIFF_RE = re.compile(r"\s*(?P<old>\[.*\])\s*=>\s*(?P<new>\[.*\])\s*;?\s*", re.DOTALL)
 
 
@@ -62,6 +75,8 @@ def parse(value) -> dict:
     if not s:
         return {"grants": [], "words": "", "format": "none"}
     unknown = {"grants": [], "words": "", "format": "unknown"}
+    if len(s) > MAX_PERMISSIONS:
+        return unknown                                     # too long to be read: never parsed
     if "=>" in s:
         m = _DIFF_RE.fullmatch(s)
         old, new = (_side(m.group("old")), _side(m.group("new"))) if m else (None, None)

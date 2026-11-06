@@ -285,6 +285,72 @@ def test_without_graph_verify_never_says_held_while_an_application_permission_st
     assert entra_check.verify(plan, tenant, now=NOW)["verdict"] == "held"
 
 
+# ── A forged line never freezes the watch (C2b r2): `parse` runs on every consent card ───────
+
+def _dated(gid, scope="User.Read") -> str:
+    """A grant with its dates written (a form Entra may use too)."""
+    return (f"[Id: {gid}, ClientId: {SP}, PrincipalId: {USER}, ResourceId: {RES}, ConsentType: Principal, "
+            f"Scope: {scope}, CreatedDateTime: 11/06/2026 10:00:00, LastModifiedDateTime: 11/06/2026 10:00:00]")
+
+
+def _pathological(n: int, dated=False) -> str:
+    """n canonical grants, then one whose scope closes it: the side fails only at its end."""
+    ok = [_dated(f"g{i}") if dated else _grant_text(gid=f"g{i}") for i in range(n)]
+    return "[" + ", ".join(ok + [_grant_text(gid="bad", scope="User.Read] [x")]) + "]"
+
+
+def _timed(fn):
+    import time
+    t = time.perf_counter()
+    out = fn()
+    return out, time.perf_counter() - t
+
+
+@pytest.mark.parametrize("dated", [False, True])
+@pytest.mark.parametrize("n", [40, 200])
+def test_a_forged_diff_fails_at_once_never_in_a_backtracking(n, dated):
+    out, took = _timed(lambda: entra_consent.parse("[] => " + _pathological(n, dated)))
+    assert out["format"] == "unknown" and took < 1.0, took
+
+
+def test_the_canonical_the_empty_and_the_dated_forms_are_still_read():
+    assert entra_consent.parse("[] => []; ")["format"] == "diff"
+    assert [g["id"] for g in entra_consent.parse(_permissions([_grant_text()]))["grants"]] == [GRANT]
+    dated = entra_consent.parse(_permissions([_dated(GRANT, "User.Read Mail.Read")], [_dated(GRANT)]))
+    assert [(g["id"], g["principal"], g["added"]) for g in dated["grants"]] == [(GRANT, USER, "Mail.Read")]
+
+
+# Entries a 3rd and a 4th way to read the same text (two `\s*` around the same spaces): the lock
+# the atomic entries hold alone. Measured (06/11): ~2 s at 12 entries without it, ~1 ms with it.
+_AMBIGUOUS = r"\[\s*Id:\s*[a-z0-9]+\s*\s*,(?:[^\[\],=]*,)*[^\[\],=]*\]"
+
+
+def _ambiguous_side(n: int) -> str:
+    return "[" + ", ".join([f"[Id: g{i}  , a, b]" for i in range(n)] + ["[Id: bad, a] [x]"]) + "]"
+
+
+def test_the_atomic_entries_hold_even_an_ambiguous_entry():
+    out, took = _timed(lambda: entra_consent.side_re(_AMBIGUOUS).fullmatch(_ambiguous_side(12)))
+    assert out is None and took < 1.0, took
+
+
+def test_the_entry_itself_has_one_way_to_read_a_text():
+    """Without the atomic lock, the canonical entry alone still fails at once: one reading only
+    (an empty PrincipalId's space, a LastModifiedDateTime's trailing space)."""
+    plain = re.compile(rf"\[\s*(?:{entra_consent._entry(False)}(?:\s*,\s*{entra_consent._entry(False)})*)?\s*\]")
+    for dated in (False, True):
+        out, took = _timed(lambda: plain.fullmatch(_pathological(20, dated)))
+        assert out is None and took < 1.0, (dated, took)
+
+
+def test_a_permissions_value_too_long_is_never_parsed():
+    many = [_grant_text(gid=f"g{i}") for i in range(80)]
+    text = _permissions(many)
+    assert len(text) > entra_consent.MAX_PERMISSIONS
+    assert entra_consent.parse(text) == {"grants": [], "words": "", "format": "unknown"}
+    assert len(entra_consent.parse(_permissions(many[:40]))["grants"]) == 40      # below it: read
+
+
 def test_a_widened_grant_is_one_grant_and_an_unchanged_one_none():
     old = [_grant_text(scope="User.Read"), _grant_text(gid=OTHER_GRANT, scope="openid")]
     new = [_grant_text(scope="User.Read Mail.Read"), _grant_text(gid=OTHER_GRANT, scope="openid")]

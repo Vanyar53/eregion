@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 
 from glorfindel.providers.azure.entra_grants import _consent_items, _role_items
 from glorfindel.providers.azure.entra_items import (
-    PLAN_VERSION, _GLORFINDEL, _NO_EXECUTOR, _Reads, _credential_items, _item, _signin_items, when,
+    PLAN_VERSION, _GLORFINDEL, _NO_EXECUTOR, _Reads, _credential_items, _item, _signin_items, placeholder, when,
 )
 
 
@@ -139,7 +139,10 @@ def steps_text(plan: dict) -> list[str]:
         line = f"{i['n']}. {tag}{i['what']}{cmd}"
         unread = [p for p in i.get("params") or [] if not p.get("read")]
         if unread:
-            line += " — non lu : " + " ; ".join(f"{p['name']} ({p.get('why') or 'non lu'})" for p in unread)
+            line += " — non lu : " + " ; ".join(
+                f"{p['name']} ({p.get('why') or 'non lu'})"
+                + (f", à mettre à la place de {placeholder(p['name'])}" if placeholder(p["name"]) in i.get("command", "") else "")
+                for p in unread)
         if i.get("find"):
             line += f" — pour le trouver : `{i['find']}`"
         if i.get("before"):

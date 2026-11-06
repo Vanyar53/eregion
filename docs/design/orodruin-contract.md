@@ -605,6 +605,21 @@ rôles d'application de Microsoft Graph, en lecture seule. Terraform les pose, d
 (`graph_read_enabled`, `azuread_app_role_assignment.graph_read`, un par rôle), sur le principal de
 Graph trouvé par son identifiant publié.
 
+**Un tenant sans licence PIM** (IDI1p, #618, mesuré le 06/11 au geste 5 d'IDI1). Sans Entra ID P2 ni
+ID Governance, Graph répond à la lecture des éligibles `400`, `error.code` =
+`AadPremiumLicenseRequired` — la garde refusait alors toute identité. Sans cette licence, aucun rôle
+éligible ne peut exister (Microsoft : à son expiration, les attributions éligibles de rôles d'Entra
+sont retirées). Cette réponse exacte, sur la seule lecture
+`/roleManagement/directory/roleEligibilityScheduleInstances` et à sa première page, vaut donc une
+liste vide, **dite** dans le verdict (`GuardResult.notes` : « eligible roles: none can exist, the tenant
+has no PIM license (Graph: AadPremiumLicenseRequired) ») ; la garde juge le reste comme avant, et la
+note n'admet jamais rien. Tout autre échec reste un refus — un autre code (comparé à l'identique), un
+autre statut, un corps illisible, la même réponse sur une autre lecture ou sur une page suivante après
+une première lue —, et dit le code d'erreur de Graph, filtré (lettres ASCII et `_` seuls, 64 au plus, sinon rien :
+une donnée du dehors). Une seule règle (`eregion_core.inscription.no_pim_license`) pour les trois
+lecteurs : la garde d'une identité, celle d'un utilisateur de test (IDI1b), et le contrat de
+l'exécuteur d'identité (IR1b). Mutants M4470–M4479 (`scripts/mutants/IDI1p.py`).
+
 Le contrat le relit à chaque démarrage, une garantie de plus (`graph`, `assess_graph`) : le jeton
 Graph de l'identité, demandé par IMDS, sans aucun appel à Graph ni droit pour le lire :
 

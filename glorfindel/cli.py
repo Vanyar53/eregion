@@ -131,6 +131,33 @@ def _shared_private_ips():
     return IpOwners(listing)
 
 
+def _shared_topology():
+    """What a card of the control plane is filed on (AL1c, glorfindel/card_target.py): the VMs an
+    NSG covers, a disk's VM, a snapshot's source — read on Azure by the connector made at the
+    first need, cached."""
+    from glorfindel.card_target import Topology
+    made: list = []
+
+    def listing() -> dict:
+        if not made:
+            from glorfindel.actions import AzureConnector
+            made.append(AzureConnector(dry_run=False))
+        return made[0].control_topology()
+    return Topology(listing)
+
+
+def _queue_of(data: dict) -> str:
+    """The watch's queue a signal waits in: its VM's — or, for a card of the control plane or of
+    an identity filed on what it names (AL1c), its plane's: one queue each, as when they all
+    waited in the anchor VM's, never a thread per NSG, group or identity, nor a wait behind a VM
+    they have nothing to do with."""
+    ctx = data.get("context") or {}
+    target = ctx.get("target") if isinstance(ctx.get("target"), dict) else None
+    if ctx.get("plane") in ("control", "identity") and target and target.get("kind") != "vm":
+        return f"plane:{ctx['plane']}"
+    return str(data.get("resource_id", "unknown"))
+
+
 def _find_rules_file() -> str | None:
     """Look for detection_rules.yaml in canonical locations."""
     for candidate in (
@@ -729,7 +756,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             t.start()
             return
 
-        _get_or_start_worker(resource_id).put((data, sig, bool(source)))
+        _get_or_start_worker(_queue_of(data)).put((data, sig, bool(source)))
 
     # SEC8 (#414): runs/ read as an input the watch does not trust — a regular file only,
     # never a link, never blocking; a bounded read per file and per poll, a bounded rate
@@ -1028,7 +1055,9 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
                 # Private IP → VM (the shared listing, above): routes a row made FROM a
                 # VM (T1041 storage calls) to that VM.
-                _rule_poller = RulePoller(rules, _rule_dispatch, dry_run=dry_run, ip_owners=_ip_owners)
+                # What a card of the control plane is filed on (AL1c): read on Azure, cached.
+                _rule_poller = RulePoller(rules, _rule_dispatch, dry_run=dry_run, ip_owners=_ip_owners,
+                                          topology=None if dry_run else _shared_topology())
                 _rule_poller.start()
 
                 # Start discovery service (non-blocking background thread)
@@ -2131,6 +2160,8 @@ def identity_contract_cmd():
     click.echo(f"identity executor: {verdict.verdict}")
     for m in verdict.missing:
         click.echo(f"  ✗ {m['code']}: {m['detail']}")
+    for note in verdict.notes:
+        click.echo(f"  note — {note}")
     if verdict.held:
         click.echo(f"  held: {', '.join(sorted(verdict.held))}")
     if verdict.armed:

@@ -1,4 +1,4 @@
-# La corrélation, brique du produit (COR1, COR2), et ce qu'auditd y ajoute (AUD1)
+# La corrélation, brique du produit (COR1, COR2, B3a), et ce qu'auditd y ajoute (AUD1)
 
 Décision de Jonathan (02/11), après la relecture d'ADM1 : « faire le meilleur ». Une détection qui
 relie deux événements vaut plus que deux détections isolées. La corrélation fait donc partie du produit :
@@ -137,6 +137,49 @@ texte, l'identité de la ligne ne bouge pas. Le cycle le dit à un humain comme 
 une action autonome, une carte `compromise_unchecked` (une par adresse) ; sinon, la carte du cycle
 commence par « Connexion après brute force non vérifiée ». Les comptes portés par la carte sont bornés
 à 64 caractères.
+
+## Troisième usage : le brute force réussi puis root, un plancher de la décision (B3a)
+
+Décision de Jonathan (06/11), issue #609 : quand la corrélation a confirmé, **sur une même VM**, un
+brute force qui a réussi puis une élévation vers root, `decide` propose **au moins `isolate_vm`**,
+quel que soit le choix du modèle. Le harnais du CD de H0 tirait `block_suspicious_ip` une fois sur
+trois sur son cas apparié (2/2, « brute force après un sudo vers root sur la même VM »), au-dessus de
+la porte : l'attaquant bloqué, la VM où il a pris root laissée debout.
+
+**Ce cas 2/2 ne porte que des échecs** : ni la marque de COR1, ni de fait confirmé dans son
+incident. Le plancher n'y joue pas : le cas reste la mesure du modèle seul, gardé tel quel en
+témoin. Le plancher couvre le même scénario quand COR1 a vu la connexion réussir : c'est le cas
+`floor` ajouté au harnais (décision de Jonathan, 06/11), le même brute force marqué
+`ssh-login-after-brute-force`, son incident tenant le sudo confirmé — `isolate_vm` attendu, 3/3 quel
+que soit le tirage du modèle, la preuve de bout en bout du plancher dans le CD.
+
+- **Les faits, pas le modèle.** Chaque détection résolue dit ce qu'elle confirme sur sa VM
+  (`confirmed_facts`, nœud `confirm_facts` après `poll_detection`), gardé par l'incident de la VM
+  (`Incident.confirmed`) : `login_after_brute_force` pour une ligne T1110.001 marquée
+  `Correlation: ssh-login-after-brute-force` (ci-dessus), `root_elevation` pour une détection T1548.003
+  (la ligne de sudo vers root, après l'écart d'ADM1). Un `attack_started`, un `detection_timeout`, une
+  détection non attribuée ne confirment rien. Jamais dans le prompt.
+- **Les deux, sur la même VM.** `_root_compromise_floor` réunit les faits de la détection en cours et
+  ceux de son incident (même `resource_id`), dans les deux ordres d'arrivée. Un brute force seul (même
+  réussi), un sudo seul, deux VM, des échecs sans connexion vue, une vérification impossible
+  (`LoginCheck: unchecked`) : pas de plancher, le choix du modèle reste.
+- **Les gardes et le mode s'appliquent ensuite.** En `human_only`, rien ne s'exécute, la carte propose
+  `isolate_vm` et dit pourquoi (« Plancher déterministe (B3a) : … »). Une action que seul un humain
+  approuve (une restauration) n'est jamais perdue : la VM est contenue d'abord, puis une carte la
+  propose. Seulement sur une détection : un `recovery_complete` ou un `detection_timeout` gardent le
+  choix du modèle. Le détail : `docs/glorfindel.md`, les gardes de `decide`.
+- **Limites.**
+  - L'ordre des deux faits n'est pas vérifié, seulement leur présence dans l'incident en cours.
+  - **Le TTL de l'incident est glissant** : tout signal de la VM le prolonge (300 s depuis le
+    dernier). Et **`confirmed` n'est jamais vidé** : une levée d'isolation par un humain ne l'efface
+    pas. Tant que l'incident vit, toute détection suivante de la VM est relevée à `isolate_vm`.
+  - **En `respond`**, un poll plus long que le TTL (480 s de latence attendue pour Syslog, contre
+    300 s) peut laisser l'incident expirer entre deux détections : un fait est alors perdu pour la
+    suivante, et le plancher ne joue pas.
+  - Une commande sensible en root lue par auditd (AUD1, T1059.004) ne compte pas encore comme
+    élévation.
+  - Une ligne forgée sur la VM peut faire isoler la VM (jamais l'inverse ; l'isolation est
+    réversible).
 
 ## Ses limites, assumées
 

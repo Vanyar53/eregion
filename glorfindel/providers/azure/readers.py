@@ -14,6 +14,13 @@ from glorfindel.response.ids import _parse_nic_resource_id, _parse_nsg_resource_
 from glorfindel.response.policy import _ERR_MAX, _first_line
 
 
+def _topology_warning(what: str, exc: Exception) -> None:
+    """A section of the control-plane topology Azure did not answer (AL1c): said, never raised."""
+    import logging
+    logging.getLogger("glorfindel.providers.azure.readers").warning(
+        "control-plane topology: %s unreadable (%s)", what, _first_line(exc)[:_ERR_MAX])
+
+
 def _vm_scope(rg: str, vm_name: str) -> str:
     """The VM's own scope, under its group, as check_permissions reads it."""
     return f"{rg}/providers/Microsoft.Compute/virtualMachines/{vm_name}"
@@ -352,6 +359,55 @@ class ReadersMixin:
                 "glorfindel_rules": len(glor),
                 "quarantine": quarantine,
             })
+        return out
+
+    def control_topology(self) -> dict:
+        """What a card of the control plane is filed on (AL1c, glorfindel/card_target.py), read
+        on Azure, read-only, each section on its own: `nsg_vms` (NSG id → the VMs it covers, by
+        a network interface or a subnet), `disk_vm` (disk id → the VM it is attached to, its
+        `managedBy`), `snapshot_source` (snapshot id → its `creationData.sourceResourceId` —
+        what the Activity Log's row never names). Every id lowercase. A section Azure did not
+        answer is None — never an empty map, which would say « nothing there »."""
+        if self.dry_run:
+            return {}
+        self._ensure_clients()
+
+        def low(v) -> str:
+            return str(v or "").rstrip("/").lower()
+
+        out: dict = {"nsg_vms": None, "disk_vm": None, "snapshot_source": None}
+        try:
+            nic_vm: dict[str, str] = {}
+            subnet_vms: dict[str, set] = {}
+            for nic in self._network.network_interfaces.list_all():
+                vm = low(getattr(getattr(nic, "virtual_machine", None), "id", None))
+                if not vm:
+                    continue
+                nic_vm[low(nic.id)] = vm
+                for cfg in getattr(nic, "ip_configurations", None) or []:
+                    sub = low(getattr(getattr(cfg, "subnet", None), "id", None))
+                    if sub:
+                        subnet_vms.setdefault(sub, set()).add(vm)
+            nsg_vms: dict[str, list] = {}
+            for nsg in self._network.network_security_groups.list_all():
+                vms = {nic_vm[low(n.id)] for n in (nsg.network_interfaces or []) if low(n.id) in nic_vm}
+                for s in nsg.subnets or []:
+                    vms |= subnet_vms.get(low(s.id), set())
+                nsg_vms[low(nsg.id)] = sorted(vms)
+            out["nsg_vms"] = nsg_vms
+        except Exception as e:
+            _topology_warning("nsg coverage", e)
+        try:
+            out["disk_vm"] = {low(d.id): low(getattr(d, "managed_by", None))
+                              for d in self._compute.disks.list()}
+        except Exception as e:
+            _topology_warning("disks", e)
+        try:
+            out["snapshot_source"] = {
+                low(s.id): low(getattr(getattr(s, "creation_data", None), "source_resource_id", None))
+                for s in self._compute.snapshots.list()}
+        except Exception as e:
+            _topology_warning("snapshots", e)
         return out
 
     def check_compute_access(self, resource_id: str) -> dict:

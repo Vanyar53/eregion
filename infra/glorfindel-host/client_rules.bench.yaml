@@ -74,7 +74,7 @@ rules:
     assets: [auto]
     interval_s: 60
     expected_latency_s: 1200
-    base_sha256: b1addb6b5f2f7c6de5f77c25ec0079e87523c5fdc8152e83ad1e08b5a8fea14a
+    base_sha256: 03f9c0f5493ec276b708f809d3cc1ab6b44ab7ee338b283b05d6476fc47660d6
     env_guids: [EREGION_RULE_CANARY_APPID]
     query: |
       AzureActivity
@@ -86,21 +86,44 @@ rules:
           "MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/SECURITYRULES/DELETE")
       | extend CallerAppId = tostring(parse_json(Claims).appid),
                CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
-      // One row per operation, its latest line (Start, Accept, Success).
-      | summarize arg_max(TimeGenerated, *) by CorrelationId, OperationNameValue, _ResourceId
-      | where ActivityStatusValue !in~ ("Failure", "Failed")
+      // A line that names its caller (its Caller, or ids in Claims), and who, the three as one.
+      | extend Named = isnotempty(Caller) or isnotempty(CallerAppId) or isnotempty(CallerObjectId),
+               CallerKey = strcat(Caller, "|", CallerAppId, "|", CallerObjectId)
+      // One row per operation: its latest line, how many of its lines succeeded, how many
+      // callers its lines name, and the caller they name. An operation that succeeded is read,
+      // whatever its latest line; one that only failed is not.
+      | summarize arg_max(TimeGenerated, *), Succeeded = countif(ActivityStatusValue in~ ("Success", "Succeeded")),
+          Callers = dcountif(CallerKey, Named),
+          NamedCaller = take_anyif(Caller, Named),
+          NamedCallerIp = take_anyif(CallerIpAddress, Named and isnotempty(CallerIpAddress)),
+          NamedCallerAppId = take_anyif(CallerAppId, Named),
+          NamedCallerObjectId = take_anyif(CallerObjectId, Named)
+          by CorrelationId, OperationNameValue, _ResourceId
+      | where Succeeded > 0 or ActivityStatusValue !in~ ("Failure", "Failed")
+      // A latest line that names no caller takes the caller its operation's lines name, the
+      // four columns from that caller's lines — only when they name one: a CorrelationId is
+      // the client's to choose, and two callers' ids are never mixed on one row (one of them
+      // Glorfindel's would set the other's write aside). Else the row stays as its latest
+      // line, naming no one; Callers says how many.
+      | extend Fill = not(Named) and Callers == 1
+      | extend Caller = iif(Fill, NamedCaller, Caller),
+               CallerIpAddress = iif(Fill, NamedCallerIp, CallerIpAddress),
+               CallerAppId = iif(Fill, NamedCallerAppId, CallerAppId),
+               CallerObjectId = iif(Fill, NamedCallerObjectId, CallerObjectId)
       // CAN2 (#605), the bench only: the azurerm canary's runs (infra/canary/jit-terraform/), which
       // create and delete their throwaway NSGs in rg-eregion-canary under the canary's own principal.
-      // Set aside only when both hold, read on the operation's latest line: the group is
+      // Set aside only when both hold, read on the row as it is now — the operation's latest line, its
+      // caller completed from its operation's lines when they name one alone (above): the group is
       // rg-eregion-canary (its ResourceGroup column and its resource id, without case, as ARM reads
       // them) and the caller is the canary's principal — its appid, from the watch's environment
       // (EREGION_RULE_CANARY_APPID, checked to be a GUID at load), as the token's application or as
       // the caller, and no user's name as the caller (a user signed in through that application is
-      // not its principal). Another caller in that group, or that principal anywhere else: a card,
-      // as with the shipped rule.
+      // not its principal). A latest line that names no one while its operation's lines name two
+      // callers, or none: no caller to compare, a card. Another caller in that group, or that
+      // principal anywhere else: a card, as with the shipped rule.
       | where not(ResourceGroup =~ "rg-eregion-canary"
             and _ResourceId matches regex @"(?i)^/subscriptions/[0-9a-f-]+/resourcegroups/rg-eregion-canary/providers/"
             and (CallerAppId =~ "${EREGION_RULE_CANARY_APPID}" or Caller =~ "${EREGION_RULE_CANARY_APPID}")
             and Caller !contains "@")
-      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Succeeded, Callers, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId

@@ -511,7 +511,10 @@ les siens.
   et de l'application déclarés, ses `roles` et ses `wids` dans la liste ; puis Graph, en lecture
   seule : ses permissions (chacune nommée par sa ressource, Microsoft Graph seule), ses rôles
   d'annuaire actifs (chacun à sa seule portée) et éligibles (aucun : `roleEligibilityScheduleInstances`,
-  sans `$expand`), ses groupes (aucun : un groupe peut porter un rôle), et **ce qu'il possède** — des
+  sans `$expand` ; sur un tenant sans licence PIM, Graph y répond `400` `AadPremiumLicenseRequired` —
+  mesuré le 06/11 —, aucun rôle éligible ne peut exister : cette seule réponse vaut « aucun », dite
+  dans `Verdict.notes`, toute autre laisse le contrat `passive` ; IDI1p, la règle partagée avec la
+  garde d'IDI1, `no_pim_license`), ses groupes (aucun : un groupe peut porter un rôle), et **ce qu'il possède** — des
   applications et leurs principaux, jamais lui-même ni une identité de `never_target`, ni une
   identité privilégiée (Q6, jugée par `privilege_refusal` d'IDI1 lui-même : le principal de chacune
   ne tient ni rôle d'annuaire, actif ou éligible, ni groupe, ni aucune permission d'application, et
@@ -741,8 +744,9 @@ Jonathan, avant d'être écrite comme un fait.
    (pour IR1d).
 10. Les droits qu'il faut à l'exécuteur pour lire ses propres permissions, ses rôles, ses groupes et
     ceux de ce qu'il possède (le contrat, IR1b : Directory Readers est celui qu'il attend ; s'il ne
-    lit pas les instances éligibles de PIM, le contrat ne s'arme jamais), et à la watch pour lire le
-    plan (IR1a).
+    lit pas les instances éligibles de PIM, le contrat ne s'arme jamais — un tenant sans licence PIM
+    répond `400` `AadPremiumLicenseRequired`, mesuré le 06/11 : lu comme « aucun », dit, IDI1p), et
+    à la watch pour lire le plan (IR1a).
 11. L'accès conditionnel pour les identités de charge de travail : ce qu'il borne (l'adresse), et
     sa licence.
 12. Dans une unité restreinte, `User.RevokeSessions.All` ne touche pas ses membres, et le User

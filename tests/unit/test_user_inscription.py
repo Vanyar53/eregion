@@ -358,7 +358,12 @@ class FakeGraph:
         self.calls.append((url, headers["Authorization"], params))
         status = self.fail.get(url, 200 if url in self.routes else 404)
         body = self.routes.get(url, {})
-        return SimpleNamespace(ok=status < 400, status_code=status, json=lambda: body)
+
+        def json():                     # a body that is no JSON: an exception put in its place
+            if isinstance(body, Exception):
+                raise body
+            return body
+        return SimpleNamespace(ok=status < 400, status_code=status, json=json)
 
 
 def _reader(graph, scope=SCOPE, credential=None):
@@ -466,3 +471,62 @@ def test_the_command_says_what_may_run_on_a_user(monkeypatch, capsys):
     assert main(["user", USER]) == 1
     assert "not a member" in capsys.readouterr().out
     assert main(["users", USER]) == 2
+
+
+# ── A tenant without PIM (IDI1p, #618): the same exact answer, the same reading, for a user ─────
+
+ELIGIBLE = f"{G}/roleManagement/directory/roleEligibilityScheduleInstances"
+NO_LICENSE = {"error": {"code": "AadPremiumLicenseRequired",
+                        "message": "The tenant needs to have Microsoft Entra ID P2 or Microsoft Entra ID "
+                                   "Governance license.", "innerError": {}}}
+
+
+def _answering(graph, url, status=400, body=NO_LICENSE):
+    graph.fail[url] = status
+    graph.routes[url] = body
+    return graph
+
+
+def test_a_tenant_without_pim_has_no_eligible_role_for_a_user_and_it_is_said(monkeypatch, capsys):
+    v = _reader(_answering(FakeGraph(), ELIGIBLE)).check_user(USER, kind="technique", destructive=False)
+    assert v.allowed and v.zone == "bench" and v.notes == (inscription.NO_PIM_LICENSE_NOTE,)
+    assert _reader(FakeGraph()).check_user(USER, kind="technique", destructive=False).notes == ()
+    # Never a reason to admit: a user with an active role stays refused, the note said.
+    v = _reader(_answering(FakeGraph(_user(directory_roles=[ROLE])), ELIGIBLE)).check_user(
+        USER, kind="technique", destructive=False)
+    assert not v.allowed and "directory role" in v.reason and v.notes == (inscription.NO_PIM_LICENSE_NOTE,)
+    monkeypatch.setattr("eregion_core.inscription.GraphEnrollment",
+                        lambda: _reader(_answering(FakeGraph(), ELIGIBLE)))
+    assert main(["user", USER]) == 0
+    assert f"note — {inscription.NO_PIM_LICENSE_NOTE}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("status, body, said", [
+    (400, {"error": {"code": "BadRequest"}}, "HTTP 400 BadRequest"),
+    (400, {"error": {"code": "AADPREMIUMLICENSEREQUIRED"}}, "HTTP 400 AADPREMIUMLICENSEREQUIRED"),
+    (403, NO_LICENSE, "HTTP 403 AadPremiumLicenseRequired"),
+    (400, ValueError("no JSON"), "HTTP 400 reading"),
+    (400, {}, "HTTP 400 reading"),
+])
+def test_any_other_answer_to_a_user_s_eligible_read_refuses_and_says_its_code(status, body, said):
+    v = _reader(_answering(FakeGraph(), ELIGIBLE, status, body)).check_user(USER, kind="technique",
+                                                                            destructive=False)
+    assert not v.allowed and said in v.reason and v.notes == ()
+
+
+@pytest.mark.parametrize("which", ["users/" + USER, "transitiveMemberOf", "ownedObjects", "appRoleAssignments",
+                                   "roleAssignments", "administrativeUnits/" + UNIT, "members"])
+def test_the_same_answer_to_another_of_a_user_s_reads_refuses(which):
+    graph = FakeGraph()
+    (url,) = [u for u in graph.routes if u.endswith("/" + which)]
+    v = _reader(_answering(graph, url)).check_user(USER, kind="technique", destructive=False)
+    assert not v.allowed and "HTTP 400 AadPremiumLicenseRequired" in v.reason and v.notes == ()
+
+
+def test_a_user_s_next_eligible_page_that_answers_so_refuses():
+    nxt = f"{ELIGIBLE}?$skiptoken=2"
+    graph = FakeGraph()
+    graph.routes[ELIGIBLE] = {"value": [], "@odata.nextLink": nxt}
+    _answering(graph, nxt)
+    v = _reader(graph).check_user(USER, kind="technique", destructive=False)
+    assert not v.allowed and "HTTP 400 AadPremiumLicenseRequired" in v.reason and v.notes == ()

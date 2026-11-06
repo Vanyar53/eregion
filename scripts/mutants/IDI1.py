@@ -43,7 +43,7 @@ MUTANTS = [
      '            return GuardResult(False, f"identity unreadable: {type(e).__name__}: {e}"[:300])\n',
      '            return GuardResult(True, zone="bench")\n'),
     ("M3818", "an identity's zone no longer decides: a destructive technique on a production identity (IDI1)", INS,
-     "    return check_zone(enrolled.zone, kind=kind, destructive=destructive)\n", "    return enrolled\n"),
+     "        enrolled = check_zone(enrolled.zone, kind=kind, destructive=destructive)\n", "        pass\n"),
     ("M3819", "a multi-tenant application is a target: a technique on it reaches other tenants (IDI1)", INS,
      '    if str(app.get("signInAudience") or "") != SINGLE_TENANT:\n', "    if False:\n"),
     ("M3860", "the contract arms with a write right in Microsoft Graph: Application.ReadWrite.All passes (IDI1)", ORO,
@@ -63,7 +63,7 @@ MUTANTS = [
      "    if roles:\n        return (f\"it holds {len(roles)} directory role(s)",
      "    if False:\n        return (f\"it holds {len(roles)} directory role(s)"),
     ("M3901", "the eligible roles (PIM) never read: an identity one activation away from a role is enrolled (IDI1)", INS,
-     '        roles += self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleEligibilityScheduleInstances", g, flt)\n',
+     '        roles += self._pages(f"{_GRAPH_V1}{ELIGIBLE_ROLES_PATH}", g, flt, notes)\n',
      ""),
     ("M3902", "an admitted application permission that writes passes: the read motif no longer checked (IDI1)", INS,
      '        if value not in ADMITTED_APP_PERMISSIONS or not _READ_ONLY_ROLE.fullmatch(value) \\\n'

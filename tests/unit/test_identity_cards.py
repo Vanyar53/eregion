@@ -329,6 +329,13 @@ def _ambiguous_side(n: int) -> str:
     return "[" + ", ".join([f"[Id: g{i}  , a, b]" for i in range(n)] + ["[Id: bad, a] [x]"]) + "]"
 
 
+def test_an_entry_once_read_is_never_read_again_another_way():
+    """What makes the lock, said without a clock: an entry that took a greedy `]` keeps it, so the
+    side does not close — atomic, never re-read to give it back (non-atomic, it would match)."""
+    assert entra_consent.side_re(r"\[x\]\]?").fullmatch("[[x]]") is None
+    assert entra_consent.side_re(r"\[x\]\]?").fullmatch("[[x]]]") is not None
+
+
 def test_the_atomic_entries_hold_even_an_ambiguous_entry():
     out, took = _timed(lambda: entra_consent.side_re(_AMBIGUOUS).fullmatch(_ambiguous_side(12)))
     assert out is None and took < 1.0, took
@@ -339,7 +346,7 @@ def test_the_entry_itself_has_one_way_to_read_a_text():
     (an empty PrincipalId's space, a LastModifiedDateTime's trailing space)."""
     plain = re.compile(rf"\[\s*(?:{entra_consent._entry(False)}(?:\s*,\s*{entra_consent._entry(False)})*)?\s*\]")
     for dated in (False, True):
-        out, took = _timed(lambda: plain.fullmatch(_pathological(20, dated)))
+        out, took = _timed(lambda: plain.fullmatch(_pathological(22, dated)))
         assert out is None and took < 1.0, (dated, took)
 
 

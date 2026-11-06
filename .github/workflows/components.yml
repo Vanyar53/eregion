@@ -11,9 +11,15 @@ name: Components
 # can change in it, and ci.yml runs the whole suite on every pull request anyway. A `paths-ignore`
 # rather than a list of what to watch: the tests read code, YAML, JSON, the Makefile, the compose
 # file; a list that missed one would skip a run that must fail. Its checks (`<component> alone`,
-# `compose profiles…`) are not required by the rule of main: a workflow skipped by a path filter
-# leaves a required check « expected » for ever (tests/unit/test_workflows.py holds it). A push to
-# main always runs.
+# `compose profiles…`, `every component alone…`) are not required by the rule of main: a workflow
+# skipped by a path filter leaves a required check « expected » for ever (tests/unit/test_workflows.py
+# holds it). A push to main always runs.
+#
+# CI10b (#581, L11): on a pull request, one job runs them one after the other — each component
+# still alone (component_check.py makes the others absent in its own process, the venv shared), each
+# its own steps, each run whatever the one before it said; then the profiles. Five runners became
+# one per push of a pull request, under the length of ci.yml's tests. On a push to main, each its own
+# job, as before.
 on:
   push:
     branches: [main]
@@ -35,7 +41,9 @@ concurrency:
 jobs:
   component:
     name: ${{ matrix.component }} alone
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -76,10 +84,85 @@ jobs:
 
   profiles:
     name: compose profiles (Glorfindel in each)
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
 
       # docker compose config only: nothing is built, nothing starts.
       - name: Each profile renders its services
+        run: make profiles-check
+
+  # CI10b (L11): the same checks on a pull request, in one job. A component's steps run once what it
+  # needs is there — the install, and ChromaDB's model for Glorfindel alone, the one that reads it —
+  # whatever the component before them said (`!cancelled()`): a red names its component, and every
+  # other one is still said.
+  components:
+    name: every component alone, then the compose profiles
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+
+      # Pinned by commit, the release gate's own (no action added): the matrix above keeps its tags.
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1   # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Restored only, as the release gate does: a pull request's cache is its own, never main's.
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25   # v5.1.0
+        with:
+          path: ~/.cache/chroma
+          key: chroma-onnx-v1
+
+      - name: Install
+        id: install
+        run: |
+          bash scripts/retry.sh python -m pip install --require-hashes -r requirements/dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+
+      # Glorfindel's alone reads it: core, Annatar and Gothmog run on the install alone, so a model
+      # that does not download never skips them, nor hides their red behind its own.
+      - name: ChromaDB's embedding model (fetched when the cache misses, retried)
+        id: model
+        run: bash scripts/retry.sh python scripts/chroma_model.py
+
+      - name: core — every module imports alone
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: python scripts/component_check.py core --imports
+
+      - name: core — its tests pass alone (0 Azure call, 0 LLM call)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: python scripts/component_check.py core
+
+      - name: glorfindel — every module imports alone
+        if: ${{ !cancelled() && steps.model.outcome == 'success' }}
+        run: python scripts/component_check.py glorfindel --imports
+
+      - name: glorfindel — its tests pass alone (0 Azure call, 0 LLM call)
+        if: ${{ !cancelled() && steps.model.outcome == 'success' }}
+        run: python scripts/component_check.py glorfindel
+
+      - name: annatar — every module imports alone
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: python scripts/component_check.py annatar --imports
+
+      - name: annatar — its tests pass alone (0 Azure call, 0 LLM call)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: python scripts/component_check.py annatar
+
+      - name: gothmog — every module imports alone
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: python scripts/component_check.py gothmog --imports
+
+      - name: gothmog — its tests pass alone (0 Azure call, 0 LLM call)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: python scripts/component_check.py gothmog
+
+      # docker compose config only: nothing is built, nothing starts.
+      - name: compose profiles — each renders its services
+        if: ${{ !cancelled() }}
         run: make profiles-check

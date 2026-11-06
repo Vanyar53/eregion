@@ -78,6 +78,9 @@ GATE_STATES = {"failure": "rouge", "cancelled": "annulée", "timed_out": "arrêt
 # their id and their name — release-gate.yml's own, read against it by tests/unit/test_release.py
 # (the total's `INFORMATIVE`, each job's `name:`). Every other job of the run blocks.
 GATE_JOB = "release gate"
+# What _jobs says, first, when the run's jobs cannot be read: on a run still going, that is said,
+# never « en cours » (CI10b, review).
+UNREAD = "les jobs de la porte de release ne se lisent pas"
 INFORMATIVE = {"macos": "tests (macOS, case-insensitive file system — informs, never blocks)"}
 JOB_STATES = {"success": "vert", "failure": "rouge", "cancelled": "annulé", "timed_out": "arrêté à sa borne",
               "skipped": "sauté", "startup_failure": "jamais démarré", "action_required": "en attente d'une approbation",
@@ -626,8 +629,9 @@ def _into_main(root: Path, r: dict, read: dict) -> tuple[bool | None, str]:
 def gate(root: Path, sha: str) -> tuple[bool, str]:
     """(green, what to say): the gate's last run on a commit whose tree is the one of `sha`. The
     tree, not the commit: the version's pull request is squash-merged, its head is never main's
-    commit — but its tree is, when nothing else merged in between. That run must be complete, and
-    green by its jobs, never its conclusion (_jobs, REL3): one running, its total red, cancelled,
+    commit — but its tree is, when nothing else merged in between. That run must be green by its
+    jobs, never its conclusion (_jobs, REL3) — complete, or still going for a job that informs alone
+    (CI10b: the total no longer waits for it): one running otherwise, its total red, cancelled,
     skipped or absent, or a job that blocks not green, refuses; a job that informs is said. A pull
     request's run counts into main only, read after the merge too (_into_main, CI6c); a read that
     fails refuses. Nothing lets a draft past it."""
@@ -668,10 +672,15 @@ def gate(root: Path, sha: str) -> tuple[bool, str]:
             said += (f" : la dernière, {_where(runs[0])}, a un autre arbre — quelque chose a fusionné après "
                      "elle")
         return False, f"{said} ; {GATE_AGAIN}"
-    if r.get("status") != "completed":
-        return False, (f"la porte de release est en cours ({_plain(r.get('status'), 20)}), {_where(r)} : "
-                       "attends-la, verte (30 à 60 minutes)")
     green, said = _jobs(root, r)
+    # CI10b (#581, L7): the total no longer waits for a job that informs — a run still going for
+    # macOS alone (the 0.5.6's had its runner 61 min in) is green once its total and every job that
+    # blocks are; anything else of a run still going is said as such — its jobs unreadable, by why
+    # (the refusal the same: waiting would not read them).
+    if r.get("status") != "completed" and not green:
+        return False, said if said.startswith(UNREAD) else (
+            f"la porte de release est en cours ({_plain(r.get('status'), 20)}), {_where(r)} : "
+            "attends-la, verte (30 à 60 minutes)")
     if not green:
         return False, said
     return True, f"la porte de release est verte sur l'arbre d'origin/main ({tree[:9]}), {_where(r)}{said}"
@@ -691,9 +700,12 @@ def _job_state(job: dict) -> str:
 
 
 def _jobs(root: Path, r: dict) -> tuple[bool, str]:
-    """(green, what to say) of a completed run of the gate, by its jobs — never by its conclusion
-    (REL3, #569: the 0.5.6's macOS, cancelled for want of a runner, set it to failure, every job
-    that blocks green). Read by one GET of the run's jobs, its last attempt's (filter=latest:
+    """(green, what to say) of a run of the gate, by its jobs — never by its conclusion (REL3, #569:
+    the 0.5.6's macOS, cancelled for want of a runner, set it to failure, every job that blocks
+    green). A completed run, or one still going (CI10b: the total no longer waits for a job that
+    informs, so a run may go on for it alone; any job not completed, total or one that blocks, is
+    not green, and its caller says the run still going). A message that starts with UNREAD says the
+    jobs could not be read. Read by one GET of the run's jobs, its last attempt's (filter=latest:
     measured on run 42061905987, after « Re-run failed jobs » its attempt 2 gives the 21 jobs, no
     two of one name, those not re-run copied into it under new ids; of two jobs of the same name
     the later attempt's stands all the same, and two of one name in one attempt refuse). Its

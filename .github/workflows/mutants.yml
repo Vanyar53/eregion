@@ -4,11 +4,16 @@ name: Mutants
 # had (scripts/mutation_check.py). Red as soon as a counted mutant survives a round outside
 # the known survivors, each with its reason (CI6e, #553: `min_caught` before, 14 of 2 850 —
 # it held almost nothing).
-# In the release gate's shards (CI6d, #545): on one runner, the measure outlasted its 180 min
-# bound (02/11) — fourteen shards of the mutants, two of the control set, cut on the durations
-# the gate measured (scripts/mutants/durations.json), then their total, as release-gate.yml:
-# each mutant of the tree measured once, at this budget. 17 jobs: GitHub gives a public
-# repository 20 at once.
+# In shards (CI6d, #545): on one runner, the measure outlasted its 180 min bound (02/11) — fourteen
+# shards of the mutants, two of the control set, cut on the durations the gate measured
+# (scripts/mutants/durations.json), then their total. 17 jobs: GitHub gives a public repository 20
+# at once.
+# CI10b (#581, L13): only the mutants whose target runs an invariant machine (`--machines`), and the
+# control set — the only verdicts a budget moves. A mutant of a deterministic test has the same
+# verdict at 60 sequences as at 1 000, and the release gate measures each mutant of the tree at every
+# release, on the tree it publishes. The total judges those it selected (`--total --machines`): each
+# measured once, at this budget, none surviving a round outside the known survivors. Each shard runs
+# its machine unmutated first (no `--skip-machine-baseline`: no invariant job here proves the base).
 on:
   schedule:
     - cron: "41 4 * * 1"
@@ -25,10 +30,10 @@ permissions:
   contents: read
 
 jobs:
-  # A shard of the gate takes about 45 min at 500 sequences; at 1 000 the invariant machines take
-  # twice as long: 150 leaves room.
+  # The machines' mutants: about 7 h of runner at 500 sequences, about 15 h at 1 000 (CI9) — a shard
+  # of fourteen, about 80 min: 150 leaves room.
   mutants:
-    name: mutants (shard ${{ matrix.shard }}/14)
+    name: machines' mutants (shard ${{ matrix.shard }}/14)
     runs-on: ubuntu-latest
     timeout-minutes: 150
     strategy:
@@ -63,13 +68,13 @@ jobs:
 
       # The inputs go through the environment, never into the script's text (SEC6,
       # tests/unit/test_workflows.py): a value is a value, not shell.
-      - name: Re-introduce each bug of the shard, run its tests
+      - name: Re-introduce each bug of the shard whose target runs a machine, run its tests
         env:
           EXAMPLES: ${{ inputs.examples || '1000' }}
           ROUNDS: ${{ inputs.rounds || '2' }}
           SHARD: ${{ matrix.shard }}
         run: >-
-          python scripts/mutation_check.py --examples "$EXAMPLES" --rounds "$ROUNDS" --jobs 4
+          python scripts/mutation_check.py --examples "$EXAMPLES" --rounds "$ROUNDS" --jobs 4 --machines
           --shard "$SHARD/14" --json "mutants-$SHARD.json"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
@@ -128,12 +133,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The shards put together: each mutant of the tree measured once, at this budget, and none
-  # survived a round outside the known survivors (CI6e) — a known survivor caught is said, to take
-  # off the list. It runs whatever came before, the run cancelled aside: a shard missing (red, or
-  # past its bound) is red here.
+  # The shards put together: each mutant selected (a machine's) measured once, at this budget, and
+  # none survived a round outside the known survivors (CI6e) — a known survivor caught is said, to
+  # take off the list. It runs whatever came before, the run cancelled aside: a shard missing (red,
+  # or past its bound) is red here.
   mutants-total:
-    name: mutants (every shard, the count)
+    name: machines' mutants (every shard, the count)
     needs: [mutants, control]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -147,10 +152,10 @@ jobs:
         with:
           path: mutants-results
 
-      - name: Every mutant measured once, no survivor outside the known ones
+      - name: Every machine's mutant measured once, no survivor outside the known ones
         env:
           EXAMPLES: ${{ inputs.examples || '1000' }}
           ROUNDS: ${{ inputs.rounds || '2' }}
         run: >-
-          python3 scripts/mutation_check.py --total mutants-results --shards 14 --control-shards 2
+          python3 scripts/mutation_check.py --total mutants-results --machines --shards 14 --control-shards 2
           --examples "$EXAMPLES" --rounds "$ROUNDS"

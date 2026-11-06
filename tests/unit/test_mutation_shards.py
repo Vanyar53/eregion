@@ -1253,26 +1253,70 @@ def test_update_drops_a_measure_on_another_target(tree, tmp_path, monkeypatch):
     assert json.loads(path.read_text())["mutants"] == {"M002": 280}
 
 
-def _steps(workflow: str) -> dict:
-    """{job id: the text of its steps' `run`}, of a workflow of this tree."""
+def _jobs(workflow: str) -> dict:
+    """{job id: its definition}, of a workflow of this tree."""
     import yaml
-    doc = yaml.safe_load((ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8"))
-    return {job: "\n".join(str(s.get("run", "")) for s in spec.get("steps", []))
-            for job, spec in doc["jobs"].items()}
+    return yaml.safe_load((ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8"))["jobs"]
+
+
+# CI10b (#581, review of CI10a): the gate's invariant jobs, which prove the base the shards skip.
+GATE_INVARIANTS = ("invariants-azure", "invariants-rest")
+
+
+def _covers(pytest_run: list[str], machine: str) -> bool:
+    """Whether one pytest command runs `machine`: named, or under `tests/`, and never taken out of it
+    by a `--deselect` or an `--ignore` (in either of their spellings)."""
+    removed = any(a.startswith(("--ignore", "--deselect")) and machine in a
+                  or a in ("--ignore", "--deselect") and i + 1 < len(pytest_run) and machine in pytest_run[i + 1]
+                  for i, a in enumerate(pytest_run))
+    return not removed and (machine in pytest_run or "tests/" in pytest_run
+                            or any(machine.startswith(a) and a.endswith("/") for a in pytest_run))
 
 
 def test_a_shard_leaves_the_machines_only_to_a_gate_that_runs_them():
-    """L3 is the gate's alone: a shard that skips the machines' unmutated run sits in a workflow whose
-    `invariants` job runs every machine of the tree on the same tree (the whole suite, or each
-    machine's file by name). The Monday measure has no such job: it never skips them."""
+    """L3 is the gate's alone: a workflow whose shards skip the machines' unmutated run
+    (`--skip-machine-baseline`, sought in the whole text of every job, never the `run` of two alone)
+    has its total wait for both invariant jobs (`invariants-azure`, `invariants-rest`: CI10b), each
+    at 500 sequences at least, and every machine of the tree run by one of them — never taken out by
+    a `--deselect` or an `--ignore` in both. The Monday measure has no such job: the flag is nowhere
+    in it (review of CI10a)."""
+    import yaml
     machines = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "tests").rglob("test_*.py")
                       if mc.MACHINE.search(p.read_text(encoding="utf-8")))
     assert machines == ["tests/unit/test_invariants.py", "tests/unit/test_invariants_aws.py"]
-    gate = _steps("release-gate.yml")
-    if any("--skip-machine-baseline" in run for job, run in gate.items() if job in ("mutants", "control")):
-        pytest_run = next(line for line in gate["invariants"].splitlines() if "-m pytest" in line).split()
-        assert "tests/" in pytest_run or all(m in pytest_run for m in machines), pytest_run
-    assert all("--skip-machine-baseline" not in run for run in _steps("mutants.yml").values())
+    gate = _jobs("release-gate.yml")
+    if any("--skip-machine-baseline" in yaml.safe_dump(spec) for spec in gate.values()):
+        needs = gate["gate"].get("needs") or []
+        assert set(GATE_INVARIANTS) <= set(needs), needs
+        runs = []
+        for name in GATE_INVARIANTS:
+            steps = [s for s in gate[name]["steps"] if "-m pytest" in str(s.get("run") or "")]
+            assert steps, name
+            for step in steps:
+                env = {**(gate[name].get("env") or {}), **(step.get("env") or {})}
+                budget = str(env.get("GLORFINDEL_INVARIANT_EXAMPLES", ""))
+                assert budget.isdigit() and int(budget) >= 500, (name, budget)
+                runs += [line.split() for line in str(step["run"]).splitlines() if "-m pytest" in line]
+        for machine in machines:
+            assert any(_covers(run, machine) for run in runs), (machine, runs)
+    for spec in _jobs("mutants.yml").values():
+        assert "--skip-machine-baseline" not in yaml.safe_dump(spec)
+
+
+@pytest.mark.parametrize("run, machine, covered", [
+    (["python", "-m", "pytest", "tests/"], "tests/unit/test_invariants.py", True),
+    (["python", "-m", "pytest", "tests/", "--ignore=tests/unit/test_invariants.py"], "tests/unit/test_invariants.py",
+     False),
+    (["python", "-m", "pytest", "tests/", "--ignore", "tests/unit/test_invariants.py"],
+     "tests/unit/test_invariants.py", False),
+    (["python", "-m", "pytest", "tests/unit/test_invariants.py", "--deselect",
+      "tests/unit/test_invariants.py::test_isolation_invariants"], "tests/unit/test_invariants.py", False),
+    (["python", "-m", "pytest", "tests/unit/test_invariants.py"], "tests/unit/test_invariants.py", True),
+    (["python", "-m", "pytest", "tests/unit/test_invariants.py"], "tests/unit/test_invariants_aws.py", False),
+    (["python", "-m", "pytest", "tests/unit/"], "tests/unit/test_invariants_aws.py", True),
+])
+def test_what_counts_as_running_a_machine(run, machine, covered):
+    assert _covers(run, machine) is covered
 
 
 # ── CI10a, review: the races on real threads, the control set, narrow's own copies ───────────

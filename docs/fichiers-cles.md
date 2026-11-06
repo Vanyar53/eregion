@@ -331,7 +331,8 @@ scripts/console_escaping.py → #254, #257 : rien du dehors n'est écrit brut da
 scripts/component_check.py → D1 : chaque composant tourne seul — Glorfindel, Annatar, Gothmog et le cœur, leurs
                         modules importés et leurs tests joués avec les autres composants ABSENTS (un chercheur en
                         tête de sys.meta_path), et les dépendances de Glorfindel absentes pour un injecteur ; les
-                        passerelles permises (BRIDGES, CROSSINGS) avec leur raison. CI : components.yml ; tests :
+                        passerelles permises (BRIDGES, CROSSINGS) avec leur raison. CI : components.yml (un job par
+                        composant sur main, un seul job à la suite sur une PR, CI10b) ; tests :
                         tests/unit/test_components.py. Les profils d'usage : docs/profils/, tests/unit/test_profiles.py.
 
 scripts/image_check.py → CI1 : les images de Glorfindel et des injecteurs éprouvées après leur construction — --version,
@@ -339,7 +340,7 @@ scripts/image_check.py → CI1 : les images de Glorfindel et des injecteurs épr
                         les injecteurs ; chaque vérification en docker run --network none. CI : images.yml ; local :
                         make images-check ; tests : tests/unit/test_image_check.py.
 
-scripts/mutant_anchors.py → avant un push (docs/sessions.md) : chaque mutant du harnais et du jeu de contrôle a un
+scripts/mutant_anchors.py → avant un push (docs/sessions.md), et dans ci.yml sur chaque PR et chaque push (CI10b) : chaque mutant du harnais et du jeu de contrôle a un
                         id unique, et le harnais pourra l'appliquer comme son measure() — le fichier à renommer
                         existe, old et new s'apparient, chaque texte est trouvé une seule fois, dans un fichier
                         suivi par git (sinon STALE). Accepte le chemin d'un autre worktree ; sort en 1 sur une faute.

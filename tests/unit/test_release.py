@@ -202,7 +202,7 @@ def _workflow_jobs() -> list[str]:
 
 WORKFLOW_JOBS = _workflow_jobs()
 MACOS_JOB = rel.INFORMATIVE["macos"]
-SHARD_JOB = "mutants (shard 3/14)"
+SHARD_JOB = "mutants (shard 3/10)"
 _JOB_IDS = itertools.count(5000)
 
 
@@ -1201,17 +1201,16 @@ def _gate_with(repo, capsys, jobs, *, run_conclusion="failure"):
 
 
 def test_the_jobs_that_inform_and_the_total_are_the_workflow_s():
-    """One source: release.py's INFORMATIVE is the total's own (its step's INFORMATIVE, by id), each
-    named as the workflow names it; GATE_JOB is the total's name; the total needs every other job,
-    and a job that informs, and only one, has continue-on-error. Every job that is neither blocks."""
+    """One source: release.py's INFORMATIVE are the workflow's jobs that inform — those with
+    continue-on-error, and the only ones the total does not need (CI10b, #581: it no longer waits
+    for them) —, each named as the workflow names it; GATE_JOB is the total's name; the total needs
+    every other job. Every job that is neither blocks."""
     import yaml
     doc = yaml.safe_load((ROOT / ".github" / "workflows" / "release-gate.yml").read_text(encoding="utf-8"))
     jobs = doc["jobs"]
     (total_id,) = [k for k, v in jobs.items() if v["name"] == rel.GATE_JOB]
-    (step,) = [s for s in jobs[total_id]["steps"] if "INFORMATIVE" in (s.get("env") or {})]
-    assert set(step["env"]["INFORMATIVE"].split()) == set(rel.INFORMATIVE)
     assert {k: jobs[k]["name"] for k in rel.INFORMATIVE} == rel.INFORMATIVE
-    assert sorted(jobs[total_id]["needs"]) == sorted(k for k in jobs if k != total_id)
+    assert sorted(jobs[total_id]["needs"]) == sorted(k for k in jobs if k != total_id and k not in rel.INFORMATIVE)
     assert [k for k, v in jobs.items() if v.get("continue-on-error") is True] == list(rel.INFORMATIVE)
     assert MACOS_JOB in WORKFLOW_JOBS and SHARD_JOB in WORKFLOW_JOBS and rel.GATE_JOB in WORKFLOW_JOBS
 
@@ -1231,6 +1230,38 @@ def test_a_job_that_informs_red_cancelled_or_absent_never_holds_the_draft(repo, 
     assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "create"]]
 
 
+@pytest.mark.parametrize("macos", ["in_progress", "queued"])
+def test_a_run_still_going_for_macos_alone_is_green_once_every_job_that_blocks_is(repo, tmp_path, capsys, macos):
+    """CI10b (#581, L7): the total no longer waits for macOS — the 0.5.6's had its runner 61 min in,
+    the run went on 12 min after its last job that blocks. The run still in progress, its total and
+    every job that blocks green: the draft is made, macOS said running."""
+    jobs = [j for j in jobs_of() if j["name"] != MACOS_JOB] + [job(MACOS_JOB, status=macos)]
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, status="in_progress", jobs=jobs))
+    capsys.readouterr()
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    (line,) = [x for x in capsys.readouterr().out.splitlines() if x.startswith("  ✓ la porte de release est verte")]
+    assert line.endswith(f"; informe sans bloquer : « {MACOS_JOB} » en cours ({macos})")
+    assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "create"]]
+
+
+@pytest.mark.parametrize("which", ["total", "shard"])
+def test_a_run_still_going_for_a_job_that_blocks_refuses_as_running(repo, tmp_path, capsys, which):
+    """The run in progress and anything but a job that informs not done — its total, or a job that
+    blocks — refuses: the gate is still running, wait for it."""
+    if which == "total":
+        jobs = jobs_of(total="success", status="in_progress")
+    else:
+        jobs = [j for j in jobs_of() if j["name"] != SHARD_JOB] + [job(SHARD_JOB, status="in_progress")]
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, status="in_progress", run_id=12, jobs=jobs))
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "la porte de release est en cours (in_progress), sur ",
+                  "(https://github.com/o/r/actions/runs/12) : attends-la, verte (30 à 60 minutes)")
+
+
 def test_every_job_green_says_nothing_more_whatever_the_run_s_conclusion(repo, tmp_path, capsys):
     _gate_with(repo, capsys, jobs_of(), run_conclusion="failure")
     assert rel.main(["release-draft", "0.4.4"]) == 0
@@ -1238,8 +1269,10 @@ def test_every_job_green_says_nothing_more_whatever_the_run_s_conclusion(repo, t
     assert line.endswith("(https://github.com/o/r/actions/runs/41)")
 
 
-@pytest.mark.parametrize("name", [SHARD_JOB, "tests, 2 000 invariant sequences (Linux)", "control set (shard 2/2)",
-                                  "mutants (every shard, the count)", "terraform test (release gate)"])
+@pytest.mark.parametrize("name", [SHARD_JOB, "tests, 2 000 invariant sequences — Azure's machine (Linux)",
+                                  "tests, 2 000 invariant sequences — every other test (Linux)",
+                                  "control set (shard 2/2)", "mutants (every shard, the count)",
+                                  "terraform test (release gate)"])
 @pytest.mark.parametrize("conclusion, said", [
     ("failure", "rouge"), ("cancelled", "annulé"), ("skipped", "sauté"), ("timed_out", "arrêté à sa borne"),
 ])
@@ -1341,6 +1374,31 @@ def test_jobs_that_cannot_be_read_refuse(repo, tmp_path, capsys, monkeypatch, se
     _gate_refuses(capsys, tmp_path, "les jobs de la porte de release ne se lisent pas, sur ", said)
 
 
+@pytest.mark.parametrize("raw, said", [
+    (json.dumps({"jobs": [job(rel.GATE_JOB)]}), "la réponse de gh api ne les compte pas (total_count)"),
+    ("not json", "la réponse de gh api n'est pas une liste de jobs"),
+])
+def test_a_run_still_going_whose_jobs_cannot_be_read_says_why(repo, tmp_path, capsys, raw, said):
+    """Review of CI10b: a run still in progress whose jobs cannot be read is refused as before, its
+    error said — never « en cours », which waiting would not mend."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, status="in_progress", run_id=12))
+    _set_answer(tmp_path, "raw_jobs", raw)
+    capsys.readouterr()
+    line = _gate_refuses(capsys, tmp_path, f"{rel.UNREAD}, sur ", said)
+    assert "en cours" not in line
+
+
+def test_every_unreadable_jobs_message_starts_with_unread():
+    """The run still going tells an unreadable answer from a gate still running by this prefix: each
+    message _jobs says of an answer it cannot read starts with it."""
+    import inspect
+    src = inspect.getsource(rel._jobs)
+    unread = re.findall(r'f?"(les jobs de la porte de release[^"]*)', src)
+    assert unread and all(m.startswith(rel.UNREAD) for m in unread), unread
+
+
 @pytest.mark.parametrize("attempt", [1, 2])
 def test_two_jobs_of_one_name_in_one_attempt_refuse(repo, tmp_path, capsys, attempt):
     """filter=latest gives one job per name (measured on run 42061905987): two of one name in one
@@ -1353,8 +1411,9 @@ def test_two_jobs_of_one_name_in_one_attempt_refuse(repo, tmp_path, capsys, atte
 
 
 def test_the_workflow_s_job_names_are_unique():
-    """What the fake GitHub gives, one job per name, as GitHub's attempt does."""
-    assert len(WORKFLOW_JOBS) == len(set(WORKFLOW_JOBS)) == 21
+    """What the fake GitHub gives, one job per name, as GitHub's attempt does — 18 since CI10b (#581):
+    ten shards for fourteen, the tests in two jobs."""
+    assert len(WORKFLOW_JOBS) == len(set(WORKFLOW_JOBS)) == 18
 
 
 def test_99_jobs_still_read(repo, tmp_path, capsys):

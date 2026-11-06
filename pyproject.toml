@@ -74,6 +74,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "pytest-mock>=3.12",
+    "pytest-xdist>=3.6",     # the suite in 4 processes in the CI (CI10b, #581: `-n 4 --dist load`)
     "hypothesis>=6.100",     # invariant tests (tests/unit/test_invariants.py)
     "jsonschema>=4.0",       # experiment + catalog schema validation (tests/unit/test_experiment_schema.py)
     "ruff==0.15.14",

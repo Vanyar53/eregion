@@ -251,16 +251,22 @@ Après I1F, AL1, C2 et A3 (27/10) :
 - **Une carte ancrée** (`control_plane_change`, `identity_change`, `unattributed_signal`, les
   `_ANCHORED_TYPES` du bot) porte sur une VM que la détection ne nomme pas. Elle n'a ni « 🔄 Restore »
   ni commande visant cette VM (seulement `glorfindel ack`), et la console dit « ⚓ filed on …, not about
-  it ».
+  it » — sauf une carte du plan de contrôle ou d'identité d'avant AL1c, ci-dessous.
 - **Une carte sur ce qu'elle vise** (AL1c, #597) : depuis AL1c, une carte du plan de contrôle ou
   d'identité porte sa cible (`target`, `glorfindel/card_target.py`) et n'est plus ancrée sur une VM.
-  La carte dit « 🎯 about NSG nsg-… · règle … · covers vm-a, vm-b », puis ce que la ligne n'a pas
-  pu dire (« limit: … »). Une carte sur un NSG est sur la tuile du NSG **et** sur chaque VM qu'il
+  La carte dit « 🎯 about NSG nsg-… · règle … · covers vm-a, vm-b » (huit VM nommées au plus, puis
+  « and N more » : `_VMS_SHOWN`, comme Discord), puis ce que la ligne n'a pas pu dire
+  (« limit: … »). Une carte sur un NSG est sur la tuile du NSG **et** sur chaque VM qu'il
   couvre, la même carte (un Ack) ; sur un groupe ou sur le plan de contrôle, sa propre tuile
   (`GROUP`, `CONTROL PLANE`, `_TILE_BADGES`) ; une carte d'identité, sur la tuile « Entra ID —
-  identities » (`IDENTITIES`), jamais celle d'une VM. TO JUDGE nomme la cible (« 🎯 NSG … »,
+  identities » (`IDENTITIES`), jamais celle d'une VM. Ces tuiles à part portent un nom avec « : »,
+  qu'aucun nom de VM ne contient (`_ownTile` : `entra:identities`, `group:<id>`, `plane:control`) :
+  jamais une tuile partagée avec une VM nommée `control-plane` ou comme le groupe, et leurs cartes
+  sur elles seules. TO JUDGE nomme la cible (« 🎯 NSG … »,
   « 🎯 Application … »), le verdict par le même chemin. Aucune de ces tuiles ne compte parmi les VM
-  « unprotected » de RECOVER. Une carte d'avant AL1c, sans cible, garde son « ⚓ ».
+  « unprotected » de RECOVER. Une carte d'avant AL1c, sans cible, garde son « ⚓ » et dit « filed on
+  …, may not be about it » (`_FILED_BEFORE`, TO JUDGE de même) : rangée sur la première VM en ligne,
+  ou sur la VM elle-même (un rôle sur la VM), elle ne peut dire laquelle.
 - **Détection seule** (AL1, C2) : la décision vient du code, sans action ni confiance. La carte et
   TO JUDGE donnent son titre, sa règle et sa sévérité (`critical` en rouge) ; le fil dit « escalate →
   control plane » (`held_by` de la ligne de debug).

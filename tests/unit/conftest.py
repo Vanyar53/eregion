@@ -24,6 +24,10 @@ def fake_anthropic_key(monkeypatch):
     otherwise refuse the tests' "/subscriptions/s/..." ids on a configured machine."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake")
     monkeypatch.delenv("AZURE_SUBSCRIPTION_ID", raising=False)
+    # CAN2: the GUIDs a client rule takes from the watch's environment (EREGION_RULE_…, `env_guids`)
+    # never come from the developer's shell — a test sets the one it reads.
+    for name in [n for n in os.environ if n.startswith("EREGION_RULE_")]:
+        monkeypatch.delenv(name)
 
 
 @pytest.fixture(autouse=True)

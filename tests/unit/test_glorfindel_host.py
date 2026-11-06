@@ -681,6 +681,39 @@ def test_check_says_an_entry_that_is_no_object_id_never_its_value(tmp_path, caps
     assert "EREGION_OPERATOR_OBJECT_ID" not in err and "EREGION_IDENTITY_EXECUTOR_CLIENT_ID" not in err
 
 
+# ── CAN2 (#605) : l'appid du canari azurerm, à la watch et à la console ─────────────────────
+CANARY_APP = "00000000-0000-0000-0000-00000000ca17"     # placeholder, never a real id
+
+
+def test_the_canary_s_appid_reaches_the_watch_and_the_console_alone():
+    """The bench's copy of nsg-change-outside-glorfindel takes it from the watch's environment; the
+    console shows the rules as the watch loads them. Copied from the operator's environment into
+    host.env like the rest; neither the bot nor the injectors receive it."""
+    operator = {"AZURE_SUBSCRIPTION_ID": "sub", "ANTHROPIC_API_KEY": "fake-key", "EREGION_RULE_CANARY_APPID": CANARY_APP}
+    dotenv = host_env.host_env(operator)
+    assert dotenv["EREGION_RULE_CANARY_APPID"] == CANARY_APP
+    rendered = {s: {k: _interpolate(v, dotenv) for k, v in e.items()} for s, e in _compose_env().items()}
+    assert {s for s, e in rendered.items() if CANARY_APP in e.values()} == {"watch", "war-room"}
+    assert "EREGION_RULE_CANARY_APPID" not in host_env.host_env({k: v for k, v in operator.items()
+                                                                 if k != "EREGION_RULE_CANARY_APPID"})
+
+
+@pytest.mark.parametrize("value, said", [
+    (CANARY_APP, False), (f'"{CANARY_APP}"', False), ("", False),
+    ("fake-not-a-guid", True), (CANARY_APP + "0", True),
+])
+def test_check_says_a_canary_appid_that_is_no_guid_never_its_value(tmp_path, capsys, value, said):
+    path = tmp_path / "host.env"
+    path.write_text("EREGION_CONSOLE_TOKEN=fake-token\nANTHROPIC_API_KEY=fake-key\n"
+                    f"EREGION_OPERATOR_OBJECT_ID={OPERATOR_OID}\nEREGION_PROTECTED_IDENTITIES={H0_OID}\n"
+                    f"EREGION_IDENTITY_EXECUTOR_CLIENT_ID={EXECUTOR_APP}\n"
+                    f"EREGION_RULE_CANARY_APPID={value}\n", encoding="utf-8")
+    assert host_env.check(str(path)) == 0                      # never refused
+    err = capsys.readouterr().err
+    assert ("EREGION_RULE_CANARY_APPID n'est pas un GUID" in err) is said
+    assert "fake-" not in err and (not value or value not in err)
+
+
 def test_main_reads_the_list_as_the_watch_receives_it(tmp_path, monkeypatch, capsys):
     """Review 5b: `terraform output` without `-raw` gives the list quoted — what compose unwraps.
     Written unwrapped, it is neither refused nor said as a typo, and the watch reads it whole."""

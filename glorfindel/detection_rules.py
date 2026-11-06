@@ -446,6 +446,10 @@ def _invalid_client_entry(key: str, entry) -> str | None:
     if sha is not None and not _is_sha256(sha):
         # Skipped, the base rule of its name loads instead, if it is not disabled (WL1).
         return "`base_sha256` n'est pas une empreinte sha256 (64 caractères hexadécimaux)"
+    if "env_guids" in entry and not _env_guid_names(entry["env_guids"]):
+        # CAN2: what the query may take from the environment, named strictly — else nothing.
+        return ("`env_guids` n'est pas une liste de noms de variables "
+                f"{ENV_GUID_PREFIX}… (majuscules, chiffres, _)")
     if not isinstance(entry.get("enabled", True), bool):
         return "`enabled` n'est ni true ni false"
     for field_, convert in (("interval_s", float), ("expected_latency_s", int)):
@@ -541,6 +545,79 @@ def _drift(base_rules: dict[str, dict], client: dict) -> tuple[dict, list[str], 
         else:
             kept.append(entry)
     return {**client, "rules": kept}, list(dict.fromkeys(names)), notes
+
+
+# CAN2 (#605): an identifier a client rule takes from the watch's environment, never from the
+# repository — the bench's canary principal (its appid), excluded from one rule. Only variables of
+# this prefix, only declared by the rule (`env_guids:`), only into its query, only a GUID.
+ENV_GUID_PREFIX = "EREGION_RULE_"
+_ENV_GUID_NAME = re.compile(r"EREGION_RULE_[A-Z0-9_]+")
+_GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def _env_guid_names(value) -> list[str]:
+    """The variables a rule's `env_guids` names; [] when it is not a non-empty list of names."""
+    if not (isinstance(value, list) and value
+            and all(isinstance(v, str) and _ENV_GUID_NAME.fullmatch(v) for v in value)):
+        return []
+    return list(value)
+
+
+def env_guid(environ, name: str) -> str | None:
+    """The variable `name` of `environ` as a GUID, lowercase — None when it is absent, empty, or
+    anything else than a GUID: no other character ever reaches a query (KQL injection)."""
+    value = str(environ.get(name) or "").strip()
+    return value.lower() if _GUID.fullmatch(value) else None
+
+
+def _env_guids(base_rules: dict[str, dict], client: dict, environ) -> tuple[dict, list[str]]:
+    """CAN2: the client's layer, each `${VAR}` its rules declare (`env_guids:`) replaced in their
+    query by the variable's value → (layer, notes).
+
+    The value is read from the watch's environment, checked to be a GUID, and written in the query
+    lowercase; nothing else of the query is expanded (SEC2). A variable absent, empty or not a GUID:
+    the rule is set aside, said, and the shipped rule of its name loads in its place — more cards,
+    never fewer. If that shipped rule would not load (none of that name, `enabled: false`, in the
+    layer's `disable`, or its name held by another entry of the layer), the rule is kept with its
+    `${VAR}` left as written, which equals no identifier, and said: a technique is never left
+    undetected. Never the value in a note."""
+    rules = client.get("rules")
+    if not isinstance(rules, list):
+        return client, []
+    disable = client.get("disable")
+    off = {n for n in disable if isinstance(n, str) and n.strip()} if isinstance(disable, list) else set()
+    held = [e["name"] for e in rules if isinstance(e, dict) and isinstance(e.get("name"), str)]
+    kept: list = []
+    notes: list[str] = []
+    for entry in rules:
+        if (_invalid_client_entry("rules", entry) is not None or "env_guids" not in entry
+                or entry.get("enabled", True) is not True):
+            kept.append(entry)          # merge_layers says what it skips; a disabled rule disables
+            continue
+        names = _env_guid_names(entry["env_guids"])
+        values = {n: env_guid(environ, n) for n in names}
+        wrong = [n for n, v in values.items() if v is None]
+        if not wrong:
+            query = entry["query"]
+            for n, v in values.items():
+                query = query.replace("${" + n + "}", v)
+            kept.append({**entry, "query": query})
+            continue
+        name = entry["name"]
+        said = ", ".join(wrong)
+        base = base_rules.get(name)
+        if base is not None and base.get("enabled", True) and name not in off and held.count(name) == 1:
+            notes.append(f"règle du client « {name} » ignorée : {said} absente, vide ou pas un GUID dans "
+                         "l'environnement de la watch — la règle livrée tourne à sa place (ce que la "
+                         "règle du client écartait refait des cartes) ; poser la variable, puis "
+                         "redémarrer la watch")
+            continue                    # the shipped rule of its name loads
+        notes.append(f"règle du client « {name} » : {said} absente, vide ou pas un GUID dans "
+                     "l'environnement de la watch, et aucune règle livrée ne tournerait à sa place — "
+                     "elle tourne, sa variable non remplacée (elle ne vaut aucun identifiant) ; "
+                     "poser la variable, puis redémarrer la watch")
+        kept.append(entry)
+    return {**client, "rules": kept}, notes
 
 
 def _entry_label(entry) -> str:
@@ -651,7 +728,8 @@ def _log_notes(notes: list[str]) -> None:
             logger.warning("detection rules: %s", note)
 
 
-def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path | bool = True) -> DetectionConfig:
+def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path | bool = True,
+                environ=None) -> DetectionConfig:
     """Load detection configuration from YAML: the shipped base at `path`, then the
     client's layer over it (P1, `client_rules_path()`; `client_layer=False`: the base
     alone; a path: that file as the client's layer).
@@ -689,6 +767,11 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
             # WL1: a stale copy of a base rule set aside before the merge — the shipped rule loads.
             base_rules = {r["name"]: r for r in _named(data.get("rules"))}
             client, drifted, more = _drift(base_rules, client)
+            notes += more
+            # CAN2: a GUID from the watch's environment into the rules that declare it, or the
+            # shipped rule in their place (`environ`: os.environ unless given).
+            import os
+            client, more = _env_guids(base_rules, client, os.environ if environ is None else environ)
             notes += more
             data, more, layer_of = merge_layers(data, client)
             notes += more

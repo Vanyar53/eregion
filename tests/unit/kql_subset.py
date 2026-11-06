@@ -5,9 +5,10 @@ Only what the Syslog rules use: a table, then `where`, `extend`, `summarize` (`a
 alone, or `name = count()`, `countif(p)`, `min(col)`, `max(col)`, `take_any(col)`,
 `make_set_if(col, p, n)` — AUD1 —, several of them), `project`, `order by`, `limit`; predicates
 `==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`, `!has`, `in (…)`, `matches regex`, `startswith`,
-`endswith` (both case-insensitive, as in KQL — WL1),
-`and`, `or`, `not(…)`; functions `ago()`, `extract()`, `isnotempty()`, `isnotnull()`, `toint()`,
-`tolong()`, `tostring()`. Anything
+`endswith` (both case-insensitive, as in KQL — WL1), `contains`, `!contains`, `in~ (…)`, `!in~ (…)`
+(case-insensitive — CAN2), `and`, `or`, `not(…)`; functions `ago()`, `extract()`, `isnotempty()`,
+`isnotnull()`, `toint()`, `tolong()`, `tostring()`, `parse_json()` and a member of what it gives,
+`.name` or `["name"]` (CAN2: the `Claims` of AzureActivity). Anything
 else raises NotImplementedError: a rule this reader cannot follow fails its test, never
 passes it by accident. `has` is KQL's term match (case-insensitive, at term boundaries);
 regexes are read by Python's `re` in ASCII mode (`\\d` is 0–9 only, as in RE2: AUD1's review —
@@ -17,6 +18,7 @@ Analytics, never narrower (WL1).
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -27,7 +29,7 @@ _TOKEN = re.compile(r"""
   | (?P<str>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')
   | (?P<span>\d+(?:\.\d+)?(?:d|h|m|s|ms|min|days?|hours?|minutes?|seconds?)\b)
   | (?P<num>\d+(?:\.\d+)?)
-  | (?P<op>==|!=|>=|<=|=~|!has\b|!contains\b|[|(),=<>*])
+  | (?P<op>==|!=|>=|<=|=~|!in~|in~|!has\b|!contains\b|[|(),=<>*.\[\]])
   | (?P<ident>[A-Za-z_][A-Za-z0-9_]*)
 """, re.VERBOSE)
 
@@ -150,6 +152,21 @@ class _Parser:
             self.take()
             right = self.primary()
             return lambda r: str(left(r) or "").lower().startswith(str(right(r)).lower())
+        if op in ("contains", "!contains") and tok[0] in ("ident", "op"):
+            self.take()
+            right = self.primary()
+            neg = op == "!contains"
+            return lambda r: (str(right(r)).lower() in str(left(r) or "").lower()) != neg
+        if op in ("in~", "!in~") and tok[0] == "op":
+            self.take()
+            self.take("op", "(")
+            items = [self.primary()]
+            while self.at(","):
+                self.take()
+                items.append(self.primary())
+            self.take("op", ")")
+            neg = op == "!in~"
+            return lambda r: (str(left(r) or "").lower() in [str(f(r)).lower() for f in items]) != neg
         if op == "endswith" and tok[0] == "ident":
             self.take()
             right = self.primary()
@@ -187,9 +204,21 @@ class _Parser:
         if kind == "ident":
             self.take()
             if self.at("("):
-                return self.call(text)
+                return self.member(self.call(text))
             return lambda r, c=text: r.get(c)
         raise NotImplementedError(f"KQL subset: unexpected {text!r}")
+
+    def member(self, f):
+        """`.name` and `["name"]` after a call (parse_json(…).appid): the member of a dynamic
+        value, None when it is no object or has no such member (CAN2)."""
+        while self.peek() in (("op", "."), ("op", "[")):
+            if self.take()[1] == ".":
+                key = self.take("ident")[1]
+            else:
+                key = self.take("str")[1]
+                self.take("op", "]")
+            f = (lambda g, k: lambda r: g(r).get(k) if isinstance(g(r), dict) else None)(f, key)
+        return f
 
     def args(self):
         self.take("op", "(")
@@ -236,6 +265,18 @@ class _Parser:
                 except (TypeError, ValueError):
                     return None
             return toint
+        if name == "parse_json":
+            (_, f), = args
+
+            def parse_json(r):
+                v = f(r)
+                if not isinstance(v, str):
+                    return v
+                try:
+                    return json.loads(v)
+                except ValueError:
+                    return v
+            return parse_json
         if name == "tostring":
             (_, f), = args
             return lambda r: "" if f(r) is None else str(f(r))
@@ -297,20 +338,14 @@ def _summarize(p: _Parser, rows: list[dict]) -> list[dict]:
         p.take("op", ",")
         p.take("op", "*")
         p.take("op", ")")
-        agg = ("arg_max", key, None)
-    else:
-        aggs = []
-        while True:
-            name = p.take("ident")[1]
-            p.take("op", "=")
-            fn = p.take("ident")[1]
-            if fn not in _AGGREGATES:
-                raise NotImplementedError(f"KQL subset: aggregation {fn}()")
-            aggs.append((name, fn, [f for _, f in p.args()]))
-            if not p.at(","):
-                break
+        # `arg_max(col, *), name = agg(…)…` (CAN2: the Run Command rule's `Started = min(…)`).
+        more = []
+        if p.at(","):
             p.take()
-        agg = ("aggs", None, aggs)
+            more = _aggs(p)
+        agg = ("arg_max", key, more)
+    else:
+        agg = ("aggs", None, _aggs(p))
     p.take("ident", "by")
     by = [p.take("ident")[1]]
     while p.at(","):
@@ -325,8 +360,25 @@ def _summarize(p: _Parser, rows: list[dict]) -> list[dict]:
             out.append({**dict(zip(by, k)), **{name: _AGGREGATES[fn](members, *fs) for name, fn, fs in agg[2]}})
         else:
             best = max(members, key=lambda r: r.get(agg[1]))
-            out.append({**best, **dict(zip(by, k))})
+            out.append({**best, **dict(zip(by, k)),
+                        **{name: _AGGREGATES[fn](members, *fs) for name, fn, fs in agg[2]}})
     return out
+
+
+def _aggs(p: _Parser) -> list:
+    """`name = fn(…)`, separated by commas: [(name, fn, [arguments])]."""
+    aggs = []
+    while True:
+        name = p.take("ident")[1]
+        p.take("op", "=")
+        fn = p.take("ident")[1]
+        if fn not in _AGGREGATES:
+            raise NotImplementedError(f"KQL subset: aggregation {fn}()")
+        aggs.append((name, fn, [f for _, f in p.args()]))
+        if not p.at(","):
+            break
+        p.take()
+    return aggs
 
 
 def _min(members, f):

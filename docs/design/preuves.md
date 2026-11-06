@@ -1025,6 +1025,22 @@ attrapés de même.
 | M4369 | copie périmée écartée malgré une autre entrée du même nom | une entrée `enabled: false` gagne : plus rien ne détecte |
 | M4395 | une copie invalide lue pour la dérive | une note de dérive pour une règle ignorée |
 
+### Le canari azurerm hors de `nsg-change-outside-glorfindel` (CAN2)
+
+La copie du banc (`infra/glorfindel-host/client_rules.bench.yaml`) écarte une opération sur un NSG
+quand le groupe est `rg-eregion-canary` **et** l'appelant le principal du canari, son appid pris
+dans l'environnement de la watch (`env_guids`, `_env_guids` de `glorfindel/detection_rules.py`),
+un GUID ou rien. Un mutant par propriété, mesurés par `tests/unit/test_canary_exclusion.py` sur
+des lignes d'AzureActivity (Start, Accept, Success), tous attrapés (06/11), un seul tour (CI10a).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M4360 | le GUID jamais mis dans la requête | les runs du canari font toujours leurs cartes |
+| M4361 | l'exclusion prend tout appelant qui a une application | un autre principal dans le groupe sans carte |
+| M4362 | l'exclusion dans tout groupe | le canari ailleurs sans carte |
+| M4363 | la variable absente mise à vide (`=~ ""`) | un appelant sans appid dans le groupe sans carte |
+| M4364 | toute valeur de la variable dans la requête | une injection KQL (`" or 1 == 1 or "`) élargit l'exclusion |
+
 ### Annatar et Gothmog exigent Glorfindel (V1)
 
 Avant chaque run, et avant tout appel au cloud, l'injecteur lit le battement de la watch

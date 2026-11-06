@@ -337,9 +337,11 @@ fichier reste), jusqu'au retour à une référence avec P1.
 ### La couche du client du banc (WL1)
 
 Les règles que le dépôt tient pour le banc sont dans `infra/glorfindel-host/client_rules.bench.yaml`.
-Aujourd'hui une seule : `sudo-privilege-escalation`, la règle livrée recopiée, sans la maintenance
+Aujourd'hui deux : `sudo-privilege-escalation`, la règle livrée recopiée, sans la maintenance
 programmée de bree (décision de Jonathan, 06/11 ; `docs/glorfindel.md`, « La maintenance
-programmée de bree »). Rien ne les pose seul sur H0 : ni le CD, ni `glorfindel-host-push`, ni
+programmée de bree ») ; et `nsg-change-outside-glorfindel`, la règle livrée recopiée, sans les runs
+du canari azurerm dans `rg-eregion-canary` sous son propre principal (CAN2, #605, décision de
+Jonathan du 06/11 ; `docs/glorfindel.md`, « Le canari azurerm »). Rien ne les pose seul sur H0 : ni le CD, ni `glorfindel-host-push`, ni
 `glorfindel-host-start`. Le geste est celui de Jonathan, depuis le poste, **une fois déployée une
 release qui contient WL1** (avant, la watch ne connaît pas `base_sha256` : elle charge la
 copie, même périmée, sans jamais dire sa dérive). Une couche de H0 qui tiendrait encore une copie
@@ -370,6 +372,34 @@ make glorfindel-host-client-rules
   `sudo-privilege-escalation` doit y être en `client (remplace)`, avec la note « remplacée par
   celle de la couche du client », et aucune ligne « copie périmée ».
 - `CLIENT_RULES=<fichier>` pousse un autre fichier, de la même forme (`rules:` seulement).
+
+**Le canari azurerm (CAN2)** : la copie de `nsg-change-outside-glorfindel` prend l'appid du
+principal du canari dans l'environnement de la watch, jamais dans le dépôt (`env_guids:
+[EREGION_RULE_CANARY_APPID]`, vérifié GUID au chargement). Le geste de Jonathan, **une fois
+déployée une release qui contient CAN2** (avant, la watch ne connaît pas `env_guids` : la copie
+charge son `${…}` tel quel, l'exclusion ne tient jamais, et le canari garde ses cartes — rien de
+caché), depuis le poste :
+
+```bash
+# 1. L'appid du principal du canari (le même que le secret CANARY_AZURE_CLIENT_ID de
+#    l'environnement `canary` du dépôt) — dans host.env de H0, jamais dans le dépôt :
+az ad sp list --display-name eregion-canary --query "[0].appId" -o tsv
+#    → une ligne EREGION_RULE_CANARY_APPID=<appid> ajoutée à la main à infra/glorfindel-host/host.env
+#      (un host.env neuf la recopie de .envrc ; `make glorfindel-host-env` ne réécrit jamais l'existant)
+make glorfindel-host-push        # host.env → ~/eregion/.env ; --check dit une valeur qui n'est pas un GUID
+# 2. La watch et la console la reçoivent : recréées (un `restart` ne relit pas ~/eregion/.env) :
+make glorfindel-host-ssh         # puis, sur H0 : cd eregion && docker compose up -d watch war-room
+# 3. La copie dans la couche du client de H0 ; la watch redémarre et `glorfindel rules` s'affiche :
+make glorfindel-host-client-rules
+```
+
+`glorfindel rules` doit montrer `nsg-change-outside-glorfindel` en `client (remplace)`, avec la
+note « remplacée par celle de la couche du client », et **aucune** note « EREGION_RULE_CANARY_APPID
+absente, vide ou pas un GUID ». Avec cette note, la variable manque à la watch : la copie est
+écartée, la règle livrée tourne (les cartes du canari reviennent) — reprendre les étapes 1 et 2.
+La cible le rappelle : sa relecture sur le poste prend un GUID de remplacement (l'appid de H0 n'y
+est jamais) et dit que la watch de H0 en a besoin. Pour revenir aux cartes du canari : vider la
+variable (étapes 1 et 2), ou retirer la règle de la couche de H0.
 
 **Après une mise à jour de Glorfindel**, si une règle livrée recopiée a changé (n'importe quel
 champ : l'empreinte `base_sha256` est celle de la règle entière), la watch **écarte la copie** et

@@ -80,7 +80,7 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
      sections publiées restent intactes. Un fragment ne bouge jamais à la fusion : c'est son intérêt.
    - Puis lance :
      - `ruff check .` ;
-     - la suite complète ;
+     - la suite complète (`pytest -n 4` au plus : plus bas, « La charge du poste ») ;
      - `python scripts/mutant_anchors.py`, qui vérifie, jeu de contrôle compris, que chaque mutant a un
        id unique et que le harnais pourra l'appliquer (son texte présent une seule fois, dans un fichier
        suivi), et que la garde `if __name__ == "__main__"` reste la dernière instruction de
@@ -311,7 +311,8 @@ Code lancées dans `~/eregion` basculent. Ce sont tes fichiers : une session ne 
        "EREGION_AGENT_SESSION": "1",
        "GIT_CONFIG_GLOBAL": "/home/<toi>/.config/eregion-agents/gitconfig",
        "GIT_TERMINAL_PROMPT": "0",
-       "GH_CONFIG_DIR": "/home/<toi>/.config/eregion-agents/gh"
+       "GH_CONFIG_DIR": "/home/<toi>/.config/eregion-agents/gh",
+       "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no"
      }
    }
    ```

@@ -2,11 +2,13 @@
 as written, on lines the test writes (SEC2). No Log Analytics, no Azure.
 
 Only what the Syslog rules use: a table, then `where`, `extend`, `summarize` (`arg_max(col, *)`
-alone, or `name = count()`, `countif(p)`, `min(col)`, `max(col)`, `take_any(col)`,
-`make_set_if(col, p, n)` — AUD1 —, several of them), `project`, `order by`, `limit`; predicates
-`==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`, `!has`, `in (…)`, `matches regex`, `startswith`,
-`and`, `or`, `not(…)`; functions `ago()`, `extract()`, `isnotempty()`, `isnotnull()`, `toint()`,
-`tolong()`, `tostring()`. Anything
+alone or followed by named aggregations — AL2 —, or `name = count()`, `countif(p)`, `min(col)`,
+`max(col)`, `take_any(col)`, `make_set_if(col, p, n)` — AUD1 —, several of them), `project`,
+`order by`, `limit`; predicates `==`, `!=`, `=~`, `!~`, `<`, `<=`, `>`, `>=`, `has`, `!has`,
+`in (…)`, `in~ (…)`, `!in~ (…)`, `matches regex`, `startswith`, `and`, `or`, `not(…)`; functions
+`ago()`, `extract()`, `isnotempty()`, `isnotnull()`, `toint()`, `tolong()`, `tostring()`,
+`parse_json()` with a member (`.appid`) or an index (`["…"]`) — the Activity Log's `Claims`, AL2.
+Anything
 else raises NotImplementedError: a rule this reader cannot follow fails its test, never
 passes it by accident. `has` is KQL's term match (case-insensitive, at term boundaries);
 regexes are read by Python's `re` in ASCII mode (`\\d` is 0–9 only, as in RE2: AUD1's review —
@@ -14,6 +16,7 @@ regexes are read by Python's `re` in ASCII mode (`\\d` is 0–9 only, as in RE2:
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -24,7 +27,7 @@ _TOKEN = re.compile(r"""
   | (?P<str>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')
   | (?P<span>\d+(?:\.\d+)?(?:d|h|m|s|ms|min|days?|hours?|minutes?|seconds?)\b)
   | (?P<num>\d+(?:\.\d+)?)
-  | (?P<op>==|!=|>=|<=|=~|!has\b|!contains\b|[|(),=<>*])
+  | (?P<op>==|!=|>=|<=|=~|!~|!in~|in~|!has\b|!contains\b|[|(),=<>*.\[\]])
   | (?P<ident>[A-Za-z_][A-Za-z0-9_]*)
 """, re.VERBOSE)
 
@@ -128,12 +131,13 @@ class _Parser:
         left = self.primary()
         tok = self.peek()
         op = tok[1]
-        if op in ("==", "!=", "=~", ">=", "<=", ">", "<") and tok[0] == "op":
+        if op in ("==", "!=", "=~", "!~", ">=", "<=", ">", "<") and tok[0] == "op":
             self.take()
             right = self.primary()
             ops = {"==": lambda a, b: a == b, "!=": lambda a, b: a != b,
                    # KQL's case-insensitive equality, on strings (COR2: a resource id).
                    "=~": lambda a, b: isinstance(a, str) and isinstance(b, str) and a.lower() == b.lower(),
+                   "!~": lambda a, b: not (isinstance(a, str) and isinstance(b, str) and a.lower() == b.lower()),
                    ">=": lambda a, b: a is not None and a >= b, "<=": lambda a, b: a is not None and a <= b,
                    ">": lambda a, b: a is not None and a > b, "<": lambda a, b: a is not None and a < b}
             f = ops[op]
@@ -156,6 +160,21 @@ class _Parser:
                 items.append(self.primary())
             self.take("op", ")")
             return lambda r: left(r) in [f(r) for f in items]
+        if op in ("in~", "!in~") and tok[0] == "op":
+            # KQL's case-insensitive membership, on strings (AL2: an operation's name, a status).
+            self.take()
+            self.take("op", "(")
+            items = [self.primary()]
+            while self.at(","):
+                self.take()
+                items.append(self.primary())
+            self.take("op", ")")
+            neg = op == "!in~"
+
+            def within(r):
+                v = left(r)
+                return isinstance(v, str) and v.lower() in [str(f(r)).lower() for f in items]
+            return lambda r: within(r) != neg
         if op == "matches" and tok[0] == "ident":
             self.take()
             self.take("ident", "regex")
@@ -180,9 +199,20 @@ class _Parser:
         if kind == "ident":
             self.take()
             if self.at("("):
-                return self.call(text)
+                return self.access(self.call(text))
             return lambda r, c=text: r.get(c)
         raise NotImplementedError(f"KQL subset: unexpected {text!r}")
+
+    def access(self, f):
+        """`.member` and `["key"]` after a call (`parse_json(Claims).appid`): None when absent."""
+        while self.at(".") or self.at("["):
+            if self.take()[1] == ".":
+                key = self.take("ident")[1]
+            else:
+                key = self.take("str")[1]
+                self.take("op", "]")
+            f = (lambda g, k: lambda r: g(r).get(k) if isinstance(g(r), dict) else None)(f, key)
+        return f
 
     def args(self):
         self.take("op", "(")
@@ -229,6 +259,18 @@ class _Parser:
                 except (TypeError, ValueError):
                     return None
             return toint
+        if name == "parse_json":
+            (_, f), = args
+
+            def parse_json(r):
+                v = f(r)
+                if isinstance(v, str):
+                    try:
+                        return json.loads(v)
+                    except ValueError:
+                        return None
+                return v
+            return parse_json
         if name == "tostring":
             (_, f), = args
             return lambda r: "" if f(r) is None else str(f(r))
@@ -283,16 +325,17 @@ def run(query: str, rows: list[dict], now: datetime | None = None) -> list[dict]
 
 
 def _summarize(p: _Parser, rows: list[dict]) -> list[dict]:
+    arg_max, aggs = None, []
     if p.peek()[1] == "arg_max":
         p.take()
         p.take("op", "(")
-        key = p.take("ident")[1]
+        arg_max = p.take("ident")[1]
         p.take("op", ",")
         p.take("op", "*")
         p.take("op", ")")
-        agg = ("arg_max", key, None)
-    else:
-        aggs = []
+    if arg_max is None or p.at(","):
+        if arg_max is not None:
+            p.take()
         while True:
             name = p.take("ident")[1]
             p.take("op", "=")
@@ -303,7 +346,6 @@ def _summarize(p: _Parser, rows: list[dict]) -> list[dict]:
             if not p.at(","):
                 break
             p.take()
-        agg = ("aggs", None, aggs)
     p.take("ident", "by")
     by = [p.take("ident")[1]]
     while p.at(","):
@@ -314,11 +356,9 @@ def _summarize(p: _Parser, rows: list[dict]) -> list[dict]:
         groups.setdefault(tuple(r.get(c) for c in by), []).append(r)
     out = []
     for k, members in groups.items():
-        if agg[0] == "aggs":
-            out.append({**dict(zip(by, k)), **{name: _AGGREGATES[fn](members, *fs) for name, fn, fs in agg[2]}})
-        else:
-            best = max(members, key=lambda r: r.get(agg[1]))
-            out.append({**best, **dict(zip(by, k))})
+        best = max(members, key=lambda r: r.get(arg_max)) if arg_max is not None else {}
+        out.append({**best, **dict(zip(by, k)),
+                    **{name: _AGGREGATES[fn](members, *fs) for name, fn, fs in aggs}})
     return out
 
 

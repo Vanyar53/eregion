@@ -58,6 +58,14 @@ Tu es spécialisé sur l'agent offensif. Lis ce fichier en début de session.
 - **R2 (0.x)** : adaptateur Stratus Red Team (cycle `warmup`, `detonate`, `revert`, `cleanup`),
   avec l'ingestion des Activity Logs : Stratus attaque le plan de contrôle, que Glorfindel ne lit
   pas encore, et son `warmup` crée sa propre VM.
+  - **R2a (Partie de #79, code) ✅** : `annatar/engines/stratus.py` (binaire épinglé `annatar/stratus/PIN`
+    vérifié **avant chaque phase**, liste fermée au catalogue `azure_control_plane`, fail-closed, zone
+    `bench` seule, tag `annatar-test` hérité refusé), exécuteur injecteur `annatar/executors/stratus_host.py`
+    (cycle journalisé par Orodruin, cleanup toujours joué, revert après détonation, sonde Graph lecture
+    seule, hors-ligne via `airgap_env`), dispatch `Engine._run_stratus`. Tests hermétiques
+    (`tests/unit/test_annatar_stratus.py`), mutants M4315–M4354. La remontée réelle au banc (détection
+    `azure_activity`) reste **ID1 (#281)** ; la question « Stratus crée-t-il son propre groupe ? » est
+    une condition d'entrée d'ID1.
 - **Marquage des exercices (B2, ✅ côté stockage 16/10)** : `Engine.run` ouvre une fenêtre
   (`eregion_core/exercise.py`, `runs/annatar/exercises/<run_id>.json`) avant le setup et la ferme dans
   un `finally` ; Glorfindel en tire la source de chaque cycle (`exercise` / `real`). Tout futur

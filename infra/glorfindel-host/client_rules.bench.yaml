@@ -1,0 +1,60 @@
+# La couche du client du banc (WL1, #595) : les règles que le Glorfindel hébergé (H0) charge
+# par-dessus la base livrée, dans son ~/.glorfindel/client_rules.yaml. Jamais copiée telle quelle
+# sur H0 : `make glorfindel-host-client-rules` y fond chacune de ces règles, par son nom, à côté
+# des règles approuvées sur H0 (infra/glorfindel-host/README.md, « La couche du client du banc »).
+#
+# Ces commentaires ne survivent pas à la fusion (la couche est réécrite) : ce qu'il faut savoir
+# d'une règle est dans sa description et dans les commentaires de sa requête.
+#
+# sudo-privilege-escalation : la règle livrée (glorfindel/rules/azure/detection_rules.yaml),
+# recopiée à l'identique, plus une exclusion — la maintenance programmée de bree
+# (infra/terraform/scripts/workload.sh). Décision de Jonathan, 06/11. `base_sha256` est
+# l'empreinte de la règle livrée entière d'où vient la copie (detection_rules.base_rule_sha256) :
+# quand la base change, la watch écarte la copie et dit la dérive — la règle livrée tourne, et la
+# carte de la maintenance de bree revient ; tests/unit/test_bench_routine.py échoue tant que la
+# copie n'est pas refaite.
+# Aucun identifiant réel : le nom de bree et de son groupe sont ceux du banc, déjà dans le dépôt.
+
+rules:
+  - name: sudo-privilege-escalation
+    description: "Successful sudo to root by a non-root user — T1548.003 (banc : sans la maintenance programmée de bree, WL1)"
+    enabled: true
+    ttp: T1548.003
+    assets: [auto]
+    interval_s: 30
+    expected_latency_s: 480
+    base_sha256: 16dadd6722068e4a77c64b6f7e431f63db2a5cdf198887bea82f8a4bf829dd0a
+    query: |
+      Syslog
+      // sudo logs to authpriv (measured under AMA); auth kept for the hosts that route it there.
+      | where Facility in ("auth", "authpriv")
+      | where TimeGenerated > ago(10m)
+      // Lines tagged sudo only (SEC2), in sudo's form: `<user> : TTY=… ; PWD=… ; USER=root ;
+      // … COMMAND=…` (TTY absent without a terminal). The fields are separated by « ; » or,
+      // as the agent writes them, by spaces. A failure (`3 incorrect password attempts ; …`)
+      // is no escalation.
+      | where ProcessName == "sudo"
+      | where SyslogMessage has "USER=root"
+            and SyslogMessage has "COMMAND="
+      | where SyslogMessage matches regex @"^\s*\S+ : (TTY|PWD)=(.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND="
+      | where SyslogMessage !has "NOT in sudoers"
+            and SyslogMessage !has "authentication failure"
+      // WL1 (#595), the bench only: bree's scheduled maintenance (infra/terraform/scripts/workload.sh,
+      // /etc/cron.d/eregion-workload), benign noise kept on purpose for H0's pre-observation. Set
+      // aside only when everything holds: bree (its host name and its resource), the account
+      // celebrimbor, no terminal (no TTY=, sudo's form outside a terminal), to root with nothing
+      // between USER= and COMMAND= (no GROUP=, no ENV=), one of these three commands with exactly
+      // these arguments, nothing after. Fields separated by « ; » or by spaces (the agent's form).
+      // Anything else — another account, a terminal, another command or argument, another VM —
+      // is a card, as with the shipped rule.
+      | where not(Computer == "vm-celebrimbor-bree"
+            and _ResourceId endswith "/resourcegroups/rg-celebrimbor/providers/microsoft.compute/virtualmachines/vm-celebrimbor-bree"
+            and SyslogMessage matches regex @"^ *celebrimbor : PWD=[^ ;]+( ; | +)USER=root( ; | +)COMMAND=(/usr/sbin/nginx -t|/usr/bin/systemctl reload nginx|/usr/bin/journalctl --vacuum-time=14d)$")
+      // ProcessName handed on in the row: Glorfindel reads the emitter as this rule does (SEC13).
+      | project TimeGenerated, Computer, _ResourceId, ProcessName, SyslogMessage
+      // One row per VM and distinct line, not `limit 1`: the limit ran on the server before
+      // the per-VM filter, so a benign sudo on another VM hid the attack (third review, T7).
+      // Nor one row per VM (ADM1): an administrator's expected sudo, the latest, would hide
+      // another account's in the same window — and any local user can write a line tagged
+      // sudo. The poller sets the expected ones aside, then sends the newest of the rest.
+      | summarize arg_max(TimeGenerated, *) by Computer, _ResourceId, SyslogMessage

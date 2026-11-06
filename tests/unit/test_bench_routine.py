@@ -1,0 +1,342 @@
+"""WL1 (#595): bree's scheduled maintenance set aside from `sudo-privilege-escalation`, in the
+client's layer of the bench — and nothing else.
+
+`infra/terraform/scripts/workload.sh` puts `/etc/cron.d/eregion-workload` on bree, H0's
+pre-observation workload: as `celebrimbor`, without a terminal, `sudo -n /usr/sbin/nginx -t &&
+sudo -n systemctl reload nginx` at 08:15 and `sudo -n journalctl --vacuum-time=14d` every six hours.
+The shipped rule made a card of it every morning (judged `wrong` by Jonathan, 06/11). The rule of
+the bench's layer (`infra/glorfindel-host/client_rules.bench.yaml`) is the shipped one, copied, plus
+one exclusion: that account, no terminal, these three commands with exactly these arguments, on
+bree alone. Any other sudo still makes a card.
+
+The rules run as written (`tests/unit/kql_subset.py`) on lines in sudo's form, the fields separated
+by « ; » or, as the agent (AMA) writes them, by spaces. The copy is held to the base: the same query
+plus the exclusion block, and the fingerprint of the base query it came from (`base_query_sha256`)
+— a base that changes without the copy fails here, and the watch says it (drift).
+
+Every identifier is the bench's own (`vm-celebrimbor-bree`, `rg-celebrimbor`, `celebrimbor`, already
+in the repository) or made up: 00000000-… GUIDs. No Azure, no model.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+import yaml
+from click.testing import CliRunner
+
+from glorfindel.detection_rules import (
+    DetectionRule,
+    RulePoller,
+    base_query_sha256,
+    client_rules_path,
+    load_config,
+    shipped_rules_path,
+)
+
+from . import kql_subset
+
+ROOT = Path(__file__).resolve().parents[2]
+BENCH = ROOT / "infra" / "glorfindel-host" / "client_rules.bench.yaml"
+NAME = "sudo-privilege-escalation"
+SHIPPED = {r["name"]: r for r in yaml.safe_load(shipped_rules_path().read_text())["rules"]}
+CLIENT = {r["name"]: r for r in yaml.safe_load(BENCH.read_text())["rules"]}
+SUB = "00000000-0000-0000-0000-0000000000bb"
+BREE = "vm-celebrimbor-bree"
+GONDOLIN = "vm-celebrimbor-gondolin"
+
+
+def _rid(vm: str, rg: str = "rg-celebrimbor") -> str:
+    # As Azure writes it (mixed case); the rule compares without case, as KQL's endswith does.
+    return f"/subscriptions/{SUB}/resourceGroups/{rg}/providers/Microsoft.Compute/virtualMachines/{vm}"
+
+
+BREE_ID = _rid(BREE)
+NOW = datetime.now(timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _now_when_the_test_starts():
+    global NOW
+    NOW = datetime.now(timezone.utc)
+
+
+def _line(message: str, computer: str = BREE, resource_id: str = BREE_ID, process: str = "sudo",
+          facility: str = "authpriv") -> dict:
+    return {"Type": "Syslog", "TimeGenerated": NOW - timedelta(minutes=1), "Facility": facility,
+            "ProcessName": process, "SyslogMessage": message, "Computer": computer, "_ResourceId": resource_id}
+
+
+def _sep(form: str) -> str:
+    return " ; " if form == "semicolons" else "   "
+
+
+def _sudo(account: str, command: str, form: str = "semicolons", tty: str = "",
+          pwd: str = "/home/celebrimbor", between: str = "") -> str:
+    """A line in sudo's form: `<account> : [TTY=… ; ]PWD=… ; USER=root ; […] COMMAND=…`."""
+    s = _sep(form)
+    fields = ([f"TTY={tty}"] if tty else []) + [f"PWD={pwd}", "USER=root"] + ([between] if between else [])
+    return f"{account} : " + s.join(fields + [f"COMMAND={command}"])
+
+
+def _bench(rows):
+    return kql_subset.run(CLIENT[NAME]["query"], rows, now=NOW)
+
+
+def _base(rows):
+    return kql_subset.run(SHIPPED[NAME]["query"], rows, now=NOW)
+
+
+# What the cron runs, as sudo writes it (the full path sudo resolved, then the arguments):
+# `nginx -t` is called by its path; systemctl and journalctl are found in secure_path, /usr/bin.
+CRON = ["/usr/sbin/nginx -t", "/usr/bin/systemctl reload nginx", "/usr/bin/journalctl --vacuum-time=14d"]
+FORMS = ["semicolons", "agent"]
+
+
+# ── The copy: the base, plus the exclusion block, nothing else ──────────────────────
+
+_BLOCK_START = "// WL1 (#595)"
+
+
+def _without_block(query: str) -> str:
+    lines = query.splitlines(keepends=True)
+    start = next(i for i, line in enumerate(lines) if line.strip().startswith(_BLOCK_START))
+    end = next(i for i in range(start, len(lines)) if "COMMAND=(" in lines[i])
+    return "".join(lines[:start] + lines[end + 1:])
+
+
+def test_the_bench_rule_is_the_shipped_query_plus_the_exclusion_block_alone():
+    """Drift, read in the repository: the base changed and the copy did not → this fails, in the
+    pull request that changes the base. Redo the copy (the base's query, then the block)."""
+    client, base = CLIENT[NAME], SHIPPED[NAME]
+    assert _without_block(client["query"]) == base["query"]
+    assert client["base_query_sha256"] == base_query_sha256(base["query"])
+    for key in ("ttp", "assets", "interval_s", "expected_latency_s", "enabled"):
+        assert client[key] == base[key], key
+    assert client["description"].startswith(base["description"])
+    assert set(client) - set(base) == {"base_query_sha256"}
+    # The block sits before `project`, so it reads the line as the shipped filters left it.
+    block = client["query"][client["query"].index(_BLOCK_START):]
+    assert block.index("| where not(") < block.index("| project")
+
+
+def test_the_bench_layer_replaces_the_shipped_rule_said_and_without_drift(tmp_path):
+    cfg = load_config(shipped_rules_path(), client_layer=BENCH)
+    [rule] = [r for r in cfg.rules if r.name == NAME]
+    assert rule.layer == "client" and rule.replaces_base and rule.query == CLIENT[NAME]["query"]
+    assert cfg.overrides == [NAME] and cfg.drifted == [] and cfg.disabled_base == []
+    assert cfg.notes == [f"règle de base « {NAME} » remplacée par celle de la couche du client"]
+    # The base itself is untouched: an update of Glorfindel replaces it, never this layer.
+    assert "celebrimbor" not in shipped_rules_path().read_text()
+
+
+def test_the_bench_layer_holds_this_rule_alone():
+    data = yaml.safe_load(BENCH.read_text())
+    assert set(data) == {"rules"} and list(CLIENT) == [NAME]
+
+
+# ── The cron passes; the shipped rule still sees it ─────────────────────────────────
+
+@pytest.mark.parametrize("form", FORMS)
+@pytest.mark.parametrize("command", CRON)
+def test_the_maintenance_of_bree_makes_no_card(command, form):
+    line = _sudo("celebrimbor", command, form)
+    assert _base([_line(line)]) != []           # the shipped rule's card, every morning
+    assert _bench([_line(line)]) == []
+    assert _bench([_line("   " + line)]) == []  # sudo's leading spaces, as the agent keeps them
+
+
+def test_the_three_lines_of_the_cron_together_make_no_signal():
+    lines = [_line(_sudo("celebrimbor", c, f)) for c in CRON for f in FORMS]
+    assert _poll(lines) == []
+    # …and an intruder's line among them still makes one.
+    assert len(_poll(lines + [_line(_sudo("celebrimbor", "/bin/bash"))])) == 1
+
+
+# ── Anything else is a card ─────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("form", FORMS)
+@pytest.mark.parametrize("command", [
+    "/bin/bash", "/usr/bin/id", "/usr/bin/su -", "/usr/bin/systemctl restart nginx",
+    "/usr/bin/journalctl --rotate", "/usr/sbin/nginx", "/usr/bin/cat /etc/shadow",
+    "/usr/local/sbin/nginx -t", "/tmp/usr/sbin/nginx -t",
+])
+def test_another_command_is_a_card(command, form):
+    assert len(_bench([_line(_sudo("celebrimbor", command, form))])) == 1
+
+
+@pytest.mark.parametrize("form", FORMS)
+@pytest.mark.parametrize("command", [
+    "/usr/sbin/nginx -t; bash", "/usr/sbin/nginx -t -c /tmp/nginx.conf", "/usr/sbin/nginx -t ",
+    "/usr/sbin/nginx -tq", "/usr/sbin/nginx -T", "/usr/bin/systemctl reload nginx sshd",
+    "/usr/bin/systemctl reload nginx; id", "/usr/bin/journalctl --vacuum-time=14d --rotate",
+    "/usr/bin/journalctl --vacuum-time=1s", "/usr/bin/journalctl --vacuum-time=14d && sh",
+])
+def test_the_same_commands_with_other_arguments_are_a_card(command, form):
+    assert len(_bench([_line(_sudo("celebrimbor", command, form))])) == 1
+
+
+@pytest.mark.parametrize("form", FORMS)
+@pytest.mark.parametrize("account", ["alice", "root", "celebrimbor2", "xcelebrimbor", "Celebrimbor"])
+def test_another_account_is_a_card(account, form):
+    for command in CRON:
+        assert len(_bench([_line(_sudo(account, command, form))])) == 1, command
+
+
+@pytest.mark.parametrize("form", FORMS)
+@pytest.mark.parametrize("tty", ["pts/0", "unknown", "console"])
+def test_a_terminal_is_a_card(tty, form):
+    for command in CRON:
+        assert len(_bench([_line(_sudo("celebrimbor", command, form, tty=tty))])) == 1, command
+
+
+@pytest.mark.parametrize("computer,resource_id", [
+    (GONDOLIN, _rid(GONDOLIN)),                             # another VM of the bench
+    (BREE, _rid(GONDOLIN)),                                 # bree's host name, another resource
+    (GONDOLIN, BREE_ID),                                    # bree's resource, another host name
+    (BREE, _rid(BREE, rg="rg-other")),                      # a VM named bree in another group
+    (BREE, _rid("xvm-celebrimbor-bree")),
+    (BREE, ""), ("", BREE_ID), ("VM-CELEBRIMBOR-BREE", BREE_ID),
+])
+@pytest.mark.parametrize("form", FORMS)
+def test_another_vm_is_a_card(computer, resource_id, form):
+    for command in CRON:
+        row = _line(_sudo("celebrimbor", command, form), computer=computer, resource_id=resource_id)
+        assert len(_bench([row])) == 1, command
+
+
+def test_bree_s_resource_id_is_read_without_case():
+    line = _sudo("celebrimbor", CRON[0])
+    assert _bench([_line(line, resource_id=BREE_ID.lower())]) == []
+
+
+@pytest.mark.parametrize("form", FORMS)
+@pytest.mark.parametrize("between", ["ENV=LD_PRELOAD=/tmp/x.so", "GROUP=root", "TSID=000001"])
+def test_a_field_between_the_target_and_the_command_is_a_card(between, form):
+    # `sudo LD_PRELOAD=/tmp/x.so /usr/sbin/nginx -t` runs code as root through nginx's loader.
+    assert len(_bench([_line(_sudo("celebrimbor", CRON[0], form, between=between))])) == 1
+
+
+@pytest.mark.parametrize("message", [
+    # A working directory that writes a line of its own in front of the real one (ADM1).
+    "celebrimbor : PWD=/tmp/a ; USER=root ; COMMAND=/usr/sbin/nginx -t ; USER=root ; COMMAND=/bin/bash",
+    "celebrimbor : PWD=/tmp/a b ; USER=root ; COMMAND=/usr/sbin/nginx -t",
+    "celebrimbor : PWD=/x;y ; USER=root ; COMMAND=/usr/sbin/nginx -t",
+    "celebrimbor : USER=root ; COMMAND=/usr/sbin/nginx -t",
+])
+def test_a_line_of_another_shape_is_a_card(message):
+    # Each is a line the shipped rule reads as an escalation — or would not read at all.
+    rows = _bench([_line(message)])
+    assert rows == _base([_line(message)])
+
+
+def test_a_line_of_another_emitter_is_no_escalation_as_before():
+    line = _sudo("alice", "/bin/bash")
+    assert _bench([_line(line, process="root")]) == [] == _base([_line(line, process="root")])
+
+
+# ── Through the poller: the cron makes no signal, anything else one ─────────────────
+
+class _Registry:
+    def __init__(self):
+        self.assets = [type("A", (), {"name": vm, "resource_id": _rid(vm)})() for vm in (BREE, GONDOLIN)]
+
+    def for_backend(self, _name):
+        return self.assets
+
+
+class _Kql:
+    def __init__(self, lines):
+        self.lines = lines
+
+    def run_query(self, query, timespan=None):
+        return kql_subset.run(query, self.lines, now=NOW)
+
+
+def _poll(lines):
+    r = CLIENT[NAME]
+    rule = DetectionRule(name=r["name"], source="azure_monitor", workspace_id="ws", query=r["query"],
+                         ttp=r["ttp"], resource_id="", interval_s=30, auto_apply=True,
+                         monitoring_backend_name="law")
+    sent: list = []
+    p = RulePoller([rule], sent.append)
+    p._detector = lambda _r: _Kql(lines)
+    p._registry = _Registry()
+    p.poll_once(rule)
+    return sent
+
+
+def test_the_same_line_on_gondolin_is_a_signal_on_gondolin():
+    [signal] = _poll([_line(_sudo("celebrimbor", CRON[0]), computer=GONDOLIN, resource_id=_rid(GONDOLIN))])
+    assert GONDOLIN in str(signal)
+
+
+# ── Drift: the base changes, the copy stays — the watch says it ─────────────────────
+
+def _layer(tmp_path, **changes) -> Path:
+    rule = {**CLIENT[NAME], **changes}
+    path = tmp_path / "client_rules.yaml"
+    path.write_text(yaml.safe_dump({"rules": [rule]}, sort_keys=False, allow_unicode=True))
+    return path
+
+
+def _base_with(tmp_path, query: str | None) -> Path:
+    data = yaml.safe_load(shipped_rules_path().read_text())
+    if query is None:
+        data["rules"] = [r for r in data["rules"] if r["name"] != NAME]
+    else:
+        next(r for r in data["rules"] if r["name"] == NAME)["query"] = query
+    path = tmp_path / "base.yaml"
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    return path
+
+
+def test_a_base_query_changed_since_the_copy_is_said_as_drift(tmp_path):
+    changed = SHIPPED[NAME]["query"].replace("ago(10m)", "ago(15m)")
+    cfg = load_config(_base_with(tmp_path, changed), client_layer=_layer(tmp_path))
+    assert cfg.drifted == [NAME]
+    [note] = [n for n in cfg.notes if "dérive" in n]
+    assert f"« {NAME} »" in note and base_query_sha256(changed) in note
+    # The copy still runs: drift is said, the rule is not dropped (its exclusion stays).
+    assert next(r for r in cfg.rules if r.name == NAME).query == CLIENT[NAME]["query"]
+
+
+def test_a_base_rule_gone_since_the_copy_is_said_as_drift(tmp_path):
+    cfg = load_config(_base_with(tmp_path, None), client_layer=_layer(tmp_path))
+    assert cfg.drifted == [NAME] and any("n'existe plus" in n for n in cfg.notes)
+
+
+def test_a_client_rule_that_is_no_copy_says_no_drift(tmp_path):
+    rule = {k: v for k, v in CLIENT[NAME].items() if k != "base_query_sha256"}
+    path = tmp_path / "client_rules.yaml"
+    path.write_text(yaml.safe_dump({"rules": [rule]}, sort_keys=False))
+    changed = SHIPPED[NAME]["query"].replace("ago(10m)", "ago(15m)")
+    cfg = load_config(_base_with(tmp_path, changed), client_layer=path)
+    assert cfg.drifted == [] and cfg.overrides == [NAME]
+
+
+@pytest.mark.parametrize("sha", ["abc", "F" * 64, 12, ["x"], "g" * 64])
+def test_a_fingerprint_that_is_not_one_skips_the_copy_and_the_shipped_rule_loads(tmp_path, sha):
+    cfg = load_config(shipped_rules_path(), client_layer=_layer(tmp_path, base_query_sha256=sha))
+    rule = next(r for r in cfg.rules if r.name == NAME)
+    assert rule.layer == "base" and rule.query == SHIPPED[NAME]["query"]
+    assert any("base_query_sha256" in n and "ignorée" in n for n in cfg.notes)
+
+
+def test_a_disabled_copy_says_no_drift(tmp_path):
+    cfg = load_config(_base_with(tmp_path, "Syslog | take 1\n"),
+                      client_layer=_layer(tmp_path, enabled=False))
+    assert cfg.drifted == []
+
+
+def test_glorfindel_rules_and_the_banner_say_the_drift_loudly(tmp_path):
+    from glorfindel.cli import cli
+    changed = SHIPPED[NAME]["query"].replace("ago(10m)", "ago(15m)")
+    client_rules_path().parent.mkdir(parents=True, exist_ok=True)
+    client_rules_path().write_text(_layer(tmp_path).read_text())
+    res = CliRunner().invoke(cli, ["rules", "--rules", str(_base_with(tmp_path, changed))])
+    assert res.exit_code == 0, res.output
+    assert "copie périmée" in res.output and NAME in res.output
+    text = (ROOT / "glorfindel" / "cli.py").read_text()
+    assert text.count("for name in det_cfg.drifted:") == 1

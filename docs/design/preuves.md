@@ -953,6 +953,22 @@ réattribués à A3 le 27/10).
 | M715 | une config illisible lue « aucun backend » par `migrate-rules` | la vraie cause tue |
 | M716 | une couche ignorée dite « absente » | contredit la note |
 
+### La maintenance de bree hors de `sudo-privilege-escalation` (WL1)
+
+La règle de la couche du client du banc (`infra/glorfindel-host/client_rules.bench.yaml`) écarte
+les trois sudo du cron de bree, et rien d'autre. Un mutant par propriété de l'exclusion, chacun
+l'élargit ; mesurés par `tests/unit/test_bench_routine.py`, tous attrapés aux deux tours (06/11),
+chacun par le test de sa propriété. La dérive de la copie (`base_query_sha256`) est tenue par des
+tests, sans mutant.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M4265 | toute commande d'un mot écartée | `sudo /bin/bash` de celebrimbor sur bree sans carte |
+| M4266 | l'exclusion sans ancre de fin | `nginx -t; bash` sans carte |
+| M4267 | tout compte écarté | le même sudo d'un autre compte sans carte |
+| M4268 | une ligne avec `TTY=` écartée | le même sudo depuis un terminal sans carte |
+| M4269 | l'exclusion sur toute VM | le même sudo sur gondolin sans carte |
+
 ### Annatar et Gothmog exigent Glorfindel (V1)
 
 Avant chaque run, et avant tout appel au cloud, l'injecteur lit le battement de la watch

@@ -134,6 +134,9 @@ class DetectionConfig:
     overrides: list[str] = field(default_factory=list)
     # SEC2: the shipped rules the client's layer turns off (`disable:`, `enabled: false`).
     disabled_base: list[str] = field(default_factory=list)
+    # WL1: client rules copied from a base rule (`base_query_sha256`) whose shipped query is no
+    # longer the one they were copied from — a stale copy, said loudly like an override.
+    drifted: list[str] = field(default_factory=list)
 
     def backend(self, name: str) -> MonitoringBackend | None:
         return next((b for b in self.backends if b.name == name), None)
@@ -432,6 +435,10 @@ def _invalid_client_entry(key: str, entry) -> str | None:
             return f"`{field_}` n'est pas une liste de noms"
     if key != "rules":
         return None
+    sha = entry.get("base_query_sha256")
+    if sha is not None and not (isinstance(sha, str) and _SHA256.fullmatch(sha)):
+        # Skipped, the base rule of its name loads instead: more cards, never fewer (WL1).
+        return "`base_query_sha256` n'est pas une empreinte sha256 (64 caractères hexadécimaux)"
     if not isinstance(entry.get("enabled", True), bool):
         return "`enabled` n'est ni true ni false"
     for field_, convert in (("interval_s", float), ("expected_latency_s", int)):
@@ -450,6 +457,40 @@ def _invalid_client_entry(key: str, entry) -> str | None:
     if entry.get("enabled", True) and not entry.get("query"):
         return "n'a pas de requête"
     return None
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def base_query_sha256(query) -> str:
+    """The fingerprint a client rule copied from a base rule keeps of the base query it copied
+    (WL1, `base_query_sha256:`): sha256 of the query's text as YAML reads it, UTF-8."""
+    return hashlib.sha256(str(query or "").encode("utf-8")).hexdigest()
+
+
+def _drift(base_rules: dict[str, dict], rules: list[dict], layer_of: dict[str, str]) -> tuple[list[str], list[str]]:
+    """WL1: the client rules copied from a base rule whose shipped query changed since → (names,
+    notes). A copy keeps the old query: whatever the update brought to the base rule (a fix, a
+    new form of line) does not reach it. Read from `base_query_sha256`, the fingerprint of the
+    base query the copy was taken from; a client rule without it is not a copy, nothing is said."""
+    names: list[str] = []
+    notes: list[str] = []
+    for r in rules:
+        sha = r.get("base_query_sha256")
+        if not sha or layer_of.get(r["name"]) != "client" or not r.get("enabled", True):
+            continue
+        base = base_rules.get(r["name"])
+        if base is None:
+            notes.append(f"règle du client « {r['name']} » : copiée d'une règle de base de ce nom, qui "
+                         "n'existe plus dans la base livrée (dérive) — la copie tourne toujours ; la relire")
+        elif (current := base_query_sha256(base.get("query"))) != sha:
+            notes.append(f"règle du client « {r['name']} » : la requête de la base livrée a changé depuis "
+                         "la copie (dérive) — la copie tourne toujours sur l'ancienne ; reporter le "
+                         f"changement de la base, puis base_query_sha256: {current}")
+        else:
+            continue
+        names.append(r["name"])
+    return names, notes
 
 
 def _entry_label(entry) -> str:
@@ -585,6 +626,7 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
     notes: list[str] = []
     layer_of: dict[str, str] = {}
     client_file = ""
+    drifted: list[str] = []
     if client_layer:
         cpath = client_rules_path() if client_layer is True else Path(client_layer)
         try:
@@ -594,7 +636,10 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
             notes.append(f"couche du client illisible ({cpath}) : {exc} — base seule")
         if client:
             client_file = str(cpath)
+            base_rules = {r["name"]: r for r in _named(data.get("rules"))}
             data, more, layer_of = merge_layers(data, client)
+            notes += more
+            drifted, more = _drift(base_rules, _named(data.get("rules")), layer_of)
             notes += more
     if not data:
         _log_notes(notes)
@@ -797,7 +842,7 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
     _log_notes(notes)
     return DetectionConfig(backends=backends, assets=assets, rules=rules,
                            notes=notes, client_file=client_file, overrides=overrides,
-                           disabled_base=disabled_base)
+                           disabled_base=disabled_base, drifted=drifted)
 
 
 def load_rules(path: str | Path, glorfindel_cfg=None) -> list[DetectionRule]:

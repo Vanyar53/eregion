@@ -1,0 +1,3 @@
+### Changed
+- **On a workstation, the test suite runs in low priority; in CI, as before** (NICE1, #620; `docs/operations.md`, « Sur un poste, la suite en priorité basse »). Outside CI (no `CI` variable), `tests/unit/conftest.py` raises pytest to `nice 10` as it starts, never lower than what it inherits; xdist's workers and the mutants' runs inherit it. On 06/11, sub-agents running the suite side by side in their worktrees (one with `-n auto`, 16 workers) pushed the load to 70 on 16 cores, and VS Code, starved, killed its extension host seven times in a day.
+  - Tests: `tests/unit/test_suite_priority.py` (the hook on a fake `os.nice` capped at 19 and never lowered, plus one real run); mutants M4480–M4481.

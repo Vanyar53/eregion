@@ -96,6 +96,26 @@ def test_an_entra_name_reaches_the_bots_card_inert():
         assert "@everyone" not in text and "@here" not in text, text
 
 
+def test_an_entra_name_reaches_the_bots_card_inert_through_its_plan():
+    """C2b: a card with its plan (IR1a) shows the plan itself, its commands as code — the names
+    from outside in it (the application's, the actor's) stay escaped prose."""
+    pytest.importorskip("discord")
+    from glorfindel import bot
+    from glorfindel.providers.azure import entra_plan
+    esc = _identity_card()
+    row = {"EntraKind": "consent", "EntraOperation": "Consent to application", "TargetName": HOSTILE,
+           "TargetId": "00000000-0000-0000-0000-00000000abcd", "TargetType": "ServicePrincipal",
+           "ActorName": "[admin](https://evil.example) @everyone", "ActorId": "00000000-0000-0000-0000-00000000ab01"}
+    esc["identity_plan"] = entra_plan.build(row, None)
+    description, fields = bot._embed_body(esc)
+    steps = [v for n, v, _ in fields if n.startswith("Prochaines étapes")]
+    assert steps and "evil.example" in "".join(steps)            # the names are there, shown
+    for text in [description] + [v for _, v, _ in fields]:
+        prose = re.sub(r"(?<!\\)`[^`\n]*`", "", text)
+        assert _unescaped(prose, "[]()<>*_~|`") == [], text
+        assert "@everyone" not in text and "@here" not in text, text
+
+
 @pytest.mark.parametrize("etype", ["verification_failed", "write_blocked", "mode_hold", "[t](https://evil.example)"])
 def test_an_action_the_model_named_reaches_the_title_inert(etype):
     """The model may name any action; a title shows it as written."""

@@ -9,6 +9,8 @@ test writes, then through the real AzureActivityDetector (Glorfindel's own ident
 RulePoller — no Azure, no model. What is held:
   - Azure Backup's lines make no card: its id in Claims or as the Caller, on one line of the
     operation at least (the latest may carry neither);
+  - a line that names no one decides nothing: a backup astride the window's edge, a bare line
+    ingested alone make no card — anyone else's card comes at the pass where their line lands;
   - the same operations by a human, or by any other principal, make a card — under a
     backup's own correlation id too (a client chooses it);
   - a failure makes none — the operation's latest line is read;
@@ -39,7 +41,7 @@ SHIPPED = Path(__file__).resolve().parents[2] / "glorfindel/rules/azure/detectio
 RULE_NAME = "restorepoint-by-unexpected-caller"
 
 # Azure Backup's application (Backup Management Service): public, the same in every tenant
-# (Microsoft Learn, the PowerShell sample « Back up an encrypted Azure VM »).
+# (Microsoft Learn, « Back up and restore Azure VMs with PowerShell »).
 AZURE_BACKUP = "262044b1-e2ce-469f-a196-69ab7ada62d3"
 
 # Placeholders, never real ids.
@@ -203,7 +205,10 @@ def test_azure_backup_is_matched_whatever_the_case(table):
     {"caller": HUMAN, "oid": "c4444444-d444-e444-f444-a44444444444"},       # a human (az login)
     {"caller": OTHER_APP, "appid": OTHER_APP},                               # another principal
     {"caller": "", "appid": OTHER_APP},                                      # its id in Claims only
-], ids=["human", "principal", "claims_only"])
+    {"caller": "", "oid": "c5555555-d555-e555-f555-a55555555555"},           # its object id only
+    # Azure Backup's id is matched whole: a Caller that only starts with it is someone else.
+    {"caller": f"{AZURE_BACKUP}@example.onmicrosoft.com"},
+], ids=["human", "principal", "claims_only", "object_id_only", "backup_id_as_a_prefix"])
 def test_the_same_operations_by_anyone_else_make_a_card(table, op, who):
     table += _operation(op, "c-x", **who)
     [sig] = _cards(table)
@@ -223,6 +228,26 @@ def test_one_card_per_operation_never_one_per_line(table):
     table += [*_operation(WRITE, "c-1"), *_operation(SAS, "c-2"), *_operation(DISK_SAS, "c-3")]
     assert sorted(s["raw_signal"]["normalized_signal"]["indicator_value"] for s in _cards(table)) == \
         sorted([WRITE, SAS, DISK_SAS])
+
+
+def test_two_operations_under_one_correlation_id_make_two_cards(table):
+    """A correlation id is the client's, and may cover several requests: a restore point
+    written, then its SAS URLs retrieved, under the same id — two operations, two cards."""
+    table += [*_operation(WRITE, "c-same"), *_operation(SAS, "c-same")]
+    assert sorted(s["raw_signal"]["normalized_signal"]["indicator_value"] for s in _cards(table)) == \
+        sorted([WRITE, SAS])
+
+
+@pytest.mark.parametrize("op", [
+    "Microsoft.Compute/restorePointCollections/restorePoints/write",
+    "Microsoft.Compute/restorePointCollections/restorePoints/retrieveSasUris/action",
+])
+def test_an_operation_name_in_any_case_is_read(table, op):
+    """The case of OperationNameValue varies from one operation to the next (docs/azure.md)."""
+    table += [_line(op, "Start", corr="c-case", minutes_ago=5.0, target=RP),
+              _line(op, "Success", corr="c-case", minutes_ago=4.9, target=RP)]
+    [sig] = _cards(table)
+    assert sig["raw_signal"]["normalized_signal"]["indicator_value"] == op
 
 
 def test_a_backup_in_the_same_window_hides_no_one_else(table):
@@ -247,6 +272,38 @@ def test_a_backup_s_correlation_id_hides_no_one_else(table, who):
     assert len(_rows(table)) == 1
     [sig] = _cards(table)
     assert sig["raw_signal"]["normalized_signal"]["indicator_value"] == SAS
+
+
+# ── a line that names no one decides nothing ───────────────────────────────────
+
+def test_a_backup_astride_the_window_s_edge_makes_no_card(table):
+    """Its Start line, Azure Backup's, just out of ago(1h); its Success line bare, in."""
+    table += [_line(WRITE, "Start", corr="b-edge", caller="", appid=AZURE_BACKUP, minutes_ago=61.0),
+              _line(WRITE, "Success", corr="b-edge", caller="", claims=False, minutes_ago=59.0)]
+    assert _rows(table) == []
+    assert _cards(table) == []
+
+
+@pytest.mark.parametrize("op", [WRITE, SAS])
+def test_a_bare_success_line_ingested_alone_makes_no_card(table, op):
+    """Its Start line not in the workspace yet: lines are not ingested in order."""
+    table += [_line(op, "Success", corr="b-late", caller="", claims=False, minutes_ago=2.0)]
+    assert _rows(table) == []
+    assert _cards(table) == []
+
+
+def test_anyone_else_s_card_comes_at_the_pass_where_their_line_lands():
+    """Only a deferral: a human's operation whose last line is bare. Its Start line names
+    them — a card at the pass where it lands, alone or with the rest; once it has left the
+    window, its bare line alone makes no second one."""
+    query = _yaml_rule(RULE_NAME)["query"]
+    start = _line(SAS, "Start", corr="c-late", caller=HUMAN, minutes_ago=61.0)
+    bare = _line(SAS, "Success", corr="c-late", caller="", claims=False, minutes_ago=59.0)
+    [row] = kql_subset.run(query, [start], now=NOW - timedelta(minutes=58))
+    assert (row["Caller"], row["ActivityStatusValue"]) == (HUMAN, "Start")
+    [row] = kql_subset.run(query, [start, bare], now=NOW - timedelta(minutes=2))
+    assert row["CorrelationId"] == "c-late"
+    assert kql_subset.run(query, [start, bare], now=NOW) == []
 
 
 # ── a failure: no card ────────────────────────────────────────────────────────

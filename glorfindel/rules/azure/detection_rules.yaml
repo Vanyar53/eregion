@@ -546,7 +546,10 @@ rules:
       URL SAS de stockage (LISTSERVICESAS), le téléchargement lui-même (plan des données du
       stockage), une restauration ou une récupération de fichiers depuis le coffre (Recovery
       Services), ce qu'Azure Backup fait sous son identité — exclu : qui tient le coffre en
-      tire les disques sans carte —, ni rien sans le journal d'activité dans le workspace.
+      tire les disques sans carte —, une opération dont aucune ligne ne nomme d'appelant,
+      une opération lue par sa dernière ligne, dont l'échec est écarté (limite connue de la
+      famille des règles du journal d'activité, suivie par un lot à part), ni rien sans le
+      journal d'activité dans le workspace.
     enabled: true
     source: azure_activity
     ttp: T1578.001
@@ -567,11 +570,14 @@ rules:
       | extend AzureBackup = CallerAppId =~ "262044b1-e2ce-469f-a196-69ab7ada62d3" or Caller =~ "262044b1-e2ce-469f-a196-69ab7ada62d3"
       // A line that names someone else: a user, another application.
       | extend OtherCaller = not(AzureBackup) and (isnotempty(Caller) or isnotempty(CallerAppId) or isnotempty(CallerObjectId))
-      // One row per operation, its latest line. Azure Backup's when one of its lines names it
-      // and none names anyone else: a correlation id is the client's to choose.
-      | summarize arg_max(TimeGenerated, *), AzureBackupLines = countif(AzureBackup), OtherLines = countif(OtherCaller)
+      // One row per operation, its latest line. Kept when one of its lines names someone other
+      // than Azure Backup — under a backup's own correlation id too, a client chooses it. A
+      // line that names no one decides nothing: a backup's latest line may be bare, and its
+      // Start line (Azure Backup's) may be out of the window or not yet in. Anyone else's Start
+      // line names them (ID1-A9 shows each line): their card comes at the pass where it lands.
+      | summarize arg_max(TimeGenerated, *), OtherLines = countif(OtherCaller)
           by CorrelationId, OperationNameValue, _ResourceId
-      | where AzureBackupLines == 0 or OtherLines > 0
+      | where OtherLines > 0
       | where ActivityStatusValue !in~ ("Failure", "Failed")
       | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId

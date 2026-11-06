@@ -1,12 +1,18 @@
 """AL2 (#598): `restorepoint-by-unexpected-caller`, the sister of the snapshot rule, Azure
-Backup excluded by its public application id, and it alone. M4280–M4289, one per property, all
+Backup excluded by its public application id, and it alone. M4280–M4289, one per property,
+then M4305–M4309 after the first review (a line that names no one decides nothing, the id
+matched whole, the case of an operation's name, one row per operation, an object id alone), all
 measured by tests/unit/test_restore_points.py (the rule run as written through the KQL subset,
 then the AzureActivityDetector and the RulePoller)."""
 RULES = "glorfindel/rules/azure/detection_rules.yaml"
 _TESTS = "tests/unit/test_restore_points.py"
 
 _ID = "262044b1-e2ce-469f-a196-69ab7ada62d3"
-_KEEP = "      | where AzureBackupLines == 0 or OtherLines > 0\n"
+_KEEP = "      | where OtherLines > 0\n"
+_GROUP = ("      | summarize arg_max(TimeGenerated, *), OtherLines = countif(OtherCaller)\n"
+          "          by CorrelationId, OperationNameValue, _ResourceId\n" + _KEEP)
+_OTHER = ('      | extend OtherCaller = not(AzureBackup) and '
+          '(isnotempty(Caller) or isnotempty(CallerAppId) or isnotempty(CallerObjectId))\n')
 _MATCH = f'      | extend AzureBackup = CallerAppId =~ "{_ID}" or Caller =~ "{_ID}"\n'
 _OPS = '          "MICROSOFT.COMPUTE/RESTOREPOINTCOLLECTIONS/RESTOREPOINTS/'
 
@@ -26,7 +32,10 @@ MUTANTS = [
      _MATCH, '      | extend AzureBackup = isnotempty(CallerAppId) and Caller !has "@"\n'),
     ("M4284", "a backup's correlation id hides anyone — the SAS URLs retrieved under the backup's own id "
               "(a client chooses it) make no card (AL2)", RULES,
-     _KEEP, "      | where AzureBackupLines == 0\n"),
+     _GROUP, "      | summarize arg_max(TimeGenerated, *), OtherLines = countif(OtherCaller), "
+             "AzureBackupLines = countif(AzureBackup)\n"
+             "          by CorrelationId, OperationNameValue, _ResourceId\n"
+             "      | where OtherLines > 0 and AzureBackupLines == 0\n"),
 
     # ── the operations read ──
     ("M4285", "RESTOREPOINTS/WRITE no longer read — a restore point made by hand is no card (AL2)", RULES,
@@ -50,6 +59,26 @@ MUTANTS = [
      '          "MICROSOFT.COMPUTE/DISKS/BEGINGETACCESS/ACTION")\n',
      '          "MICROSOFT.COMPUTE/DISKS/BEGINGETACCESS/ACTION",\n'
      '          "MICROSOFT.COMPUTE/RESTOREPOINTCOLLECTIONS/RESTOREPOINTS/WRITE")\n'),
+
+    # ── after the first review (06/11) ──
+    ("M4305", "a line that names no one decides — the reviewed version: a backup whose Start line is out "
+              "of the window, or not yet in, makes a card on its bare Success line (AL2)", RULES,
+     _GROUP, "      | summarize arg_max(TimeGenerated, *), AzureBackupLines = countif(AzureBackup), "
+             "OtherLines = countif(OtherCaller)\n"
+             "          by CorrelationId, OperationNameValue, _ResourceId\n"
+             "      | where AzureBackupLines == 0 or OtherLines > 0\n"),
+    ("M4306", "Azure Backup's id matched as a term of the Caller, not whole — a Caller that starts with it "
+              "is excluded (AL2)", RULES,
+     _MATCH, f'      | extend AzureBackup = CallerAppId =~ "{_ID}" or Caller has "{_ID}"\n'),
+    ("M4307", "the operation's name compared case-sensitively — a name in another case is no card (AL2)",
+     RULES,
+     '      | where OperationNameValue in~ (\n' + _OPS + 'WRITE",\n',
+     '      | where OperationNameValue in (\n' + _OPS + 'WRITE",\n'),
+    ("M4308", "one row per correlation id — two operations under one id make a single card (AL2)", RULES,
+     _GROUP, "      | summarize arg_max(TimeGenerated, *), OtherLines = countif(OtherCaller)\n"
+             "          by CorrelationId\n" + _KEEP),
+    ("M4309", "a caller named by its object id alone no longer someone else — no card (AL2)", RULES,
+     _OTHER, '      | extend OtherCaller = not(AzureBackup) and (isnotempty(Caller) or isnotempty(CallerAppId))\n'),
 ]
 
 TESTS = {m[0]: _TESTS for m in MUTANTS}

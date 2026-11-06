@@ -7098,3 +7098,38 @@ def test_a_pair_put_back_once_written_again_by_another_perimeter_then_gone_is_sa
         assert {e["id"] for e in _reassert_block_cards() if e.get("status") == "pending"} == set(said)
     finally:
         m.teardown()
+
+
+# I3K (#602): the machine during MUT3's review, on `main` 3f6ae335, unmutated (24 rules and 93 draws, at
+# random; reduced to 5 steps, the network to what they need).
+_I3K_NIC0 = _nic("rg-app1", "db-nic-0")
+_I3K_NIC1 = _nic("rg-app1", "db-nic-1")
+_I3K_NET = _net(subnet_nsg=[_S1618_OUT], tier_rules=[_S1618_SSH, _S1618_OUT],
+                db_nic_0={"own": "tier"}, db_nic_1={"own": "tier"})
+_I3K_STEPS = (
+    ("block", DB, DB, None, None),
+    ("isolate", DB, DB, None),
+    ("customer_changes_ip", _I3K_NIC0, 0, 20),
+    ("access_changes", True),
+    ("kept_at_the_lift", DB, DB, None, "reset", False, None,
+     (_SUBNET, "glorfindel-block-192-31-196-7-db--01-db-nic-0-0d0228-out"), _I3K_NIC1, 0, 4, "rg-app1", "web", False))
+
+
+def test_a_reset_refused_by_azure_names_the_rule_it_leaves(monkeypatch):
+    """I3K (#602), the machine during MUT3's review: « I3 (said): reset --from-azure said swept_partial,
+    rules of …/Db--01 kept without saying so: ['glorfindel-iso-db--01-db-nic-0-0d0228-out'] ». Red on
+    `main` 3f6ae335, unmutated.
+
+    Db--01 (two NICs on nsg-tier, where allow-ssh at 100 sends its block to the subnet's NSG) blocked,
+    then isolated; db-nic-0's address changed (10.0.0.6 freed); the role taken away (every write
+    refused, 403); then `kept_at_the_lift`: db-nic-0's block `-out` turned into an allow, db-nic-1 given
+    10.0.0.6 — the VM's OWN other NIC, not a new VM —, a new VM, and `reset --from-azure`. Every delete
+    refused: `swept_partial`, each rule named in `failed` by its error. The oracle counted db-nic-0's
+    isolation `-out` (a deny from 10.0.0.6, which db-nic-1 holds now) as held back for another VM
+    (_behind_turned maps it to Db--01 itself) and asked « gardée » of it. Nothing kept it: the reset
+    lifts the VM, the turned allow with it (the code reads the VM's NICs as its own, `own_ips`,
+    `mates`). Not the case of the identifier: the canonical id fails the same.
+
+    The oracle now asks of such a rule its name in the outcome — « gardée » only of a rule kept for
+    another VM (_held_for_itself). M4413: a refused delete said without its rule's name."""
+    _replay(monkeypatch, _I3K_NET, *_I3K_STEPS)

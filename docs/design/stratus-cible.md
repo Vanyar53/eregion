@@ -159,3 +159,58 @@ Ces gestes iront dans `docs/operations.md` au code (avec la date), pas dans cett
 
 1. **Identité : B** (§ 1) — une identité dédiée à Stratus, dans un bac à sable sans l'IMDS d'Orodruin ; rôle fermé sur le seul abonnement dédié ; `orodruin-check` lit cette seconde identité ; le kill la coupe seule ; le contrat de l'identité d'Orodruin reste inchangé.
 2. **Zone : `bench` réservée** (§ 2) — posée par le scope Stratus, sans étiquette, `kind: fault` refusé dans ce scope ; `ZONES`/`check_zone`/`Scope.for_bench()`/O0 inchangés ; un champ « périmètre » (`stratus-subscription`) dans la fenêtre et le rapport.
+
+---
+
+## Les mesures avant R2c (sur l'abonnement dédié permanent)
+
+_Protocole — 2026-11-06 (R2b/#608). **On mesure directement sur l'abonnement dédié permanent**, pas sur un jetable : les deux seraient vides et hors du banc, donc le jetable n'ajoute aucune sûreté dès lors que le rôle large de mesure est retiré avant la pose du rôle fermé et qu'Orodruin ne s'arme pour Stratus qu'après le rôle fermé et une sonde COLD. **C'est la session Annatar qui guide Jonathan ; une session ne lance jamais une technique, un `apply`, ni `az login`.**_
+
+### Préambule
+
+- **Aucun identifiant réel dans le dépôt.** Tout est en variables, écrites une fois par Jonathan dans un fichier **hors dépôt** (`${MEAS}` ci-dessous), jamais recopié de l'écran :
+  - `${STRATUS_SUB}` l'abonnement dédié · `${BENCH_SUB}` l'abonnement du banc · `${BENCH_WORKSPACE_ID}` le workspace du banc (resource id)
+  - `${STRATUS_APPID}` / `${STRATUS_OID}` l'identité Stratus (appId / objectId) · `${ORODRUIN_OID}` l'identité d'Orodruin
+  - `${TENANT}` le tenant d'Orodruin
+- **Fichier de sortie** (zsh), jamais commité : `export MEAS=~/r2b-mesures.env`. Chaque relevé y va par `echo "VAR=$(…)" >> ${MEAS}` (jamais lu à l'écran puis recopié).
+- **Gestes de Jonathan** (marqués **[J]**) : tout `az login`, toute création/suppression d'attribution de rôle, tout `terraform apply`/`make … YES=1`, et **toute technique lancée** (`stratus warmup|detonate|revert|cleanup`). Les lectures (`az … list|show`, `az monitor activity-log list`) suivent un `az login` de Jonathan ; la session les prépare et les lit avec lui.
+- **Plan montré avant tout `apply`** (convention du dépôt).
+
+### Étape 0 — bâtir l'abonnement dédié vide (G1, G5, G6, G7)
+
+Dans cet ordre, pour que la Policy plafonne le coût **dès** la mesure :
+
+1. **[J] G1** — l'abonnement dédié vide, dans `${TENANT}` ; enregistrer d'avance les fournisseurs : `az provider register -n Microsoft.Compute -n Microsoft.Network -n Microsoft.Insights --subscription ${STRATUS_SUB}` (plus ceux que les techniques exigent). Vérif : `az resource list --subscription ${STRATUS_SUB}` vide ; `echo "PROVIDERS_OK=$(az provider list --subscription ${STRATUS_SUB} --query "length([?registrationState=='Registered'])")" >> ${MEAS}`.
+2. **[J] G5** — l'Azure Policy comme **plafond de coût dès la mesure** (types, SKU, régions autorisés), **sans** bloquer encore l'IP publique du Bastion (une technique du périmètre en a besoin). Terraform, plan montré.
+3. **[J] G6** — le paramètre de diagnostic `${STRATUS_SUB}` → `${BENCH_WORKSPACE_ID}` (catégorie `Administrative`), Terraform.
+4. **[J] G7** — le budget + groupe d'action, Terraform ; éprouver la notification : `az monitor action-group test-notifications create …`.
+
+### Étape 1 — les mesures M1–M10 (rôle large, borné dans le temps)
+
+**[J]** Attribuer à l'identité Stratus un rôle **large et daté** pour la seule mesure (Contributor sur `${STRATUS_SUB}`), **retiré à la fin de M1**. Preuve du retrait (le patron M191) :
+`az role assignment list --all --assignee-object-id ${STRATUS_OID} --subscription ${STRATUS_SUB}` doit alors ne plus montrer que le rôle fermé (après G3), rien de large.
+
+- **M1 — actions minimales par technique.** But : la liste `Actions` du rôle fermé. **[J]** lancer, par technique (`azure.execution.vm-run-command`, `azure.persistence.create-bastion-shareable-link`), le cycle `warmup → detonate → revert → cleanup`. Relevé : les opérations réellement appelées, lues dans le journal d'activité :
+  `echo "OPS_VMRC=$(az monitor activity-log list --subscription ${STRATUS_SUB} --start-time ${T0} --caller ${STRATUS_APPID} --query '[].authorization.action' -o tsv | sort -u | tr '\n' ',')" >> ${MEAS}` (idem par technique, avec le `${T0}` de chaque run). Réussite : liste stable sur deux runs → elle devient `Actions`. **M1b** : après G3 (rôle fermé), une écriture de paramètre de diagnostic et un budget doivent **échouer** (403) — relever le code.
+- **M2 — d'où vient l'abonnement.** But : l'abonnement vient de `EREGION_STRATUS_SUBSCRIPTION` seul. **[J]** un `warmup` avec `ARM_SUBSCRIPTION_ID=${BENCH_SUB}` (faux exprès) → **403 attendu** ; puis avec `${STRATUS_SUB}` → succès. Relevé : les deux codes. Réussite : 403 sur le banc, succès sur le dédié, aucun repli.
+- **M3 — mécanisme du jeton (bac à sable).** But : Stratus et azurerm acceptent un jeton fourni **sans** le credential d'Orodruin. **[J]** configurer la fédération d'identité (workload identity : `AZURE_FEDERATED_TOKEN_FILE` + `AZURE_CLIENT_ID=${STRATUS_APPID}` + `AZURE_TENANT_ID=${TENANT}`, ou l'OIDC Terraform `ARM_OIDC_TOKEN`/`ARM_USE_OIDC=true`) ; lancer un `warmup` avec **seulement** ces variables dans l'environnement du sous-processus. Relevé : la forme qui marche. Réussite : Stratus s'authentifie ainsi, **l'échange vit côté Orodruin, hors du bac à sable** (le bac à sable ne reçoit que le jeton de Stratus).
+- **M4 — échec du jeton d'Orodruin depuis le bac à sable.** But : interdire le sens dangereux. Depuis le bac à sable : tenter d'obtenir un jeton pour l'identité d'Orodruin (`curl` IMDS, ou `az account get-access-token` visant `${ORODRUIN_OID}`). Relevé : le code d'échec. Réussite : **échec** (timeout/refus) — jamais un jeton d'Orodruin obtenu du bac à sable.
+- **M5 — lecture AUTHZ_READ_ONLY par le jeton d'Orodruin.** But : prouver qu'une liste vide ≠ absence de droit (M191). **[J]** donner à `${ORODRUIN_OID}` **seulement** `AUTHZ_READ_ONLY` (`roleAssignments/read`, `roleDefinitions/read`) sur `${STRATUS_SUB}`. Avec le jeton d'Orodruin : `az role assignment list --all --assignee-object-id ${STRATUS_OID} --subscription ${STRATUS_SUB}` → **liste non vide** ; sur un abonnement où Orodruin n'a pas ce droit → **403** (contrôle). Relevé : les deux. Réussite : liste exacte d'un côté, 403 de l'autre.
+- **M6 — groupes qu'Azure crée de lui-même.** But : la liste fermée pour COLD. `echo "RG_COLD=$(az group list --subscription ${STRATUS_SUB} --query '[].name' -o tsv | tr '\n' ',')" >> ${MEAS}` **avant** tout warmup, **après** un warmup, **après** cleanup. Réussite : identifier ceux qui naissent seuls (Network Watcher au 1er VNet, `DefaultResourceGroup-*` de Defender) — COLD les exclura.
+- **M7 — fraîcheur + champs de la watch.** **[J]** un `warmup`. Relevé : `createdTime` du groupe si exposé (`az group show … --query` — sinon noter « absent ») ; la **latence** d'apparition de l'événement de création dans `AzureActivity` (direct et via le workspace du banc) ; les champs `SubscriptionId`, `_ResourceId`, l'appelant. Réussite : l'événement apparaît ; latence chiffrée (dimensionne l'attente) ; l'étiquetage « exercice » tient sur `SubscriptionId` + appelant.
+- **M8 — durée du warmup vs `PHASE_TIMEOUT_S`.** **[J]** chronométrer chaque `warmup` : `echo "WARMUP_S_BASTION=$SECONDS" >> ${MEAS}`. Réussite : si > ~900 s (le Bastion, VNet+VM), relever le plafond pour cette technique.
+- **M9 — sortie Internet d'une VM d'un VNet neuf.** But : confirmer qu'un VNet neuf n'a pas d'accès sortant par défaut (depuis le 30/09/2025). Dans une VM d'un `warmup`, via Run Command, tenter une sortie hors Azure. Relevé : succès/échec. Réussite : **pas de sortie** (sinon, mesure côté Policy). **[J]** (Run Command = technique lancée).
+- **M10 — forme Terraform (diag + budget).** Déjà posés en Étape 0 ; ici on **vérifie** : créer puis supprimer un groupe vide (**[J]**), et confirmer que son événement arrive dans `${BENCH_WORKSPACE_ID}` (`AzureActivity | where SubscriptionId == "${STRATUS_SUB}"`), et que la notification budget au test est arrivée. Relevé : les deux. Réussite : le diag route, le budget notifie.
+
+### Étape 2 — poser le rôle fermé mesuré (G2–G4)
+
+- **[J] G2** — l'identité Stratus + le mécanisme du bac à sable validé en M3/M4.
+- **[J] G3** — le **rôle personnalisé fermé** : `Actions` = la liste de M1 **plus** `Microsoft.Insights/diagnosticSettings/read` et `…/resourceGroups/read` (lectures du contrat) ; `NotActions` = `Microsoft.Insights/diagnosticSettings/write`+`/delete`, `Microsoft.Consumption/*`, `Microsoft.CostManagement/*`, les credentials fédérés ; **aucune action `Microsoft.Authorization`**. Attribué à `${STRATUS_OID}`, portée `/subscriptions/${STRATUS_SUB}`. Retirer le rôle large de l'Étape 1.
+- **[J] G4** — `AUTHZ_READ_ONLY` à `${ORODRUIN_OID}` sur `${STRATUS_SUB}` seulement (déjà posé pour M5 ; le confirmer).
+- Resserrer **[J] G5** : la Policy bloque désormais l'IP publique **sauf** celle du Bastion.
+
+### Étapes 3 à 5
+
+- **(3) sonde COLD + `orodruin-check`** : l'abonnement est vide (hors la liste M6), le rôle fermé et `AUTHZ_READ_ONLY` sont en place → `orodruin-check` s'arme pour Stratus (sinon `passive`).
+- **(4) R2c** : le code hermétique, avec les valeurs mesurées (mutants **M4440–M4469**) ; sa PR corrige la doc (C1–C6).
+- **(5) ID1 (#281)** : le run réel au banc et la mesure de détection (AL1).

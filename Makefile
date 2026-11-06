@@ -758,7 +758,7 @@ celebrimbor-users-plan celebrimbor-users-up:
 
 # BRO1 (#614) : l'identité de lecture du banc, pour la session Banc seule (bench_reader.tf) — une
 # application, son principal, un certificat PUBLIC, et Log Analytics Reader sur le seul workspace du
-# banc. celebrimbor-reader-key tire la clé et le certificat sur ce poste (scripts/bench_reader.py
+# banc. celebrimbor-reader-key tire la clé, le certificat et sa fin sur ce poste (scripts/bench_reader.py
 # keygen, ~/.config/eregion-banc/, 0600) : la clé privée n'entre jamais dans Terraform. DAYS (30 ; 90
 # au plus) passe par l'environnement, jamais développé par make. Plan et apply ciblés sur ses quatre
 # ressources, rien d'autre du banc (une dérive en attente du workspace ou du groupe y paraîtrait :

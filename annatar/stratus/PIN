@@ -6,8 +6,9 @@
 #
 # We do NOT vendor the binary in the repository (it is a large, per-platform Go binary): it is
 # staged into the Orodruin image and pinned. The adapter (annatar/engines/stratus.py) reads the
-# staged binary and checks its sha256 against the `stratus` line below BEFORE any phase runs, at
-# every run (SEC5, like annatar/atomics/PIN) — a binary that is not the pinned one runs nothing.
+# staged binary and checks its sha256 against the `stratus` line below BEFORE EVERY phase (not
+# only once per run; SEC5, like annatar/atomics/PIN) — a binary that is not the pinned one, or
+# one swapped mid-run, runs nothing.
 # `annatar run` never fetches Stratus; Orodruin has no Internet egress.
 #
 # ── The binary the adapter execs ──────────────────────────────────────────────────────

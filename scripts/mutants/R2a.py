@@ -1,8 +1,9 @@
 """R2a (Partie de #79): the Stratus Red Team adapter — a technique id resolved against a CLOSED
 allow-list, the pinned binary checked at run time, the warmup/detonate/revert/cleanup cycle run
 from an armed Orodruin with every phase journaled, and a read-only Graph probe of the initial
-state. M4315–M4344 (M4335–M4344 from the Opus 5.5 review: control-plane guard, bench-only zone,
-warmup cleanup, per-phase binary check), measured by tests/unit/test_annatar_stratus.py."""
+state. M4315–M4349 (M4335–M4344: first review — control-plane guard, bench-only zone, warmup
+cleanup, per-phase binary check; M4345–M4349: second review — a report never PASSes without a
+real detonation, legacy tag refused), measured by tests/unit/test_annatar_stratus.py."""
 ENG = "annatar/engines/stratus.py"
 HOST = "annatar/executors/stratus_host.py"
 RUN = "annatar/runner/engine.py"
@@ -105,6 +106,35 @@ MUTANTS = [
      "        self._verify_binary_unchanged(phase)   # re-check the pinned sha256 before every"
      " phase",
      "        pass   # re-check removed (mutant)"),
+    # ── Review round 2 (Opus 5.5): a report never PASSes without a real detonation ──────
+    ("M4345", "a before-probe that raised still reports PASS (no detonation)", RUN,
+     '            else:\n'
+     '                checks["initial_state_before"] = "ERROR"   # warmup ok, failed before'
+     ' detonating',
+     '            elif False:\n'
+     '                checks["initial_state_before"] = "ERROR"   # warmup ok, failed before'
+     ' detonating'),
+    ("M4346", "a watch lost after warmup still reports PASS (no detonation)", RUN,
+     '                    checks["detonate"] = "SKIPPED"   # watch lost after warmup: no'
+     ' detonation',
+     '                    pass   # SKIPPED removed (mutant)'),
+    ("M4347", "a failed detonation is not labelled ERROR in the report", RUN,
+     '            elif tried_detonate and not detonated:\n'
+     '                checks["detonate"] = "ERROR"',
+     '            elif tried_detonate and not detonated and False:\n'
+     '                checks["detonate"] = "ERROR"'),
+    ("M4348", "an after-probe that raised returns a silent unknown (no error)", RUN,
+     '        if checks.get("initial_state_after") == "ERROR":   # the after-probe itself could'
+     ' not run',
+     '        if checks.get("initial_state_after") == "ERROR" and False:   # the after-probe'
+     ' itself could not run'),
+    ("M4349", "a target enrolled only by the legacy annatar-test tag runs Stratus", RUN,
+     "        if guard.legacy:\n"
+     "            # Stratus is a new engine (R2): the migration tag 'annatar-test=true' alone,"
+     " from",
+     "        if guard.legacy and False:\n"
+     "            # Stratus is a new engine (R2): the migration tag 'annatar-test=true' alone,"
+     " from"),
 ]
 
 TESTS = {
@@ -138,4 +168,9 @@ TESTS = {
     "M4342": f"{_T}::test_executor_reverifies_binary_before_each_phase",
     "M4343": f"{_T}::test_executor_reverifies_binary_before_each_phase",
     "M4344": f"{_T}::test_run_stratus_runs_the_cycle_on_an_enrolled_group",
+    "M4345": f"{_T}::test_run_stratus_cycle_before_probe_error_is_not_a_pass",
+    "M4346": f"{_T}::test_run_stratus_cycle_watch_lost_after_warmup_is_not_a_pass",
+    "M4347": f"{_T}::test_run_stratus_cycle_cleans_up_even_when_detonate_fails",
+    "M4348": f"{_T}::test_run_stratus_cycle_after_probe_error_surfaces_an_error",
+    "M4349": f"{_T}::test_run_stratus_refuses_a_legacy_enrolled_group",
 }

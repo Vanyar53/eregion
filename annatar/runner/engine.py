@@ -741,6 +741,14 @@ class Engine:
                    f"{guard.zone!r} — it can create real cloud resources")
             console.print(f"[red]Control-plane safety check failed:[/red] {why}")
             return RunOutcome(run_id, "unknown", error=f"safety: {why}", refused=True)
+        if guard.legacy:
+            # Stratus is a new engine (R2): the migration tag 'annatar-test=true' alone, from
+            # before zones, never enrols a control-plane target — it must carry the explicit
+            # 'eregion-target'/'eregion-zone' (unlike the VM path, which still accepts it).
+            why = ("Stratus runs only on a target enrolled with 'eregion-target' and "
+                   "'eregion-zone', not the legacy 'annatar-test' tag alone")
+            console.print(f"[red]Control-plane safety check failed:[/red] {why}")
+            return RunOutcome(run_id, "unknown", error=f"safety: {why}", refused=True)
 
         open_window(run_id, injector="annatar",
                     kind="technique", experiment=f"{scenario.mitre} {scenario.name}",
@@ -784,6 +792,7 @@ class Engine:
         try:
             lost = self._watch_lost()
             if lost:
+                checks["detonate"] = "SKIPPED"   # the watch is gone: no detonation, never a PASS
                 return self._lost(run_id, lost)
             console.print("[cyan]->[/cyan] Warmup (prerequisites)...")
             attempted = True   # before the call: a warmup that fails half-way is still cleaned
@@ -803,6 +812,7 @@ class Engine:
             if attack_error is None:
                 lost = self._watch_lost()
                 if lost:
+                    checks["detonate"] = "SKIPPED"   # watch lost after warmup: no detonation
                     return self._lost(run_id, lost)
                 console.print(f"[cyan]->[/cyan] Detonate {resolved.technique_id}...")
                 tried_detonate = True
@@ -820,11 +830,13 @@ class Engine:
                     console.print("[cyan]->[/cyan] Signal 'attack_started' emitted.")
         except Exception as e:
             # Label the phase that actually failed — never a bogus detonate=ERROR for a warmup
-            # (or a before-probe) that raised.
+            # that raised, and never a PASS with no detonation when the before-probe raised.
             if checks.get("warmup") != "PASS":
                 checks["warmup"] = "ERROR"
             elif tried_detonate and not detonated:
                 checks["detonate"] = "ERROR"
+            else:
+                checks["initial_state_before"] = "ERROR"   # warmup ok, failed before detonating
             console.print(f"[red]Stratus phase failed:[/red] {type(e).__name__}: {e}")
             raise
         finally:
@@ -879,6 +891,9 @@ class Engine:
                               error="cleanup did not pass — prerequisites may remain")
         if restored is False:
             return RunOutcome(run_id, "unknown", error="initial state not restored after cleanup")
+        if checks.get("initial_state_after") == "ERROR":   # the after-probe itself could not run
+            return RunOutcome(run_id, "unknown",
+                              error="initial state not verified after cleanup")
         return RunOutcome(run_id, "unknown")
 
     @staticmethod

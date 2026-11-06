@@ -337,7 +337,8 @@ def _scenario(**over) -> Scenario:
 
 
 def _fake_executor(tmp_path, *, before=True, after=True, rg_tags=None,
-                   detonate_raises=False, warmup_raises=False):
+                   detonate_raises=False, warmup_raises=False,
+                   before_raises=False, after_raises=False):
     binary, digest = _fake_binary(tmp_path)
     r = resolve(TID, binary_path=binary, stratus_dir=_stratus_dir(tmp_path, digest),
                 catalog=_catalog())
@@ -369,7 +370,13 @@ def _fake_executor(tmp_path, *, before=True, after=True, rg_tags=None,
 
         def probe_initial_state(self, when):
             calls.append(f"probe:{when}")
-            return before if when == "before" else after
+            if when == "before":
+                if before_raises:
+                    raise RuntimeError("before-probe failed")
+                return before
+            if after_raises:
+                raise RuntimeError("after-probe failed")
+            return after
 
     return Fake(), r, calls
 
@@ -406,7 +413,46 @@ def test_run_stratus_cycle_cleans_up_even_when_detonate_fails(tmp_path, monkeypa
     with pytest.raises(RuntimeError, match="detonate failed"):
         engine._run_stratus_cycle(_scenario(), fake, "20260101T000001Z", r)
     assert "cleanup" in calls                       # the prerequisites are always destroyed
+    assert "revert" not in calls                    # no detonation, nothing to revert
     assert "attack_started" not in _signals(tmp_path)   # no effect, no signal
+    rpt = _report(tmp_path)
+    assert rpt["checks"]["detonate"] == "ERROR"     # the failed phase, labelled right
+    assert rpt["result"] == "FAIL"                  # a failed detonation is never a PASS
+
+
+def test_run_stratus_cycle_before_probe_error_is_not_a_pass(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    fake, r, calls = _fake_executor(tmp_path, before_raises=True)
+    with pytest.raises(RuntimeError, match="before-probe failed"):
+        Engine()._run_stratus_cycle(_scenario(), fake, "20260101T000013Z", r)
+    assert "detonate" not in calls                  # the before-probe failed: never detonated
+    assert "cleanup" in calls
+    rpt = _report(tmp_path)
+    assert rpt["checks"]["initial_state_before"] == "ERROR"
+    assert rpt["result"] == "FAIL"                  # never a PASS without a detonation
+
+
+def test_run_stratus_cycle_watch_lost_after_warmup_is_not_a_pass(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+    monkeypatch.chdir(tmp_path)
+    fake, r, calls = _fake_executor(tmp_path)
+    engine = Engine()
+    engine._watch_lost = MagicMock(side_effect=["", "the watch died"])   # ok, then lost
+    out = engine._run_stratus_cycle(_scenario(), fake, "20260101T000014Z", r)
+    assert out.error and "glorfindel" in out.error
+    assert "detonate" not in calls and "cleanup" in calls
+    rpt = _report(tmp_path)
+    assert rpt["checks"]["detonate"] == "SKIPPED"
+    assert rpt["result"] == "FAIL"                  # a lost watch is never a PASS
+
+
+def test_run_stratus_cycle_after_probe_error_surfaces_an_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    fake, r, calls = _fake_executor(tmp_path, after_raises=True)
+    out = Engine()._run_stratus_cycle(_scenario(), fake, "20260101T000015Z", r)
+    assert out.error == "initial state not verified after cleanup"   # not a silent unknown
+    rpt = _report(tmp_path)
+    assert rpt["checks"]["initial_state_after"] == "ERROR"
 
 
 def test_run_stratus_cycle_does_not_detonate_on_a_dirty_initial_state(tmp_path, monkeypatch):
@@ -437,6 +483,28 @@ def test_run_stratus_refuses_a_target_without_subscription(tmp_path, monkeypatch
     sc = _scenario(target={"type": "azure_subscription", "resource_group": "rg-celebrimbor"})
     out = Engine()._run_stratus(sc, "20260101T000004Z", _session(tmp_path), r, executor=fake)
     assert out.refused and "subscription_id" in out.error
+
+
+def test_run_stratus_refuses_a_legacy_enrolled_group(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")
+    legacy = {"annatar-test": "true"}   # the old migration tag alone — zone bench, but legacy
+    fake, r, calls = _fake_executor(tmp_path, rg_tags=legacy)
+    out = Engine()._run_stratus(_scenario(), "20260101T000016Z", _session(tmp_path), r,
+                                executor=fake)
+    assert out.refused and "annatar-test" in out.error   # a new engine never runs on it
+    assert "warmup" not in calls
+
+
+def test_run_stratus_refuses_a_non_destructive_technique_in_production(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")
+    prod = {"eregion-target": "celebrimbor", "eregion-zone": "production"}
+    fake, r, calls = _fake_executor(tmp_path, rg_tags=prod)   # the case check_zone lets through
+    out = Engine()._run_stratus(_scenario(), "20260101T000017Z", _session(tmp_path), r,
+                                executor=fake)
+    assert out.refused and "bench" in out.error
+    assert "warmup" not in calls
 
 
 def test_run_stratus_runs_the_cycle_on_an_enrolled_group(tmp_path, monkeypatch):

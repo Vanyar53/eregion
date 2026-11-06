@@ -17,8 +17,9 @@ Fail closed, like the Atomic adapter:
     segment, never reach a process argv);
   - a technique id not on the catalog's closed allow-list is refused (the catalog is the
     contract; an id Stratus knows but the catalog does not is not ours to run);
-  - the Stratus binary is checked against its sha256 in ``annatar/stratus/PIN`` before any
-    phase runs, at EVERY run (not only in CI): a binary that is not the pinned one runs
+  - the Stratus binary is checked against its sha256 in ``annatar/stratus/PIN`` at resolve time,
+    and the injector (annatar/executors/stratus_host.py) re-checks it BEFORE EVERY phase (not
+    only once per run): a binary that is not the pinned one, or one swapped mid-run, runs
     nothing. We pin the binary we exec; the upstream archive's published sha256 sits beside it
     as provenance (annatar/stratus/PIN);
   - the read-only Graph probe a technique declares is held to a GET of a Microsoft Graph read

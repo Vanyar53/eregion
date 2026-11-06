@@ -168,6 +168,17 @@ def test_the_target_waits_on_the_host_key_check():
     assert "\nglorfindel-host-client-rules: glorfindel-host-known\n" in text
 
 
+def test_the_target_is_phony_and_in_make_help():
+    text = (ROOT / "Makefile").read_text()
+    phony = text[text.index("\n.PHONY:"):]
+    phony = phony[:phony.index("\n\n")].replace("\\\n", " ").split()
+    assert "glorfindel-host-client-rules" in phony
+    if shutil.which("make"):
+        res = subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "help"],
+                             capture_output=True, text=True, timeout=60)
+        assert "make glorfindel-host-client-rules" in res.stdout
+
+
 # ── The merge itself ────────────────────────────────────────────────────────────────
 
 def _write(path: Path, data) -> Path:

@@ -152,7 +152,7 @@ DOCKER_GLORFINDEL_WATCH = $(WATCH_KEY_DIR) && $(RUNS_DIRS) && $(GLORFINDEL_AZURE
 	canary-jit providers-lock celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	celebrimbor-logs-plan celebrimbor-logs-up celebrimbor-auditd-plan celebrimbor-auditd-up \
 	celebrimbor-identity-plan celebrimbor-identity-up celebrimbor-unit-prepare celebrimbor-users-plan celebrimbor-users-up \
-	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
+	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push glorfindel-host-client-rules \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
 	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-rollback glorfindel-host-cd-uninstall \
@@ -249,6 +249,7 @@ help:
 	@echo "  make glorfindel-host-up   [OPERATOR_CIDR=] [YES=1]  Crée la VM (confirmation, sauf YES=1)"
 	@echo "  make glorfindel-host-env                     host.env depuis ton .envrc (sans secret Azure)"
 	@echo "  make glorfindel-host-push [HUMAN_ONLY=1]     host.env + config sur la VM (modes de H0 gardés ; HUMAN_ONLY=1 : tout en human_only)"
+	@echo "  make glorfindel-host-client-rules [CLIENT_RULES=]  Règles du banc fondues dans la couche du client de H0 (WL1), la watch redémarre"
 	@echo "  make glorfindel-host-report [SINCE=7d]       Rapport d'observation"
 	@echo "  make glorfindel-host-pull                    Copie locale des verdicts et de la mémoire (chaque semaine)"
 	@echo "  make glorfindel-host-model MODEL=…           Changer le modèle qui décide (ou MODEL=default)"

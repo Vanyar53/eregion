@@ -539,7 +539,7 @@ def _drift(base_rules: dict[str, dict], client: dict) -> tuple[dict, list[str], 
             names.append(name)          # the stale copy is not kept: the shipped rule loads
         else:
             kept.append(entry)
-    return {**client, "rules": kept}, names, notes
+    return {**client, "rules": kept}, list(dict.fromkeys(names)), notes
 
 
 def _entry_label(entry) -> str:

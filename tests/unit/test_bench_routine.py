@@ -382,6 +382,13 @@ def test_an_invalid_stale_copy_is_said_skipped_never_drift(tmp_path):
     assert next(r for r in cfg.rules if r.name == NAME).layer == "base"
 
 
+def test_a_name_drifted_twice_is_said_once(tmp_path):
+    layer = tmp_path / "client_rules.yaml"
+    layer.write_text(yaml.safe_dump({"rules": [CLIENT[NAME], CLIENT[NAME]]}, sort_keys=False, allow_unicode=True))
+    cfg = load_config(_base_with(tmp_path, query=CHANGED_QUERY)[0], client_layer=layer)
+    assert cfg.drifted == [NAME]
+
+
 def test_a_client_rule_that_is_no_copy_says_no_drift(tmp_path):
     rule = {k: v for k, v in CLIENT[NAME].items() if k != "base_sha256"}
     path = tmp_path / "client_rules.yaml"

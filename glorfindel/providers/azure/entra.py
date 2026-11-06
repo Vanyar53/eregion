@@ -14,7 +14,7 @@ the table it reads:
     `signin` (an unusual sign-in of a service principal);
   - `EventId`: what makes the finding one across polls (its CorrelationId and target; for a
     sign-in, the service principal and the address) — the RulePoller's dedup;
-  - `Result`, `RoleName`, `Permissions`, `AdminConsent`, `CredentialAdded`, `Location`,
+  - `Result`, `RoleName`, `Permissions`, `AdminConsent`, `AppOnly`, `CredentialAdded`, `Location`,
     `SignIns`, `BaselineSignIns`, `BaselineDays`: what the thresholds and the card read.
 
 What this adapter does before the rows leave it — the thresholds a rule's query cannot hold
@@ -170,11 +170,13 @@ def describe(row: dict, plan: dict | None = None) -> tuple[str, list[str]]:
         what = (f"Entra ID : identifiant ajouté ({op}) par {actor} sur {target}."
                 + (f" Identifiant : {added}." if added else ""))
     elif kind == "consent":
-        perms = str(row.get("Permissions") or "").strip()
+        # C2b: the permission, the application, its nature and for whom, in one line — never the
+        # raw diff of ConsentAction.Permissions (`[] => [[Id: …, ClientId: …]]`).
+        from glorfindel.providers.azure import entra_consent
         admin = str(row.get("AdminConsent") or "").strip().lower() in ("true", "1")
-        what = (f"Entra ID : consentement accordé ({op}) par {actor} à {target}"
+        what = (f"Entra ID : consentement accordé ({op}) par {actor}"
                 + (" — consentement d'administrateur, pour tout le tenant" if admin else "")
-                + (f". Permissions : {perms}" if perms else "") + ".")
+                + f". {entra_consent.line(row)}")
     elif kind == "role":
         role = str(row.get("RoleName") or "").strip() or "rôle non lu"
         what = (f"Entra ID : rôle d'annuaire privilégié « {role} » attribué ({op}) par {actor} "

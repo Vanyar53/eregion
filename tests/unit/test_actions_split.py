@@ -34,7 +34,8 @@ def test_every_module_of_the_split_is_in_the_facade():
     on_disk.discard("glorfindel.providers.azure.own_run_command")  # its own Run Command read (SID1): neither
     on_disk.discard("glorfindel.providers.azure.identity_contract")  # the identity executor's contract (IR1b): neither
     # An identity card's plan and its check, on Graph read only (IR1a): neither.
-    for name in ("graph", "entra_items", "entra_grants", "entra_plan", "entra_check"):
+    # A consent said in one line (C2b): neither.
+    for name in ("graph", "entra_items", "entra_grants", "entra_plan", "entra_check", "entra_consent"):
         on_disk.discard(f"glorfindel.providers.azure.{name}")
     assert on_disk == set(SPLIT)
 

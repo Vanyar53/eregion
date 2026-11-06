@@ -51,16 +51,18 @@ MUTANTS += [
 ]
 MUTANTS += [
     ("M4365", "a stale copy set aside although the layer disables the shipped rule: nothing detects (WL1)",
-     RULES, "            if not base.get(\"enabled\", True) or name in off:\n",
-     "            if not base.get(\"enabled\", True):\n"),
+     RULES, " if not base.get(\"enabled\", True) or name in off\n",
+     " if not base.get(\"enabled\", True)\n"),
     ("M4366", "a stale copy set aside although the release disables the shipped rule: nothing detects (WL1)",
-     RULES, "            if not base.get(\"enabled\", True) or name in off:\n",
-     "            if name in off:\n"),
+     RULES, " if not base.get(\"enabled\", True) or name in off\n",
+     " if name in off\n"),
     ("M4367", "a stale copy of a shipped rule that will not load dropped: nothing detects (WL1)", RULES,
      "                kept.append(entry)          # the shipped rule off: the copy alone detects its technique\n",
      "                pass\n"),
     ("M4368", "a copy with the retired base_query_sha256 loads, never compared (WL1)", RULES,
      "    if \"base_query_sha256\" in entry:\n", "    if False:\n"),
+    ("M4369", "a stale copy set aside although another entry of its name may disable the rule (WL1)",
+     RULES, " if held.count(name) > 1\n", " if False\n"),
 ]
 TESTS = {f"M{n}": _TESTS for n in range(4265, 4270)}
 TESTS.update({
@@ -73,4 +75,5 @@ TESTS.update({
     "M4366": f"{_TESTS}::test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running",
     "M4367": f"{_TESTS}::test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running",
     "M4368": f"{_TESTS}::test_a_copy_with_the_retired_field_is_set_aside_and_the_shipped_rule_loads",
+    "M4369": f"{_TESTS}::test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running",
 })

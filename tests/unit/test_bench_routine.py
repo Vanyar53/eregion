@@ -336,14 +336,20 @@ def test_a_base_rule_gone_since_the_copy_keeps_the_copy_and_says_it(tmp_path):
     assert loaded.layer == "client" and loaded.query == CLIENT[NAME]["query"]
 
 
-@pytest.mark.parametrize("off", ["disable", "shipped_disabled"])
+@pytest.mark.parametrize("off", ["disable", "shipped_disabled", "entry_disabled"])
 def test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running(tmp_path, off):
     """Setting the copy aside must never leave its technique undetected: with the shipped rule
-    named in the layer's `disable`, or `enabled: false` in a release, the copy runs, and the drift
-    is said — never « la règle livrée tourne »."""
+    named in the layer's `disable`, `enabled: false` in a release, or another entry of its name in
+    the layer (`{name, enabled: false}` before the copy: merge_layers keeps the last), the copy
+    runs, and the drift is said — never « la règle livrée tourne »."""
     if off == "disable":
         base, rule = _base_with(tmp_path, query=CHANGED_QUERY)
         layer = _layer(tmp_path, disable=[NAME])
+    elif off == "entry_disabled":
+        base, rule = _base_with(tmp_path, query=CHANGED_QUERY)
+        layer = tmp_path / "client_rules.yaml"
+        layer.write_text(yaml.safe_dump({"rules": [{"name": NAME, "enabled": False}, CLIENT[NAME]]},
+                                        sort_keys=False, allow_unicode=True))
     else:
         base, rule = _base_with(tmp_path, enabled=False)
         layer = _layer(tmp_path)
@@ -352,7 +358,8 @@ def test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running(tmp_path, 
     assert loaded.layer == "client" and loaded.query == CLIENT[NAME]["query"]
     assert cfg.drifted == [NAME] and cfg.disabled_base == []
     [note] = [n for n in cfg.notes if "dérive" in n]
-    assert "ne tournerait pas" in note and "tourne toujours" in note and "tourne à sa place" not in note
+    assert ("ne tournerait pas" in note or "autre entrée" in note) and "tourne toujours" in note
+    assert "tourne à sa place" not in note
     assert base_rule_sha256(rule) in note
 
 

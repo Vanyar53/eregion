@@ -34,6 +34,9 @@ _HEADER = """\
 #   assets, monitoring_backends : comme dans la base, l'entrée du client gagne par nom
 #   base_sha256 (dans une règle recopiée d'une règle de base) : l'empreinte de la règle livrée
 #             copiée — quand elle change, la copie est écartée et la règle livrée charge (WL1)
+#   env_guids (dans une règle) : les variables EREGION_RULE_… de l'environnement de la watch
+#             dont la requête prend la valeur, un GUID, à la place de ${NOM} ; absente ou
+#             invalide, la règle est écartée et la règle livrée de son nom charge (CAN2)
 # Écrite par `glorfindel approve-rule`, la War Room et `glorfindel migrate-rules` ; éditable
 # à la main (un commentaire ne survit pas à la prochaine écriture : mettre une description).
 """

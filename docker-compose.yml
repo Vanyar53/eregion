@@ -160,6 +160,11 @@ services:
       EREGION_OPERATOR_OBJECT_ID: ${EREGION_OPERATOR_OBJECT_ID:-}
       EREGION_PROTECTED_IDENTITIES: ${EREGION_PROTECTED_IDENTITIES:-}
       EREGION_IDENTITY_EXECUTOR_CLIENT_ID: ${EREGION_IDENTITY_EXECUTOR_CLIENT_ID:-}
+      # CAN2 (#605) : l'appid du principal du canari azurerm, qu'une règle de la couche du client du
+      # banc prend dans son environnement (env_guids) pour écarter le canari de
+      # nsg-change-outside-glorfindel. Un id, aucun secret, jamais dans le dépôt ; vide ou pas un GUID,
+      # la règle livrée tourne (les cartes du canari reviennent) et la watch le dit.
+      EREGION_RULE_CANARY_APPID: ${EREGION_RULE_CANARY_APPID:-}
     volumes:
       # SEC18 : son répertoire en écriture (ses cycles ; sur H0, ce qu'elle tire du canal et les
       # rapports de campagne ; FS1b : ses reçus de la file et son statut, queue/) ; ceux des
@@ -286,6 +291,9 @@ services:
       EREGION_CONSOLE_HOSTS: ${EREGION_CONSOLE_HOSTS:-}
       # SEC19 : la clé publique de la watch — Dagorlad montre la garde comme un injecteur la lit.
       EREGION_WATCH_KEY: ${EREGION_WATCH_KEY:-}
+      # CAN2 : comme la watch, pour montrer ses règles telles qu'elle les charge (la copie du banc
+      # de nsg-change-outside-glorfindel, sinon montrée « base »). Un id, aucun secret.
+      EREGION_RULE_CANARY_APPID: ${EREGION_RULE_CANARY_APPID:-}
     volumes:
       # SEC18 : runs/console en écriture — la console y note les actions de l'opérateur
       # (manual_actions.jsonl) et la vérification d'une action approuvée, pour le fil (SEC3) ; les

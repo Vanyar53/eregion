@@ -123,18 +123,21 @@ def test_the_bench_rule_is_the_shipped_query_plus_the_exclusion_block_alone():
 
 
 def test_the_bench_layer_replaces_the_shipped_rule_said_and_without_drift(tmp_path):
-    cfg = load_config(shipped_rules_path(), client_layer=BENCH)
+    # The layer's other copy (CAN2, test_canary_exclusion.py) takes a GUID from the environment.
+    canary = "nsg-change-outside-glorfindel"
+    cfg = load_config(shipped_rules_path(), client_layer=BENCH,
+                      environ={"EREGION_RULE_CANARY_APPID": "00000000-0000-0000-0000-00000000ca17"})
     [rule] = [r for r in cfg.rules if r.name == NAME]
     assert rule.layer == "client" and rule.replaces_base and rule.query == CLIENT[NAME]["query"]
-    assert cfg.overrides == [NAME] and cfg.drifted == [] and cfg.disabled_base == []
-    assert cfg.notes == [f"règle de base « {NAME} » remplacée par celle de la couche du client"]
+    assert cfg.overrides == [NAME, canary] and cfg.drifted == [] and cfg.disabled_base == []
+    assert cfg.notes == [f"règle de base « {n} » remplacée par celle de la couche du client" for n in (NAME, canary)]
     # The base itself is untouched: an update of Glorfindel replaces it, never this layer.
     assert "celebrimbor" not in shipped_rules_path().read_text()
 
 
-def test_the_bench_layer_holds_this_rule_alone():
+def test_the_bench_layer_holds_this_rule_and_the_canary_s_alone():
     data = yaml.safe_load(BENCH.read_text())
-    assert set(data) == {"rules"} and list(CLIENT) == [NAME]
+    assert set(data) == {"rules"} and list(CLIENT) == [NAME, "nsg-change-outside-glorfindel"]
 
 
 # ── The cron passes; the shipped rule still sees it ─────────────────────────────────

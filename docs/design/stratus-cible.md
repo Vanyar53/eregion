@@ -22,25 +22,30 @@ Le cycle de R2a est inchangé — `warmup → detonate → revert → cleanup` ;
 
 **Le mécanisme du bac à sable est une hypothèse à mesurer au banc** (écrite comme telle) : soit un conteneur ou un espace réseau avec un **proxy de jeton limité au `client_id` de Stratus**, soit une fédération « identité managée comme credential » d'une application. **Mesure, avant le code** : depuis le bac à sable, une **demande de jeton pour l'identité d'Orodruin doit échouer**.
 
-**À écarter explicitement** : une UAMI attachée à la VM **sans** bac à sable n'isole rien (le code d'Orodruin pourrait toujours demander le jeton de l'UAMI, et réciproquement) — ce n'est pas la solution.
+**À écarter explicitement** : une UAMI attachée à la VM **sans** bac à sable n'isole rien (le bac à sable pourrait demander le jeton propre d'Orodruin) — ce n'est pas la solution. Le danger est **à sens unique** : seul le sens **bac à sable (Stratus) → jeton d'Orodruin** est à interdire. Le sens inverse est **voulu** — le processus d'Orodruin, **hors du bac à sable**, détient le jeton de Stratus pour lancer l'outil et pour les lectures du contrat (ci-dessous). L'identité de Stratus **vit dans le tenant**, comme tout principal ; l'invariant porte sur ce qu'elle **fait**, pas sur où elle existe.
 
-L'identité distincte donne un **appelant distinct** dans `AzureActivity`, ce qui fonde un invariant à écrire : **une identité Stratus vue agir hors de l'abonnement dédié = critique**.
+L'identité distincte donne un **appelant distinct** dans `AzureActivity`, ce qui fonde un invariant à écrire : **une identité Stratus vue agir hors de l'abonnement dédié = critique** (N5).
 
-### Ce que le contrat doit faire
+### Ce que le contrat doit faire — et avec quel jeton il lit (N1)
 
-Le contrat d'Orodruin pour **sa propre identité reste tel quel** (`orodruin.py:226-227` : il refuse toujours toute attribution hors banc — l'identité d'Orodruin ne gagne **aucun** rôle en B). R2b ajoute une **garantie nouvelle** : `orodruin-check` lit **la seconde identité** (celle de Stratus) et prouve qu'elle est bornée.
+Le contrat d'Orodruin pour **sa propre identité reste quasi tel quel** (`orodruin.py:226-227`). Mais `orodruin-check` doit **lire** l'abonnement dédié pour l'armer (les attributions de Stratus, le paramètre de diagnostic, les groupes à COLD), et `read_identity` lit avec le **jeton d'Orodruin** : sans aucun droit là, il prend un 403 — ou pire, une **liste vide** qu'il croirait prouver une absence (le bug M191). D'où un partage des lectures, **par jeton**, qui ne demande aucune décision de Jonathan :
 
-- **Lire les attributions de l'identité Stratus** à la portée de l'abonnement dédié, avec preuve d'absence **ailleurs** (sur le banc et sur l'abonnement de la VM : rien) — la seconde identité ne tient qu'un rôle, sur le seul abonnement dédié.
-- **Un rôle tenu à une liste fermée d'actions** (l'esprit de SEC11) : jamais un joker, jamais `Microsoft.Authorization/*/write` ; les actions minimales par technique, mesurées au banc (§ Questions).
-- **Refuser si `EREGION_STRATUS_SUBSCRIPTION` vaut l'abonnement du banc ou celui de la VM** : sans ce refus, une ligne d'`orodruin.env` ramènerait le bloquant v1 (un rôle large sur le banc). `orodruin-check` → `passive`.
-- **Dire que les autres abonnements du tenant restent improuvables** (la lecture ne prouve l'absence que sur l'abonnement dédié, le banc et la VM, pas sur un troisième).
+- **(a) les attributions de Stratus** (prouver que son identité ne tient qu'un rôle fermé, sur ce seul abonnement) se lisent avec le **jeton d'Orodruin** : son identité reçoit, **sur l'abonnement dédié seulement**, exactement `AUTHZ_READ_ONLY` (`roleAssignments/read`, `roleDefinitions/read`) — le **seul** droit que le contrat **inchangé** admet déjà hors du banc (`orodruin.py:105-108, 322-324`). Rien d'autre pour l'identité d'Orodruin là-bas.
+- **(b) le paramètre de diagnostic et les groupes (COLD)** se lisent avec le **jeton de Stratus**, par le processus d'Orodruin **hors du bac à sable** (sens voulu, § décision). Le rôle fermé de Stratus contient donc `Microsoft.Insights/diagnosticSettings/read` et `…/resourceGroups/read` ; et son `NotActions` sur les paramètres de diagnostic se resserre de `*` à **`write` + `delete`** (lire oui, modifier/supprimer non — Stratus ne peut pas aveugler la watch).
+- **l'absence ailleurs** (le banc, l'abonnement de la VM : l'identité Stratus n'y tient rien) se lit avec le **jeton d'Orodruin**, filtré `assignedTo('<oid de Stratus>')`.
+- **Rôle fermé (SEC11)** : jamais un joker, **aucune action `Microsoft.Authorization` sauf `roleAssignments/read` et `roleDefinitions/read`** (N6) ; les actions d'attaque minimales par technique, mesurées au banc (§ Questions).
+- **Refuser si `EREGION_STRATUS_SUBSCRIPTION` vaut l'abonnement du banc, celui de la VM, celui de H0 ou celui de la VM d'Orodruin** : sans ce refus, une ligne d'`orodruin.env` ramènerait le bloquant v1. `orodruin-check` → `passive`.
+- **Les autres abonnements du tenant restent improuvables** (la lecture ne prouve l'absence que sur l'abonnement dédié, le banc et la VM).
 
-### Le kill coupe l'identité Stratus seule (constat 2)
+**À mesurer** : que le jeton d'Orodruin, avec `AUTHZ_READ_ONLY` sur l'abonnement dédié, liste bien les attributions de Stratus (et non un 403 ou une liste vide trompeuse).
 
-`orodruin-kill` ne révoque aujourd'hui que les scopes du contrat et de la VM : il ne toucherait pas le rôle de l'identité Stratus sur l'abonnement dédié. R2b doit :
+### Le kill coupe l'identité Stratus seule (constat 2, N3)
 
-- **révoquer** l'attribution de l'identité Stratus sur `EREGION_STRATUS_SUBSCRIPTION` — l'identité d'Orodruin, elle, n'a rien à y révoquer (elle n'y a aucun rôle, B) ;
-- prouver **« rien à révoquer »** en relisant cet abonnement (le patron M191) ;
+`orodruin-kill` ne révoque aujourd'hui que les scopes du contrat et de la VM : il ne toucherait pas le rôle de l'identité Stratus sur l'abonnement dédié. Mais **Orodruin ne peut pas le révoquer lui-même** : sur l'abonnement dédié il n'a que `AUTHZ_READ_ONLY` (lecture), et le rôle fermé de Stratus n'a aucun `Authorization/*/write`. La révocation est donc un **geste de l'opérateur** (sous son `az login`), que `kill.py` outille :
+
+- `kill.py` reçoit l'**oid de Stratus** et l'**abonnement dédié** (en arguments ou depuis une sortie Terraform), jamais en dur ;
+- la **révocation** = l'opérateur supprime l'attribution de l'identité Stratus sur `EREGION_STRATUS_SUBSCRIPTION` ;
+- la preuve **« rien à révoquer »** = la liste de l'opérateur `az role assignment list --all --assignee-object-id <oid de Stratus> --subscription <dédié>` (le patron M191 : **`--all`** pour attraper une attribution posée sur un groupe, **`--subscription`** pour viser le bon abonnement) ;
 - des mutants.
 
 ---
@@ -74,12 +79,15 @@ Aujourd'hui `RowAttribution` (`detection_rules.py:1158-1163, 1327-1329`) lit le 
 
 - nommer **`RowAttribution`, `_route` et `source_of`** comme points de changement ;
 - poser l'étiquetage « exercice » sur le **`SubscriptionId`** de la ligne (quand il vaut l'abonnement dédié **tenu par la config de H0** et qu'une fenêtre est ouverte), pas sur un `resourceId` de VM ;
+- **(N7, recommandé) exiger aussi l'appelant Stratus** sur la ligne : l'étiquette « exercice » ne vaut que pour `SubscriptionId == <dédié>` **et** l'appelant = l'identité de Stratus — pas pour un tiers qui agirait dans l'abonnement ;
+- **(N4)** la watch passe aussi par `is_enrolled` et `zone_allows` (`exercise.py:522-556`) : l'inscription et la zone `bench` de l'abonnement dédié viennent de la **config de H0**, jamais `production` ;
+- **(N8)** la watch **refuse** comme cible d'une fenêtre non seulement l'abonnement du banc, mais aussi celui de **H0** et celui de la **VM d'Orodruin** — tenus de sa config, jamais de la fenêtre ;
 - lister les règles **AL1** qui vont tirer sur le `warmup`/`cleanup` : p. ex. `nsg-change-outside-glorfindel` sur le NSG que crée la technique (carte critique) ;
 - dire qu'**aucune règle actuelle** ne détecte Run Command, ni le lien Bastion par un autre appelant — c'est ID1, mais à écrire. Les lignes `AzureActivity` de l'abonnement dédié sont des **données contrôlées** par qui agit dedans ; AL1 décide **sans modèle**, à garder ainsi.
 
 ### Le kill — révoquer, puis vider l'abonnement (constats 2, 9)
 
-`orodruin-kill` révoque l'identité (y compris le rôle dédié, § 1) et ferme les fenêtres. Le nettoyage de l'abonnement dédié **ne peut pas** passer par `stratus cleanup --all` depuis le poste de l'opérateur : l'état Terraform de Stratus vit dans le `HOME` d'Orodruin, que le kill vient de désallouer — il n'y a plus d'état. Le bon geste, rendu possible par l'abonnement dédié : **vider l'abonnement** — `az group list --subscription <dédié>` puis `az group delete` de chaque groupe **hors de la liste des groupes qu'Azure crée lui-même** (§ 4), sous le `az login` de l'opérateur, et vérifier qu'il est vide.
+`orodruin-kill` révoque l'identité **d'Orodruin** (banc, VM) et ferme les fenêtres ; le rôle de l'identité **Stratus** sur l'abonnement dédié est révoqué par l'**opérateur** (§ 1, le kill — Orodruin n'y a que la lecture). Le nettoyage de l'abonnement dédié **ne peut pas** non plus passer par `stratus cleanup --all` depuis le poste de l'opérateur : l'état Terraform de Stratus vit dans le `HOME` d'Orodruin, que le kill vient de désallouer — il n'y a plus d'état. Le bon geste, rendu possible par l'abonnement dédié : **vider l'abonnement** — `az group list --subscription <dédié>` puis `az group delete` de chaque groupe **hors de la liste des groupes qu'Azure crée lui-même** (§ 4), sous le `az login` de l'opérateur, et vérifier qu'il est vide.
 
 ---
 
@@ -120,7 +128,7 @@ Tous **manuels** (une session n'applique jamais) ; le plan montré avant. **En T
 2. **Le rôle personnalisé fermé + son attribution** (jamais Contributor), au scope `/subscriptions/<id>` :
    - `Actions` = la liste minimale mesurée par technique ; **`NotActions`** = `Microsoft.Insights/diagnosticSettings/*` (écriture/suppression), `Microsoft.Consumption/*`, `Microsoft.CostManagement/*`, les credentials fédérés ;
    - attribution avec `--assignee-object-id <oid> --assignee-principal-type ServicePrincipal` ;
-   - **Vérif (le piège M191)** : `az role assignment list --assignee <oid> --subscription <id>` montre ce rôle ; répéter **abonnement par abonnement** (`--all` ne liste que l'abonnement courant de la CLI). Puis `orodruin-check` s'arme.
+   - **Vérif (le piège M191, N2)** : `az role assignment list --all --assignee-object-id <oid> --subscription <id>` (comme `kill.py:124-127`) — **`--all`** pour attraper une attribution posée sur un **groupe** (sans lui, elle échappe), **`--subscription`** pour viser chaque abonnement ; répéter sur le banc et la VM pour prouver l'absence. Puis `orodruin-check` s'arme.
 3. **Une Azure Policy** sur l'abonnement dédié (le vrai plafond) : types, SKU et régions autorisés, **adresses IP publiques refusées sauf celle du Bastion**.
 4. **Le paramètre de diagnostic** (abonnement dédié → workspace du banc), en Terraform. **Premier test** : avec un groupe vide **créé puis supprimé par Jonathan**, avant tout run Stratus — vérifier que l'événement arrive dans `AzureActivity`.
 5. **Le budget** via Terraform (`azurerm_consumption_budget_subscription` + un groupe d'action, éprouvé par `az monitor action-group test-notifications`) ; dire qu'il est évalué avec **8–24 h de retard** (ce n'est pas un plafond temps réel).

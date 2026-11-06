@@ -67,6 +67,7 @@ Index :
    Ils tournent en arrière-plan, au plus `Parallel` à la fois.
 
 3. **Au retour d'un exécutant :**
+   - Vérifie qu'il ne laisse aucune tâche de fond (`ps` : ni suite, ni passe de mutants, ni boucle). La charge du poste tue VS Code (`docs/sessions.md`, « La charge du poste ») : dans chaque prompt d'exécutant ou de relecteur, `pytest -n 4` au plus, `mutation_check.py --jobs 2`, jamais `az … --help` sur une commande d'extension, aucune tâche de fond en rendant la main.
    - Mets à jour sa ligne dans l'index : état et branche.
    - Lance `palantir.py agent "elrond <ID> · <titre>" --json`.
      - Verdict `expected-model-only` : le modèle est `5.5`. Relecture seulement si la politique est `always`.

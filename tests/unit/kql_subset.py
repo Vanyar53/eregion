@@ -5,12 +5,15 @@ Only what the Syslog rules use: a table, then `where`, `extend`, `summarize` (`a
 alone, or `name = count()`, `countif(p)`, `min(col)`, `max(col)`, `take_any(col)`,
 `make_set_if(col, p, n)` — AUD1 —, several of them), `project`, `order by`, `limit`; predicates
 `==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`, `!has`, `in (…)`, `matches regex`, `startswith`,
+`endswith` (both case-insensitive, as in KQL — WL1),
 `and`, `or`, `not(…)`; functions `ago()`, `extract()`, `isnotempty()`, `isnotnull()`, `toint()`,
 `tolong()`, `tostring()`. Anything
 else raises NotImplementedError: a rule this reader cannot follow fails its test, never
 passes it by accident. `has` is KQL's term match (case-insensitive, at term boundaries);
 regexes are read by Python's `re` in ASCII mode (`\\d` is 0–9 only, as in RE2: AUD1's review —
-`²` is a digit to Python's default `re`, not to Log Analytics).
+`²` is a digit to Python's default `re`, not to Log Analytics). `$` also matches before a final
+line break in Python, never in RE2: an exclusion anchored by `$` reads here as wider than in Log
+Analytics, never narrower (WL1).
 """
 from __future__ import annotations
 
@@ -147,6 +150,10 @@ class _Parser:
             self.take()
             right = self.primary()
             return lambda r: str(left(r) or "").lower().startswith(str(right(r)).lower())
+        if op == "endswith" and tok[0] == "ident":
+            self.take()
+            right = self.primary()
+            return lambda r: str(left(r) or "").lower().endswith(str(right(r)).lower())
         if op == "in" and tok[0] == "ident":
             self.take()
             self.take("op", "(")

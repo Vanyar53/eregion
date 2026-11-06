@@ -162,16 +162,30 @@ function _targetOf(e) {
   return (t && typeof t === 'object' && Object.prototype.hasOwnProperty.call(_TARGET_KINDS, t.kind)) ? t : null;
 }
 // Every identity card on one tile, never a VM's (the bot's one thread, the same way).
-const _IDENTITY_TILE = 'entra-identities';
+// A tile of its own — the identities', a group's, the control plane's — is named with a « : »,
+// which no VM's name holds: never one tile with a VM of the same name (review, AL1c).
+const _IDENTITY_TILE = 'entra:identities';
 function _isIdentityCard(e) { const t = _targetOf(e); return !!t && t.kind === 'identity'; }
 function _isIdentityId(rid) { return /^entra:/.test(rid || ''); }
+// The tile of its own a card is filed on (its name), or '' for a VM's or an NSG's.
+function _ownTile(e) {
+  const t = _targetOf(e);
+  if (!t) return '';
+  if (t.kind === 'identity') return _IDENTITY_TILE;
+  if (t.kind === 'resource_group') return 'group:' + String(e.resource_id || '').toLowerCase();
+  if (t.kind === 'control_plane') return 'plane:control';
+  return '';
+}
 // The cards a tile shows: its own; on the identities' tile, every identity card; on a VM's, the
-// cards about an NSG that covers it too.
+// cards about an NSG that covers it too. A card on a tile of its own is on that tile only —
+// never matched by the last segment of its id.
 function _onTile(e, r) {
   if (r.kind === 'identity') return _isIdentityCard(e);
   if (_isIdentityCard(e)) return false;
+  const own = _ownTile(e);
+  if (own || r.kind) return own === r.vm_name;
   return e.resource_id === r.resource_id || e.resource_id.split('/').pop() === r.vm_name
-    || (!r.kind && !r.is_nsg && !r.is_cluster && _coversVm(e, r.resource_id));
+    || (!r.is_nsg && !r.is_cluster && _coversVm(e, r.resource_id));
 }
 let _tiles = new Map();   // vm_name → the tile rendered (renderInfra): what a modal of it shows
 // A card about an NSG is shown on each VM it covers, the same card (one Ack).
@@ -181,21 +195,28 @@ function _coversVm(e, rid) {
   return !!t && t.kind === 'nsg' && Array.isArray(t.vms) && !!id
     && t.vms.some(v => String(v).toLowerCase() === id);
 }
+const _VMS_SHOWN = 8;
 function _targetNote(e, vmName) {
   const t = _targetOf(e);
   if (t) {
     const named = t.kind === 'control_plane' ? '' : ' ' + _attr(t.name || '?');
     const kind = t.kind === 'identity' ? _attr(t.identity_type || 'identity') : _TARGET_KINDS[t.kind];
     const via = t.via ? ` · ${_attr(t.via)}` : '';
-    const covers = Array.isArray(t.vm_names) && t.vm_names.length
-      ? ` · covers ${t.vm_names.map(v => _attr(v)).join(', ')}` : '';
+    // The VMs an NSG covers: named up to _VMS_SHOWN, the rest counted (the bot's way).
+    const vms = Array.isArray(t.vm_names) ? t.vm_names : [];
+    const more = vms.length > _VMS_SHOWN ? ` and ${vms.length - _VMS_SHOWN} more` : '';
+    const covers = vms.length
+      ? ` · covers ${vms.slice(0, _VMS_SHOWN).map(v => _attr(v)).join(', ')}${more}` : '';
     const limit = t.limit
       ? `<div class="esc-context" style="color:var(--dim)" title="What the row, and Azure, could not say">limit: ${_attr(t.limit)}</div>` : '';
     return `<div class="esc-context" title="What the detection is about, read in its row">🎯 about ${kind}${named}${via}${covers}</div>${limit}`;
   }
   if (!_isAnchored(e) || e.escalation_type === 'unattributed_signal') return '';
-  return `<div class="esc-context" title="The detection does not name this VM: the card is only filed on it">⚓ filed on ${_attr(vmName)}, not about it</div>`;
+  // Filed before AL1c: on the first VM online, or on the VM itself (a role on the VM, a signal of
+  // `respond`) — the card cannot tell which.
+  return `<div class="esc-context" title="${_attr(_FILED_BEFORE)}">⚓ filed on ${_attr(vmName)}, may not be about it</div>`;
 }
+const _FILED_BEFORE = 'Filed before AL1c, without its target: the detection may not be about this VM';
 function escTitle(e) {
   // Real remediation action → its label; otherwise a readable type title.
   if (e.action && ACTION_LABELS[e.action]) return ACTION_LABELS[e.action];
@@ -587,7 +608,8 @@ function _renderEscGroup(group) {
   const ruleButtons = isRule ? `
     <button class="action ok" ${_on('click', 'doApproveRule', e.proposal_id, e.id)} style="font-size:9px;padding:2px 7px">✓ Approve</button>
     <button class="action" ${_on('click', 'doRejectRule', e.proposal_id, e.id)} style="font-size:9px;padding:2px 7px;color:var(--red)">✗ Reject</button>` : '';
-  const vmName = e.resource_id.split('/').pop();
+  // A card on a tile of its own opens that tile's cards (AL1c); a VM's, its VM's.
+  const vmName = _ownTile(e) || e.resource_id.split('/').pop();
   const countBadge = count > 1
     ? `<span style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;
                     background:color-mix(in srgb,var(--purple) 15%,transparent);
@@ -853,11 +875,16 @@ function renderInfra() {
   });
   vmEscs.forEach(e => {
     if (_isLocalState(e.resource_id)) return;
-    // AL1c: an identity card is on the identities' tile, never a VM's.
-    if (_isIdentityCard(e)) {
-      if (!resourceMap.has(_IDENTITY_TILE))
-        resourceMap.set(_IDENTITY_TILE, { resource_id: _IDENTITY_TILE, vm_name: _IDENTITY_TILE,
-          label: 'Entra ID — identities', states: [], kind: 'identity' });
+    // AL1c: an identity card is on the identities' tile; a card about a group or the control
+    // plane as a whole on a tile of its own — never a VM's, whatever its name.
+    const own = _ownTile(e);
+    if (own) {
+      const t = _targetOf(e);
+      if (!resourceMap.has(own))
+        resourceMap.set(own, t.kind === 'identity'
+          ? { resource_id: _IDENTITY_TILE, vm_name: own, label: 'Entra ID — identities', states: [], kind: 'identity' }
+          : { resource_id: e.resource_id, vm_name: own, states: [], kind: t.kind,
+              label: t.kind === 'control_plane' ? 'the control plane' : (t.name || e.resource_id.split('/').pop()) });
       return;
     }
     // An escalation on an AKS node (e.g. a stale posture_gap) folds into its cluster —
@@ -866,13 +893,10 @@ function renderInfra() {
     if (parentId) { _addClusterNode(parentId, e.resource_id.split('/').pop(), null); return; }
     const vmName = e.resource_id.split('/').pop();
     const exists = [...resourceMap.values()].some(r => r.vm_name === vmName);
-    // AL1c: a card about a group or the control plane as a whole has its own tile — never a VM's.
-    const t = _targetOf(e);
-    const kind = t && (t.kind === 'resource_group' || t.kind === 'control_plane') ? t.kind : '';
     if (!exists)
       resourceMap.set(e.resource_id, {
         resource_id: e.resource_id,
-        vm_name: vmName, states: [], is_nsg: _isNsgId(e.resource_id), kind });
+        vm_name: vmName, states: [], is_nsg: _isNsgId(e.resource_id) });
   });
   // What Glorfindel closed itself in the last day keeps its tile, VM or NSG.
   (_state.handled || []).forEach(h => {
@@ -1936,7 +1960,7 @@ function _drawTopologyEdges() {
 
   // Incident edges: modules → assets with active escalations (brighter, dashed)
   escalations.forEach(e => {
-    const vm    = e.resource_id.split('/').pop();
+    const vm    = _ownTile(e) || e.resource_id.split('/').pop();
     const asset = pt(document.getElementById(`asset-${vm}`));
     if (!asset) return;
     const color = e.action === 'restore_from_backup'          ? 'var(--cyan)'
@@ -2346,7 +2370,8 @@ function renderToJudge() {
     const what = (c.action ? actionLabelVerb(c.action) : escTitle(c)) + target + pct;
     const why = c.explanation || c.reason || '';
     // AL1c: a card of the control plane or of an identity names what it is about, never a VM it
-    // was anchored on; one from before AL1c keeps its ⚓.
+    // was anchored on; one from before AL1c keeps its ⚓, and says it may not be about that VM
+    // (on the first VM online, or on the VM itself: the card cannot tell which).
     const t = _targetOf(c);
     const vm = t ? (t.kind === 'control_plane' ? _TARGET_KINDS[t.kind]
       : (t.kind === 'identity' ? (t.identity_type || 'identity') : _TARGET_KINDS[t.kind]) + ' ' + (t.name || '?'))
@@ -2360,7 +2385,7 @@ function renderToJudge() {
         <span style="flex:1"></span>
         <span class="judge-ts">${c.first_seen ? _relTime(c.first_seen) : ''}${times}</span>
       </div>
-      <div class="judge-why" style="-webkit-line-clamp:1;color:var(--text)" title="${anchored ? 'The detection does not name this VM: the card is only filed on it' : _attr((t && t.limit) || c.resource_id || '')}">${anchored ? '⚓ ' : (t ? '🎯 ' : '')}${_attr(vm)}${c.rule_name ? ` · rule ${_attr(c.rule_name)}` : ''}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}${c.severity === 'critical' ? ' · <b style="color:var(--red)">critical</b>' : ''}</div>
+      <div class="judge-why" style="-webkit-line-clamp:1;color:var(--text)" title="${anchored ? _attr(_DETECTION_ONLY.has(c.escalation_type) ? _FILED_BEFORE : 'The detection does not name this VM: the card is only filed on it') : _attr((t && t.limit) || c.resource_id || '')}">${anchored ? '⚓ ' : (t ? '🎯 ' : '')}${_attr(vm)}${c.rule_name ? ` · rule ${_attr(c.rule_name)}` : ''}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}${c.severity === 'critical' ? ' · <b style="color:var(--red)">critical</b>' : ''}</div>
       ${c.exercise ? `<div class="judge-why" style="-webkit-line-clamp:1;color:var(--blue)" title="An injector's exercise window covered this VM at that time. A window is the injectors' claim: check the run before trusting it.">⚑ exercise${c.exercise_run ? ` · run <a href="/runs/${encodeURIComponent(c.exercise_run)}">${_attr(c.exercise_run)}</a> — check the run ▸` : ' — check the run'}</div>` : ''}
       ${c.recurrence ? `<div class="judge-why" style="-webkit-line-clamp:1;color:var(--yellow)" title="An earlier card on the same IP: in observation nothing is blocked, so a scanner comes back">↻ same IP seen ${_attr(c.recurrence.previous)}× in 7 days — last ${c.recurrence.last_seen ? _relTime(c.recurrence.last_seen) : ''}${c.recurrence.last_verdict ? ', judged ' + _attr(c.recurrence.last_verdict) : ''}</div>` : ''}
       <div class="judge-why" title="${_attr(why)}">${_attr(why)}</div>
@@ -3052,7 +3077,7 @@ async function verifyIdentity(escId) {
     if (checks.length > before) {
       const last = checks[checks.length - 1];
       toast('Verify: ' + (_CHECK_WORDS[last.verdict] || last.verdict), 6000);
-      const vm = (e.resource_id || '').split('/').pop();
+      const vm = _ownTile(e) || (e.resource_id || '').split('/').pop();
       if (document.getElementById('modal').classList.contains('open') && vm) showEscModal(vm);
       return;
     }

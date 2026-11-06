@@ -63,6 +63,10 @@ _SAFE_TYPE = re.compile(r"^[A-Za-z]{1,40}$")
 _TTL_S = 300.0
 _MISS_REFRESH_S = 60.0
 UNREAD = object()      # a section of the topology Azure did not answer
+# What a listing that does not hold an id may mean: the watch reads only what its rights let it
+# list (on H0, `Reader` on the bench's group), and a listing over the subscription is filtered by
+# them — never « gone » on that alone (review, AL1c).
+_GONE_OR_HIDDEN = "supprimé, ou hors des droits de la watch"
 
 
 class Topology:
@@ -171,7 +175,8 @@ def _nsg(m, row: dict, known: dict, topology) -> dict:
         t["limit"] = "Les VM que ce NSG couvre n'ont pas pu être lues sur Azure."
         return t
     if covered is None:
-        t["limit"] = "Ce NSG n'est pas dans la liste lue sur Azure (supprimé depuis ?) : les VM qu'il couvrait ne sont pas dites."
+        t["limit"] = (f"Ce NSG n'est pas dans la liste lue sur Azure ({_GONE_OR_HIDDEN}) : "
+                      "les VM qu'il couvre ne sont pas dites.")
         return t
     unknown = 0
     for vm in sorted({str(v).rstrip("/").lower() for v in covered or []}):
@@ -182,9 +187,10 @@ def _nsg(m, row: dict, known: dict, topology) -> dict:
             unknown += 1
     said = []
     if not t["vms"]:
-        said.append("Ce NSG ne couvre aucune VM que la découverte connaît.")
+        said.append("Aucune VM connue de la découverte n'a été lue sous ce NSG "
+                    "(cartes réseau lisibles par la watch).")
     if unknown:
-        said.append(f"Il couvre {unknown} VM que la découverte ne connaît pas.")
+        said.append(f"Sous ce NSG, {unknown} VM lue(s) sur Azure que la découverte ne connaît pas.")
     if said:
         t["limit"] = " ".join(said)
     return t
@@ -196,7 +202,7 @@ def _disk_vm(disk_id: str, known: dict, topology):
     if vm is UNREAD:
         return None, "Le rattachement du disque à une VM n'a pas pu être lu sur Azure."
     if vm is None:
-        return None, "Le disque n'est pas dans la liste lue sur Azure (supprimé depuis ?)."
+        return None, f"Le disque n'est pas dans la liste lue sur Azure ({_GONE_OR_HIDDEN})."
     vm = str(vm or "").rstrip("/").lower()
     if not vm:
         return None, "Le disque n'est attaché à aucune VM."
@@ -230,7 +236,8 @@ def control_target(row: dict, targets=(), topology=None) -> dict:
         if src is UNREAD or not src:
             return _group_target(rid, row, via=via, limit=said + (
                 " Les instantanés n'ont pas pu être lus sur Azure." if src is UNREAD else
-                " L'instantané n'est plus sur Azure (supprimé depuis ?) : sa source n'a pas pu être lue."
+                f" L'instantané n'est pas dans la liste lue sur Azure ({_GONE_OR_HIDDEN}) : sa source "
+                "n'a pas pu être lue."
                 if src is None else " Azure ne donne pas sa source."))
         disk = _DISK_RE.match(str(src))
         if not disk:

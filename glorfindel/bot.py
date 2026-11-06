@@ -161,7 +161,8 @@ def _target_fields(esc: dict) -> list[tuple[str, str, bool]]:
     """What the card is about (AL1c, #597): the resource a card of the control plane is filed on
     — the NSG and the VMs it covers, the VM of a disk, a role's scope, the group, the control
     plane —, or the identity of an identity card, then what the row could not say. A card of
-    either type filed before AL1c on a VM it has nothing to do with says so, as the console does.
+    either type filed before AL1c, on a VM it may have nothing to do with, says so, as the console
+    does.
     Every name from outside cut, then escaped (SEC6)."""
     def name(v) -> str:
         return discord_code(str(v or "?")[:_NAME_MAX])
@@ -171,7 +172,9 @@ def _target_fields(esc: dict) -> list[tuple[str, str, bool]]:
     if not isinstance(t, dict) or not t.get("kind"):
         short = name(rid.split("/")[-1])
         if esc.get("escalation_type") in ("control_plane_change", "identity_change"):
-            return [("Ressource", f"{short} — rangée là, la détection ne la vise pas", False)]
+            # Filed before AL1c: on the first VM online — or on the VM itself (a role on the VM,
+            # `attribution: asset`; a signal of `respond`): the card cannot tell which (review).
+            return [("Ressource", f"{short} — rangée là, la détection peut ne pas la viser", False)]
         return [("Ressource", short, True)]
     kind = t["kind"]
     via = f" — {discord_text(str(t['via'])[:_NAME_MAX])}" if t.get("via") else ""

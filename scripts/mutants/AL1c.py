@@ -2,11 +2,14 @@
 a VM it has nothing to do with. The NSG and the VMs it covers, a snapshot's source VM and the limit
 said, a role's scope, an unknown resource's group, an identity by its object id; what Azure did not
 answer said, never read as « nothing »; the card keeps its target; the Discord card names it and
-says its paragraph once. M4270–M4279, measured by tests/unit/test_card_target.py."""
+says its paragraph once. M4270–M4279, and M4310–M4314 (the review: no VM watched, a limit that
+says only what was read, the VMs of an NSG capped, a tile of its own), measured by
+tests/unit/test_card_target.py."""
 POLLER = "glorfindel/detection_rules.py"
 TARGET = "glorfindel/card_target.py"
 AGENT = "glorfindel/agent.py"
 BOT = "glorfindel/bot.py"
+JS = "eregion_console/static/glorfindel.js"
 _TESTS = "tests/unit/test_card_target.py"
 
 MUTANTS = [
@@ -40,5 +43,22 @@ MUTANTS = [
     ("M4279", "an unknown resource filed on the control plane, not on its group (AL1c)", TARGET,
      '    return _group_target(rid, row, via=_short(rid) if rid else "")\n',
      '    return control_plane_target()\n'),
+    # The review (998c89f7): no VM watched, a limit that says only what was read, the VMs of an
+    # NSG capped on both sides, a tile of its own never a VM's of the same name.
+    ("M4310", "a rule of the control plane silent when no VM is watched: every VM excluded (AL1c)", POLLER,
+     '        routed = self._route(rule, rows, targets) if targets or self._plane(rule) != "data" else {}\n',
+     '        routed = self._route(rule, rows, targets) if targets else {}\n'),
+    ("M4311", "a resource the listing does not hold said « gone », though out of the watch's reach (AL1c)", TARGET,
+     '_GONE_OR_HIDDEN = "supprimé, ou hors des droits de la watch"\n',
+     '_GONE_OR_HIDDEN = "supprimé depuis ?"\n'),
+    ("M4312", "the Discord card names every VM an NSG covers: a field past Discord's limit (AL1c)", BOT,
+     "_VMS_SHOWN = 8           # the VMs an NSG covers, named; beyond, counted\n",
+     "_VMS_SHOWN = 1000        # the VMs an NSG covers, named; beyond, counted\n"),
+    ("M4313", "the console names every VM an NSG covers, none counted (AL1c)", JS,
+     "      ? ` · covers ${vms.slice(0, _VMS_SHOWN).map(v => _attr(v)).join(', ')}${more}` : '';\n",
+     "      ? ` · covers ${vms.map(v => _attr(v)).join(', ')}${more}` : '';\n"),
+    ("M4314", "a group's or the control plane's tile shares a VM's cards of the same name (AL1c)", JS,
+     "  if (own || r.kind) return own === r.vm_name;\n",
+     ""),
 ]
-TESTS = {f"M{n}": _TESTS for n in range(4270, 4280)}
+TESTS = {f"M{n}": _TESTS for n in [*range(4270, 4280), *range(4310, 4315)]}

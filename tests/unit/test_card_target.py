@@ -162,7 +162,17 @@ def test_an_nsg_whose_coverage_azure_did_not_answer_is_still_the_nsg_and_says_so
     # A VM it covers that the discovery does not know: counted, never named as if watched.
     azure = {**AZURE, "nsg_vms": {_low(NSG): [_low(BREE), f"{SUB}/x/virtualmachines/elsewhere"]}}
     t = _poll("nsg-change-outside-glorfindel", [_activity(NSG_OP, NSG)], azure=azure)[0]["context"]["target"]
-    assert t["vm_names"] == ["vm-celebrimbor-bree"] and "1 VM que la découverte ne connaît pas" in t["limit"]
+    assert t["vm_names"] == ["vm-celebrimbor-bree"]
+    assert "1 VM lue(s) sur Azure que la découverte ne connaît pas" in t["limit"]
+    # An NSG the listing does not hold: never « gone » on that alone — the watch reads what its
+    # rights let it list (on H0, `Reader` on the bench's group): it says both (review, AL1c).
+    azure = {**AZURE, "nsg_vms": {}}
+    t = _poll("nsg-change-outside-glorfindel", [_activity(NSG_OP, NSG)], azure=azure)[0]["context"]["target"]
+    assert t["kind"] == "nsg" and t["vms"] == [] and "hors des droits de la watch" in t["limit"]
+    # An NSG read with no VM the watch could read under it: what was read, never « covers none ».
+    azure = {**AZURE, "nsg_vms": {_low(NSG): []}}
+    t = _poll("nsg-change-outside-glorfindel", [_activity(NSG_OP, NSG)], azure=azure)[0]["context"]["target"]
+    assert "n'a été lue sous ce NSG" in t["limit"] and "ne couvre aucune" not in t["limit"]
 
 
 def test_a_snapshot_is_filed_on_the_vm_of_its_source_disk_and_says_the_row_names_none():
@@ -185,7 +195,8 @@ def test_a_snapshot_azure_no_longer_holds_is_filed_on_its_group():
     sig = _poll("snapshot-by-unexpected-caller", [_activity(SNAP_OP, SNAP)], azure=azure)[0]
     t = sig["context"]["target"]
     assert sig["resource_id"] == GROUP and t["kind"] == "resource_group" and t["name"] == "rg-celebrimbor"
-    assert "ne nomme pas le disque source" in t["limit"] and "supprimé depuis" in t["limit"]
+    assert "ne nomme pas le disque source" in t["limit"] and "hors des droits de la watch" in t["limit"]
+    assert "supprimé depuis" not in t["limit"]            # deleted, or out of the watch's reach
     azure = {**AZURE, "snapshot_source": None}
     t = _poll("snapshot-by-unexpected-caller", [_activity(SNAP_OP, SNAP)], azure=azure)[0]["context"]["target"]
     assert t["kind"] == "resource_group" and "n'ont pas pu être lus" in t["limit"]
@@ -202,6 +213,9 @@ def test_a_download_access_to_a_disk_is_filed_on_its_vm():
     azure = {**AZURE, "disk_vm": {_low(DISK): ""}}
     t = _poll("snapshot-by-unexpected-caller", [_activity(DISK_ACCESS_OP, DISK)], azure=azure)[0]["context"]["target"]
     assert t["kind"] == "resource_group" and "attaché à aucune VM" in t["limit"]
+    azure = {**AZURE, "disk_vm": {}}
+    t = _poll("snapshot-by-unexpected-caller", [_activity(DISK_ACCESS_OP, DISK)], azure=azure)[0]["context"]["target"]
+    assert t["kind"] == "resource_group" and "hors des droits de la watch" in t["limit"]
 
 
 def test_a_role_is_filed_on_its_scope():
@@ -219,6 +233,40 @@ def test_a_role_is_filed_on_its_scope():
     sig = _poll("role-assignment-write", [_activity(ROLE_OP, on_sub, group="")])[0]
     assert sig["resource_id"] == card_target.CONTROL_PLANE_ID
     assert sig["context"]["target"]["kind"] == "control_plane" and sig["context"]["target"]["limit"]
+
+
+def test_a_rule_of_the_control_plane_or_of_an_identity_speaks_with_no_vm_watched():
+    """No VM watched — every VM excluded from the rule, or the discovery still empty just after
+    a start — is no reason to leave a card of the control plane or of an identity unsaid: it is
+    filed on what it names (review, AL1c). The data plane, it, has nothing to anchor on."""
+    sent = _poll("nsg-change-outside-glorfindel", [_activity(NSG_OP, NSG)], vms=())
+    assert len(sent) == 1 and sent[0]["resource_id"] == NSG
+    t = sent[0]["context"]["target"]
+    # The two VMs Azure reads under it, unknown to an empty discovery: counted, never named.
+    assert t["kind"] == "nsg" and t["vms"] == [] and "2 VM lue(s) sur Azure" in t["limit"]
+    sent = _poll("entra-credential-added", [_entra("credential")], vms=())
+    assert len(sent) == 1 and sent[0]["resource_id"] == f"entra:application:{APP_OID}"
+    assert sent[0]["context"]["target"]["kind"] == "identity"
+    # A disk, a snapshot: the VM of the source disk is not in an empty discovery — the group,
+    # said (docs/glorfindel.md: just after a start, or for a VM evicted after 8 h offline).
+    for row in (_activity(DISK_ACCESS_OP, DISK), _activity(SNAP_OP, SNAP)):
+        sig = _poll("snapshot-by-unexpected-caller", [row], vms=())[0]
+        t = sig["context"]["target"]
+        assert sig["resource_id"] == GROUP and t["kind"] == "resource_group"
+        assert "disk-celebrimbor-gondolin-data" in t["via"] and "que la découverte ne connaît pas" in t["limit"]
+    # A row that names a VM the rule does not watch is still dropped (AL1, unchanged).
+    on_vm = f"{GONDOLIN}/providers/Microsoft.Authorization/roleAssignments/abc"
+    assert _poll("role-assignment-write", [_activity(ROLE_OP, on_vm)], vms=()) == []
+    # The data plane: no VM, no anchor, no card.
+    rule = _shipped("ssh-brute-force")
+    sent = []
+    p = RulePoller([rule], sent.append, topology=Topology(lambda: AZURE))
+    p._status = {}
+    p._detector = lambda _rule: _Workspace([{"IPAddress": "203.0.113.9", "FailedAttempts": 40}])
+    p._registry = _Registry()
+    p.poll_once(rule)
+    p.stop()
+    assert sent == []
 
 
 def test_an_unknown_resource_is_filed_on_its_group_or_on_the_control_plane():
@@ -420,13 +468,31 @@ def test_the_discord_card_names_its_target_and_says_its_paragraph_once():
     assert "ne nomme pas le disque source" in by["Limite"]
 
 
-def test_a_card_filed_before_al1c_says_it_is_not_about_its_vm():
+def test_the_discord_card_names_eight_vms_an_nsg_covers_and_counts_the_rest():
+    """An NSG over a whole subnet: the field stays readable (Discord cuts a field at 1024), eight
+    VMs named, the rest counted (review, AL1c)."""
+    pytest.importorskip("discord")
+    from glorfindel.bot import _embed_body
+    vms = [f"{PROV}/Microsoft.Compute/virtualMachines/vm-{i:02d}" for i in range(10)]
+    azure = {**AZURE, "nsg_vms": {_low(NSG): [_low(v) for v in vms]}}
+    sig = _poll("nsg-change-outside-glorfindel", [_activity(NSG_OP, NSG)], azure=azure, vms=vms)[0]
+    assert len(sig["context"]["target"]["vm_names"]) == 10      # the card keeps them all
+    shown = dict((n, v) for n, v, _ in _embed_body(_card(sig))[1])["Ressource visée"]
+    assert all(f"`vm-{i:02d}`" in shown for i in range(8))
+    assert "`vm-08`" not in shown and "`vm-09`" not in shown
+    assert shown.endswith(" et 2 autre(s)")
+
+
+def test_a_card_filed_before_al1c_says_it_may_not_be_about_its_vm():
     pytest.importorskip("discord")
     from glorfindel.bot import _embed_body
     old = {"id": "e0", "action": "", "escalation_type": "identity_change", "resource_id": BREE,
            "explanation": "x", "reason": "x y"}
     by = dict((n, v) for n, v, _ in _embed_body(old)[1])
-    assert "la détection ne la vise pas" in by["Ressource"]
+    # Filed on the first VM online — or on the VM itself (a role on it, a signal of `respond`):
+    # the card cannot tell which, and never says « not about it » (review, AL1c).
+    assert "la détection peut ne pas la viser" in by["Ressource"]
+    assert "ne la vise pas" not in by["Ressource"]
     data = {**old, "escalation_type": "low_confidence", "action": "isolate_vm"}
     assert dict((n, v) for n, v, _ in _embed_body(data)[1])["Ressource"] == "`vm-celebrimbor-bree`"
 
@@ -461,13 +527,47 @@ def test_the_console_files_an_identity_card_on_its_own_tile_and_an_nsg_card_on_t
     the note says what the card is about. Read in the page's text: no browser in the suite."""
     from pathlib import Path
     js = (Path(__file__).resolve().parents[2] / "eregion_console/static/glorfindel.js").read_text()
-    on_tile = js.split("function _onTile(e, r) {", 1)[1].split("\n}\n", 1)[0]
+    def body(head):
+        return js.split(head, 1)[1].split("\n}\n", 1)[0]
+    on_tile = body("function _onTile(e, r) {")
     assert "if (r.kind === 'identity') return _isIdentityCard(e);" in on_tile
     assert "if (_isIdentityCard(e)) return false;" in on_tile
     assert "_coversVm(e, r.resource_id)" in on_tile
     assert "const myEscs      = vmEscs.filter(e => _onTile(e, resource));" in js
-    assert "if (_isIdentityCard(e)) {" in js and "resourceMap.set(_IDENTITY_TILE" in js
     assert "🎯 about ${kind}${named}${via}${covers}" in js
+    # A tile of its own — the identities', a group's, the control plane's — is named with a « : »,
+    # which no VM's name holds, and holds its cards only: never one tile with a VM named
+    # « control-plane » or like the group (review, AL1c).
+    own = body("function _ownTile(e) {")
+    assert "const _IDENTITY_TILE = 'entra:identities';" in js
+    assert "if (t.kind === 'identity') return _IDENTITY_TILE;" in own
+    assert "if (t.kind === 'resource_group') return 'group:' + String(e.resource_id || '').toLowerCase();" in own
+    assert "if (t.kind === 'control_plane') return 'plane:control';" in own
+    assert "if (own || r.kind) return own === r.vm_name;" in on_tile
+    assert on_tile.index("if (own || r.kind)") < on_tile.index("e.resource_id.split('/').pop() === r.vm_name")
+    infra = body("function renderInfra() {")
+    assert "const own = _ownTile(e);" in infra and "resourceMap.set(own," in infra
+    # The card opens its tile's cards, the topology draws to that tile.
+    assert "const vmName = _ownTile(e) || e.resource_id.split('/').pop();" in js
+    assert "const vm    = _ownTile(e) || e.resource_id.split('/').pop();" in js
+
+
+def test_the_console_names_eight_vms_an_nsg_covers_and_says_a_card_filed_before_may_not_be_about_its_vm():
+    """The note of a card (glorfindel.js `_targetNote`): the VMs an NSG covers named up to eight,
+    the rest counted, as Discord does; a card of the control plane or of an identity filed before
+    AL1c says it may not be about its VM (on the first VM online, or on the VM itself), on the card
+    and in TO JUDGE (review, AL1c). Read in the page's text: no browser in the suite."""
+    from pathlib import Path
+    js = (Path(__file__).resolve().parents[2] / "eregion_console/static/glorfindel.js").read_text()
+    note = js.split("function _targetNote(e, vmName) {", 1)[1].split("\n}\n", 1)[0]
+    assert "const _VMS_SHOWN = 8;" in js
+    assert "const more = vms.length > _VMS_SHOWN ? ` and ${vms.length - _VMS_SHOWN} more` : '';" in note
+    assert "vms.slice(0, _VMS_SHOWN).map(v => _attr(v)).join(', ')}${more}" in note
+    assert "⚓ filed on ${_attr(vmName)}, may not be about it</div>" in note
+    assert ", not about it" not in note
+    assert "const _FILED_BEFORE = 'Filed before AL1c, without its target: the detection may not be about this VM';" in js
+    assert "title=\"${_attr(_FILED_BEFORE)}\"" in note
+    assert "_DETECTION_ONLY.has(c.escalation_type) ? _FILED_BEFORE :" in js
 
 
 def test_record_keeps_the_target():

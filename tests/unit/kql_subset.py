@@ -2,17 +2,21 @@
 as written, on lines the test writes (SEC2). No Log Analytics, no Azure.
 
 Only what the Syslog and AzureActivity rules use: a table, then `where`, `extend`, `summarize`
-(`arg_max(col, *)`, `name = count()`, `countif(p)`, `min(col)`, `max(col)`, `take_any(col)`,
-`take_anyif(col, p)` — AL1d —, `make_set_if(col, p, n)` — AUD1 —, several of them, `arg_max`
-among them — AL1d), `project`,
-`order by`, `limit`; predicates `==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`, `!has`, `in (…)`,
-`!in (…)`, `in~ (…)`, `!in~ (…)` (AL1d), `matches regex`, `startswith`, `and`, `or`, `not(…)`;
-functions `ago()`, `extract()`, `isempty()`, `isnotempty()`, `isnotnull()`, `iif()`/`iff()`,
-`toint()`, `tolong()`, `tostring()`, `parse_json()` with `.name` and `["name"]` on what it returns (AL1d). Anything
+(`arg_max(col, *)`, alone or among named aggregations in any order — AL2, AL1d —, `name = count()`,
+`countif(p)`, `min(col)`, `max(col)`, `take_any(col)`, `take_anyif(col, p)` — AL2, AL1d —,
+`make_set_if(col, p, n)` — AUD1 —, several of them), `project`, `order by`, `limit`; predicates
+`==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`, `!has`, `in (…)`, `!in (…)`, `in~ (…)`, `!in~ (…)`
+(case-insensitive on strings — AL2, AL1d), `matches regex`, `startswith`, `endswith` (both
+case-insensitive, as in KQL — WL1), `and`, `or`, `not(…)`; functions `ago()`, `extract()`,
+`iif()` (or `iff()`), `isempty()`, `isnotempty()`, `isnotnull()`, `toint()`, `tolong()`,
+`tostring()`, `parse_json()`; a member (`.appid`) or an index (`["…"]`) on a column or on what a
+function returns — the Activity Log's `Claims`, AL2, AL1d. Anything
 else raises NotImplementedError: a rule this reader cannot follow fails its test, never
 passes it by accident. `has` is KQL's term match (case-insensitive, at term boundaries);
 regexes are read by Python's `re` in ASCII mode (`\\d` is 0–9 only, as in RE2: AUD1's review —
-`²` is a digit to Python's default `re`, not to Log Analytics).
+`²` is a digit to Python's default `re`, not to Log Analytics). `$` also matches before a final
+line break in Python, never in RE2: an exclusion anchored by `$` reads here as wider than in Log
+Analytics, never narrower (WL1).
 """
 from __future__ import annotations
 
@@ -150,6 +154,10 @@ class _Parser:
             self.take()
             right = self.primary()
             return lambda r: str(left(r) or "").lower().startswith(str(right(r)).lower())
+        if op == "endswith" and tok[0] == "ident":
+            self.take()
+            right = self.primary()
+            return lambda r: str(left(r) or "").lower().endswith(str(right(r)).lower())
         if (op == "in" and tok[0] == "ident") or (op in ("!in", "in~", "!in~") and tok[0] == "op"):
             self.take()
             self.take("op", "(")
@@ -160,7 +168,7 @@ class _Parser:
             self.take("op", ")")
             neg, fold = op.startswith("!"), op.endswith("~")
 
-            def norm(v):            # in~: KQL's case-insensitive membership, on strings
+            def norm(v):            # in~: KQL's case-insensitive membership, on strings (AL2, AL1d)
                 return v.lower() if fold and isinstance(v, str) else v
 
             return lambda r: (norm(left(r)) in [norm(f(r)) for f in items]) != neg
@@ -234,6 +242,7 @@ class _Parser:
             (_, f), = args
             return lambda r: f(r) in (None, "")
         if name in ("iif", "iff"):
+            # KQL's conditional (AL2, AL1d: the row names the caller that decided it).
             (_, cond), (_, then), (_, other) = args
             return lambda r: then(r) if cond(r) else other(r)
         if name == "isnotnull":
@@ -322,7 +331,7 @@ def run(query: str, rows: list[dict], now: datetime | None = None) -> list[dict]
 
 def _summarize(p: _Parser, rows: list[dict]) -> list[dict]:
     # `arg_max(col, *)` (at most once: the row it keeps) and `name = agg(…)`, in any order
-    # (AL1d: `arg_max(TimeGenerated, *), Succeeded = countif(…)`).
+    # (AL2, AL1d: `arg_max(TimeGenerated, *), Succeeded = countif(…)`).
     arg_max, aggs = None, []
     while True:
         if p.peek() == ("ident", "arg_max") and p.peek(1) == ("op", "("):
@@ -387,7 +396,10 @@ _AGGREGATES = {
     "min": _min,
     "max": _max,
     "take_any": lambda members, f: next((f(r) for r in members if f(r) is not None), None),
-    # KQL's take_anyif: a value of any row the predicate keeps; null when none does (AL1d).
-    "take_anyif": lambda members, f, pred: next((f(r) for r in members if pred(r)), None),
     "make_set_if": _make_set_if,
+    # Log Analytics picks any row the predicate keeps (no order): this reader takes the first.
+    # A rule that reads it holds for any choice — its predicate keeps only what may be taken
+    # (AL2, AL1d). Nulls left out, as take_any; null when no row is kept.
+    "take_anyif": lambda members, f, pred: next(
+        (f(r) for r in members if pred(r) and f(r) is not None), None),
 }

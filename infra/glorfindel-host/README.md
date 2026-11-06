@@ -334,6 +334,55 @@ fait à la base (une règle remplacée, une désactivée). Revenir à une réfé
 ne lit pas la couche — les règles du client manquent à la détection (rien n'est perdu, le
 fichier reste), jusqu'au retour à une référence avec P1.
 
+### La couche du client du banc (WL1)
+
+Les règles que le dépôt tient pour le banc sont dans `infra/glorfindel-host/client_rules.bench.yaml`.
+Aujourd'hui une seule : `sudo-privilege-escalation`, la règle livrée recopiée, sans la maintenance
+programmée de bree (décision de Jonathan, 06/11 ; `docs/glorfindel.md`, « La maintenance
+programmée de bree »). Rien ne les pose seul sur H0 : ni le CD, ni `glorfindel-host-push`, ni
+`glorfindel-host-start`. Le geste est celui de Jonathan, depuis le poste, **une fois déployée une
+release qui contient WL1** (avant, la watch ne connaît pas `base_sha256` : elle charge la
+copie, même périmée, sans jamais dire sa dérive). Une couche de H0 qui tiendrait encore une copie
+avec `base_query_sha256` (le champ retiré) : la watch l'ignore, le dit, et la règle livrée charge
+si elle n'est pas désactivée (sinon rien, comme pour toute entrée invalide de la couche) ; la cible
+la remplace par son nom :
+
+```bash
+make glorfindel-host-client-rules
+```
+
+- **Fondue, jamais copiée par-dessus** : la cible lit `~/.glorfindel/client_rules.yaml` de H0 par
+  ssh, y ajoute chaque règle du fichier ou remplace celle de son nom
+  (`infra/glorfindel-host/host_client_rules.py`, comme une approbation l'écrit) ; les règles
+  approuvées sur H0, `disable`, `assets` et `monitoring_backends` restent tels quels.
+- **Relue avant d'être envoyée**, comme la watch la lira, sur la base du checkout du poste : une
+  règle que la watch ignorerait, ou une copie dont la règle livrée a changé ou n'existe plus
+  (dérive), et rien n'est envoyé. Une couche de H0 illisible : rien n'est envoyé non plus.
+- **Un `disable` du même nom sur H0 n'arrête pas la règle poussée** : `disable` ne retire que la
+  règle **de base** de ce nom ; la règle poussée, une règle du client, charge à sa place (la note
+  « règle de base … désactivée par la couche du client » le dit, `glorfindel rules` la montre en
+  `client`). Une règle de ce nom `enabled: false` sur H0 est remplacée par la poussée. Mesuré
+  contre le faux H0 (`test_a_disable_of_the_same_name_on_h0_does_not_stop_the_pushed_rule`).
+- **Mise en place sous le verrou** de la couche (celui que prennent la watch, la console et la
+  CLI), par un renommage, seulement si elle n'a pas changé depuis la lecture. Une règle approuvée
+  entre-temps : rien n'est remplacé (« a changé pendant le push »), relancer.
+- Puis la watch redémarre (elle lit ses règles au démarrage), et `glorfindel rules` s'affiche :
+  `sudo-privilege-escalation` doit y être en `client (remplace)`, avec la note « remplacée par
+  celle de la couche du client », et aucune ligne « copie périmée ».
+- `CLIENT_RULES=<fichier>` pousse un autre fichier, de la même forme (`rules:` seulement).
+
+**Après une mise à jour de Glorfindel**, si une règle livrée recopiée a changé (n'importe quel
+champ : l'empreinte `base_sha256` est celle de la règle entière), la watch **écarte la copie** et
+charge la règle livrée à sa place — plus de cartes, jamais moins : la carte de la maintenance de
+bree revient jusqu'à ce que la copie soit refaite. Elle le dit au démarrage, en rouge (« copie
+périmée d'une règle livrée »), et `glorfindel rules` aussi (`sudo-privilege-escalation` en `base`).
+Reprendre la copie dans le dépôt (le test `tests/unit/test_bench_routine.py` échoue déjà dans la
+PR qui change la base ; la note donne la nouvelle empreinte), puis relancer
+`make glorfindel-host-client-rules`. Une règle livrée qui n'existe plus, ou qui ne chargerait
+pas (`enabled: false` dans la release, ou nommée dans le `disable` de la couche de H0) : la copie
+tourne toujours, et c'est dit — jamais rien ne détecte plus sa technique. Pour revenir à la règle livrée : retirer la règle de
+`~/.glorfindel/client_rules.yaml` sur H0, puis `docker compose restart watch`.
+
 ### Migrer les règles approuvées vers la couche du client
 
 À faire une fois, avec Jonathan, au premier déploiement d'une référence avec P1. Avant P1, les
@@ -535,7 +584,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 
 Rien n'est lancé si `RUNS` est sous 3, ou si le verrou du checkout est celui de la référence : la commande dit alors « ce verrou est déjà celui de <tag> : donne BASE=<la release d'avant> », pour le cas où H0 tourne encore sur une release plus ancienne. Si la passe de référence échoue à l'import, la commande rappelle la règle : une PR de verrou ne porte pas de code qui exige ses nouvelles dépendances, il faut séparer les PR (`docs/operations.md`).
 
-**Le fichier** garde, pour chaque passage, le `lock_sha256`, `runs`, et par cas le résultat de chaque tirage : juste ou non, l'action, la confiance. Il ne garde ni raisonnement, ni ligne de journal, ni secret. Par exemple (factice, deux cas sur 17) :
+**Le fichier** garde, pour chaque passage, le `lock_sha256`, `runs`, et par cas le résultat de chaque tirage : juste ou non, l'action, la confiance. Il ne garde ni raisonnement, ni ligne de journal, ni secret. Par exemple (factice, deux cas sur 18) :
 
 ```json
 {"schema": "eregion.harness/2", "lock": "requirements/glorfindel.txt", "date": "2026-10-30",

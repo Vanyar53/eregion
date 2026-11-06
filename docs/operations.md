@@ -59,6 +59,7 @@ make glorfindel-host-tunnel                  # tunnel + « Console → http://lo
                                              # (l'ancien nom reste valide, rien à renommer) ; -url : l'URL seule
 make glorfindel-host-status                  # tout tourne ? lit le jeton sur la VM sous l'un ou l'autre nom, sans l'afficher
 make glorfindel-host-push                    # host_env.py --check d'abord : refuse un host.env sans jeton de la console (et dit, sans refuser, une variable de never_target vide, NT1)
+make glorfindel-host-client-rules           # WL1 : les règles du banc (infra/glorfindel-host/client_rules.bench.yaml) fondues dans la couche du client de H0, par nom ; la watch redémarre (README, « La couche du client du banc »)
 make glorfindel-host-cd-install              # le CD de H0 (H1) : agent dans ~/.eregion-cd/, timer désactivé ; README, « Le CD de H0 »
 make glorfindel-host-cd-check                # à blanc : vérifie, construit à côté, préflight (config sous A3), sans basculer
 make glorfindel-host-cd-enable               # puis : toute release publiée se déploie (5 min), retour arrière si malade
@@ -1926,10 +1927,10 @@ par cas contre ce qui tourne (`infra/glorfindel-host/README.md`, « L'attestatio
 Il refuse une régression, jamais une variation : le modèle par défaut refuse une température
 fixée, et le même verrou a donné 51/51, puis 50/51 (29/10).
 
-**Le coût : deux fois celui d'un passage.** Un passage, c'est 17 cas × 3 runs = 51 décisions.
+**Le coût : deux fois celui d'un passage.** Un passage, c'est 18 cas × 3 runs = 54 décisions (le cas `floor` de B3a compris).
 Une action disruptive est tirée 3 fois (`GLORFINDEL_DECISION_DRAWS`, D-1), une décision prudente
-une fois. Cela fait environ 130 appels au modèle par passage, 153 au plus, et environ 260 pour
-les deux, 306 au plus. La première fois, l'installation du venv de référence prend en plus
+une fois. Cela fait environ 140 appels au modèle par passage, 162 au plus, et environ 280 pour
+les deux, 324 au plus. La première fois, l'installation du venv de référence prend en plus
 quelques minutes (un `pip install` du verrou).
 
 **Une PR de verrou ne porte pas de code qui exige ses nouvelles dépendances.** La référence fait
@@ -3072,8 +3073,8 @@ avec une application et un identifiant déjà créés :
   portail) et Administrateur de rôle privilégié pour attribuer Security Reader ; plus le droit
   d'enregistrer une application (les utilisateurs du tenant l'ont par défaut ; sinon Développeur
   d'applications).
-- **AL1** : `Contributor` sur `rg-celebrimbor` suffit pour la règle de NSG, l'instantané et la
-  sauvegarde ; l'attribution de `Reader` demande User Access Administrator ou Owner sur ce groupe.
+- **AL1** : `Contributor` sur `rg-celebrimbor` suffit pour la règle de NSG, l'instantané, la
+  sauvegarde et le point de restauration d'AL2 ; l'attribution de `Reader` demande User Access Administrator ou Owner sur ce groupe.
 
 **C2 — Entra ID, d'abord** (dans le tenant tranché ; l'application de test sert aussi à AL1) :
 
@@ -3133,6 +3134,46 @@ az backup protection backup-now -g rg-celebrimbor -v rsv-celebrimbor-erebor --ba
   -c <conteneur de la liste> -i <élément de la liste> --retain-until <jj-mm-aaaa, dans 2 jours>
 ```
 
+**AL2 — `restorepoint-by-unexpected-caller` (T1578.001, T1530), la preuve au banc.** Deux temps,
+chacun avec son attendu sur H0 :
+
+1. **La sauvegarde à la demande ci-dessus (`backup-now`) : aucune carte** de cette règle — ses
+   lignes `RESTOREPOINTS/WRITE` et `RETRIEVESASURIS` sont celles d'Azure Backup, exclu par
+   l'identifiant public de son application. Attendre la fin de son job avant le second temps
+   (`az backup job list -g rg-celebrimbor -v rsv-celebrimbor-erebor -o table`, statut
+   `Completed`) : Azure refuse deux points de restauration simultanés d'une même VM.
+2. **Un point de restauration de gondolin fait à la main, puis l'accès à son disque, puis le
+   retrait : deux cartes** `control_plane_change` (`RESTOREPOINTS/WRITE`, puis
+   `DISKRESTOREPOINTS/BEGINGETACCESS`), sous ton identité, non attribuées ; la collection, la
+   révocation et les retraits n'en font aucune.
+
+```bash
+# AL2, temps 2 — tout est réversible et défait à la fin du bloc.
+VM=$(az vm show -g rg-celebrimbor -n vm-celebrimbor-gondolin --query id -o tsv)
+LOC=$(az vm show -g rg-celebrimbor -n vm-celebrimbor-gondolin --query location -o tsv)
+az restore-point collection create -g rg-celebrimbor --collection-name rpc-al2-test --source-id "$VM" -l "$LOC" -o none
+az restore-point create -g rg-celebrimbor --collection-name rpc-al2-test -n rp-al2-test -o none     # la carte RESTOREPOINTS/WRITE
+# S'il échoue sur l'agent de la VM (cohérence applicative, le défaut) : la même ligne avec --consistency-mode CrashConsistent.
+# L'accès de téléchargement au disque de données de ce point (la carte DISKRESTOREPOINTS/BEGINGETACCESS). Aucune
+# commande az ne fait RETRIEVESASURIS (az restore-point n'a ni grant-access ni SAS) : l'accès disque par disque, par
+# l'API publique, est la même sortie. Sa réponse, qui porterait l'URL SAS, n'est jamais affichée (-o none ;
+# l'opération est asynchrone, az rest n'attend pas son résultat).
+DRP=$(az restore-point show -g rg-celebrimbor --collection-name rpc-al2-test -n rp-al2-test \
+  --query "sourceMetadata.storageProfile.dataDisks[0].diskRestorePoint.id" -o tsv)
+az rest --method post --url "https://management.azure.com${DRP}/beginGetAccess?api-version=2023-04-02" \
+  --body '{"access":"Read","durationInSeconds":600}' -o none
+sleep 60
+az rest --method post --url "https://management.azure.com${DRP}/endGetAccess?api-version=2023-04-02" -o none   # l'accès révoqué
+az restore-point collection delete -g rg-celebrimbor --collection-name rpc-al2-test --yes      # la collection et son point
+```
+
+Puis, sur les lignes : la requête de la règle (« Chaque règle voit son opération », ci-dessous)
+rend les deux opérations du temps 2 et aucune de la sauvegarde ; la requête AL2 (« Les
+hypothèses », ci-dessous) montre l'appelant de chaque opération. Si une ligne de la sauvegarde
+porte un autre `appid` que `262044b1-e2ce-469f-a196-69ab7ada62d3` (hypothèse ID1-A9), la sauvegarde
+fait une carte : ne pas changer la règle à la main, le dire à la session Glorfindel avec la sortie
+de la requête.
+
 L'attribution de rôle et la règle de NSG n'ont pas besoin de Glorfindel. La règle `id1-test-deny`
 n'est pas dans le Terraform du banc : retirée aussitôt (sinon le prochain `celebrimbor-up` la
 retirerait). Facultatif, avec Jonathan, coûteux : un `glorfindel restore` de gondolin (hypothèse A3,
@@ -3148,6 +3189,11 @@ exact ; dans Cloud Shell, s'il a servi, `rm ~/.eregion-id1.pem` aussi) :
 az snapshot revoke-access -g rg-celebrimbor -n snap-id1-test 2>/dev/null
 az snapshot delete -g rg-celebrimbor -n snap-id1-test 2>/dev/null
 az network nsg rule delete -g rg-celebrimbor --nsg-name nsg-celebrimbor -n id1-test-deny 2>/dev/null
+# AL2 : l'accès au disque du point révoqué, puis la collection et son point
+DRP=$(az restore-point show -g rg-celebrimbor --collection-name rpc-al2-test -n rp-al2-test \
+  --query "sourceMetadata.storageProfile.dataDisks[0].diskRestorePoint.id" -o tsv 2>/dev/null)
+[ -n "$DRP" ] && az rest --method post --url "https://management.azure.com${DRP}/endGetAccess?api-version=2023-04-02" -o none
+az restore-point collection delete -g rg-celebrimbor --collection-name rpc-al2-test --yes 2>/dev/null
 # L'application, retrouvée par son nom exact (--display-name filtre par « commence par »)
 APP=${APP:-$(az ad app list --filter "displayName eq 'eregion-id1-test'" --query "[0].appId" -o tsv)}
 if [ -n "$APP" ]; then
@@ -3187,7 +3233,7 @@ sur une semaine, `P15D` pour les règles (la base de connexions remonte à 14 jo
 ```bash
 rule() { python -c "import sys,yaml; print(next(r['query'] for r in yaml.safe_load(open('glorfindel/rules/azure/detection_rules.yaml'))['rules'] if r['name']==sys.argv[1]))" "$1"; }
 for r in nsg-change-outside-glorfindel role-assignment-write snapshot-by-unexpected-caller \
-         run-command-by-glorfindel-outside-isolation \
+         run-command-by-glorfindel-outside-isolation restorepoint-by-unexpected-caller \
          entra-credential-added entra-app-consent entra-privileged-role-assigned entra-sp-unusual-signin; do
   # P15D : la base d'entra-sp-unusual-signin lit ago(14d) .. ago(1h) ; chaque règle borne elle-même sa fenêtre
   echo "== $r"; az monitor log-analytics query -w <customerId> --analytics-query "$(rule $r)" --timespan P15D -o table
@@ -3196,7 +3242,7 @@ done
 
 Attendu : au moins une ligne par opération de test (`entra-sp-unusual-signin` après les 3 jours de
 base), et sur H0 la carte correspondante (`control_plane_change`, `identity_change`) ;
-`glorfindel rules check --live` sur H0 dit `ok` pour les huit. `run-command-by-glorfindel-outside-isolation`
+`glorfindel rules check --live` sur H0 dit `ok` pour les neuf. `run-command-by-glorfindel-outside-isolation`
 (SID1) ne fait **aucune** carte pour une isolation de gondolin par H0 (sa coupure des sessions), ni pour
 un Run Command de l'opérateur ou d'Annatar (une autre identité) ; sa requête montre pourtant leurs lignes.
 
@@ -3206,7 +3252,7 @@ ajoute l'intervalle de la règle, 60 s pour AL1, 120 à 300 s pour C2 ; `--times
 ```kusto
 AzureActivity
 | where TimeGenerated > ago(6h)
-| where OperationNameValue has_any ("SECURITYRULES", "ROLEASSIGNMENTS", "SNAPSHOTS", "BEGINGETACCESS", "RUNCOMMAND")
+| where OperationNameValue has_any ("SECURITYRULES", "ROLEASSIGNMENTS", "SNAPSHOTS", "BEGINGETACCESS", "RUNCOMMAND", "RESTOREPOINTS")
 | extend Ingested = ingestion_time(), Delay_s = datetime_diff('second', ingestion_time(), TimeGenerated)
 | project TimeGenerated, Ingested, Delay_s, OperationNameValue, ActivityStatusValue, CorrelationId
 | order by TimeGenerated asc
@@ -3247,9 +3293,25 @@ Usage
 // A2, A3 : qui fait les snapshots et les accès de téléchargement (Azure Backup, un restore) ?
 AzureActivity
 | where TimeGenerated > ago(1d)
-| where OperationNameValue has_any ("SNAPSHOTS", "BEGINGETACCESS", "RECOVERYSERVICES")
+| where OperationNameValue has_any ("SNAPSHOTS", "BEGINGETACCESS", "RECOVERYSERVICES", "RESTOREPOINTS")
 | extend CallerAppId = tostring(parse_json(Claims).appid)
 | summarize Ops = make_set(OperationNameValue), Rows = count() by Caller, CallerAppId, ResourceProviderValue
+
+// AL2 (ID1-A9, ID1-A10) : l'appelant d'Azure Backup sur les lignes de la sauvegarde du 05/11 (22:40 UTC ; --timespan
+// P30D, la rétention du workspace) — puis, la même requête sur l'heure du temps 2, le point fait à la main. La
+// dernière ligne de chaque opération : son heure, son statut, et Named (false : une ligne nue, qui ne nomme personne)
+AzureActivity
+| where TimeGenerated between (datetime(2026-11-05T22:30:00Z) .. datetime(2026-11-05T23:30:00Z))
+| where OperationNameValue has_any ("RESTOREPOINTS", "LISTSERVICESAS")
+| extend CallerAppId = tostring(parse_json(Claims).appid),
+         CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
+| extend AzureBackup = CallerAppId =~ "262044b1-e2ce-469f-a196-69ab7ada62d3" or Caller =~ "262044b1-e2ce-469f-a196-69ab7ada62d3"
+| extend Named = isnotempty(Caller) or isnotempty(CallerAppId) or isnotempty(CallerObjectId)
+| summarize Lines = count(), BackupLines = countif(AzureBackup), NamedLines = countif(Named),
+            Statuses = make_set(ActivityStatusValue), Callers = make_set(Caller), AppIds = make_set(CallerAppId),
+            ObjectIds = make_set(CallerObjectId), arg_max(TimeGenerated, ActivityStatusValue, Named)
+            by CorrelationId, OperationNameValue
+| order by OperationNameValue asc
 
 // A5, A6 : les lignes d'une opération, et les identifiants de l'appelant tirés de Claims
 AzureActivity
@@ -3280,13 +3342,15 @@ est un lot de la session Glorfindel ; ID1 ne le fait pas.
 | **D1** | L'apply de l'abonnement passe sous `az login` avec Monitoring Contributor (ou plus) | l'apply | rien | le rôle manquant, sur l'abonnement, pas plus |
 | **D2** | Aucun paramètre de l'abonnement n'envoie déjà `Administrative` au workspace (5 au plus par ressource) | `az monitor diagnostic-settings subscription list` | apply | des lignes en double : retirer l'autre, ou ne pas appliquer celui-ci |
 | **A1** | `AzureActivity` arrive en 3 à 20 min (Microsoft Learn), sous `expected_latency_s: 1200` et la fenêtre `ago(1h)` des règles d'AL1 | latence, p95 sur 24 h | rien | p95 > 20 min : relever `expected_latency_s` ; > 45 min : élargir la fenêtre |
-| **A2** | Azure Backup (la sauvegarde planifiée, et l'action `snapshot` de Glorfindel) ne produit ni `SNAPSHOTS/WRITE` ni `BEGINGETACCESS` visibles dans le journal de l'abonnement (`snapshot-by-unexpected-caller`, `docs/azure.md`) | `backup-now`, la sauvegarde de la nuit, requête A2 | rien | une carte à chaque sauvegarde : exclure l'appelant d'Azure Backup (son `CallerAppId` mesuré), dans la couche du client ou dans la règle livrée |
+| **A2** | Azure Backup (la sauvegarde planifiée, et l'action `snapshot` de Glorfindel) ne produit ni `SNAPSHOTS/WRITE` ni `BEGINGETACCESS` visibles dans le journal de l'abonnement (`snapshot-by-unexpected-caller`, `docs/azure.md`) | `backup-now`, la sauvegarde de la nuit, requête A2 | rien | une carte à chaque sauvegarde : exclure l'appelant d'Azure Backup (son `CallerAppId` mesuré), dans la couche du client ou dans la règle livrée — **mesuré le 05/11 : tient** (des points de restauration, `RESTOREPOINTS/WRITE` puis `RETRIEVESASURIS`, jamais d'instantané) ; mais un autre chemin s'ouvre, les URL SAS d'un point de restauration, lu par `restorepoint-by-unexpected-caller` (AL2, #598) |
 | **A3** | Un `glorfindel restore` ne produit pas de `BEGINGETACCESS` sous l'identité de la console (sinon : `GlorfindelIdentity`, carte critique à chaque restore) | un restore (facultatif), requête A2 | rien | déclarer l'opération du restore dans les capacités, ou l'exclure pour l'identité de la console |
 | **A4** | Les écritures de Glorfindel (isolation, levée) portent son `appid`/`oid` dans `Claims` et sont écartées | une isolation par une watch locale, requête A5 | rien | comparer `Caller`, `CallerAppId`, `CallerObjectId` à `GLORFINDEL_OWN_CALLERS` ; corriger la lecture de l'identité |
 | **A5** | Une opération = plusieurs lignes (`Start`, `Accept`, `Success`) d'un même `CorrelationId` : une carte | requête A5 | rien | deux cartes pour une opération : revoir la clé de déduplication |
 | **A6** | `Claims` porte `appid` et `objectidentifier`, pour un utilisateur comme pour un principal | requête A5 (`AppIds`, `ObjectIds` non vides) | rien | l'identité de Glorfindel n'est lue que par `Caller` : le dire dans l'adaptateur |
 | **A7** | La requête de `run-command-by-glorfindel-outside-isolation` est acceptée telle quelle (`summarize arg_max(TimeGenerated, *), Started = min(TimeGenerated) by …`), et `Started` d'une coupure tombe dans `[coupure − 120 s, coupure + 420 s]` de l'heure notée dans l'état (`drains_at`) (SID1) | `glorfindel rules check --live` ; une isolation de gondolin par H0, puis la requête de la règle et l'état de la VM | rien | une requête refusée : la corriger ; hors de la fenêtre : relever `DRAIN_BEFORE_S`/`DRAIN_AFTER_S` (`own_run_command.py`) |
 | **A8** | Une coupure des sessions est **une** opération Run Command (un `CorrelationId`), même quand le SDK réessaie (SID1 : une coupure pour une opération) | la même isolation, requête A5 sur `RUNCOMMAND` | rien | deux opérations pour une coupure : une carte critique à tort ; rattacher par l'heure seule, ou noter chaque essai |
+| **ID1-A9** | Chaque opération d'une sauvegarde sur les points de restauration (`RESTOREPOINTS/WRITE`, `RETRIEVESASURIS`) nomme Azure Backup par l'identifiant public de son application, `262044b1-e2ce-469f-a196-69ab7ada62d3` (dans `Claims.appid` ou `Caller`), sur une ligne au moins, et aucune ne nomme un autre appelant (AL2) | requête AL2 sur les lignes du 05/11 (`BackupLines ≥ 1`, `Callers` et `AppIds` sans autre identifiant ; `Named` dit si la dernière ligne est nue — sans effet sur la règle, qui ne décide qu'avec une ligne nommée), puis le temps 1 : aucune carte | rien | une carte à chaque sauvegarde : la session Glorfindel corrige l'identifiant ou la forme de l'exclusion, sur la sortie de la requête |
+| **ID1-A10** | Un accès au disque d'un point de restauration (`az rest … /beginGetAccess`) s'écrit `MICROSOFT.COMPUTE/RESTOREPOINTCOLLECTIONS/RESTOREPOINTS/DISKRESTOREPOINTS/BEGINGETACCESS/ACTION`, et un point fait à la main `…/RESTOREPOINTS/WRITE` sous l'identité de l'opérateur, nommée sur une ligne au moins (`NamedLines ≥ 1`, AL2) | le temps 2, requête AL2 sur son heure | deux cartes | un autre nom d'opération : la règle est aveugle à ce geste, la corriger |
 | **E1** | L'apply du tenant passe sous `az login` avec Administrateur de la sécurité actif, sans rôle Azure à `/providers/Microsoft.aadiam` | l'apply | rien | poser le paramètre au portail (mêmes nom et catégories), puis `terraform import 'azurerm_monitor_aad_diagnostic_setting.entra[0]' /providers/Microsoft.AADIAM/diagnosticSettings/diag-celebrimbor-entra` |
 | **E2** | `ServicePrincipalSignInLogs` s'envoie sans P1/P2 (la page des licences : Free « Yes ») — la doc de C2 supposait P1/P2 | l'apply, puis `AADServicePrincipalSignInLogs \| take 1` après la connexion du principal de test | corriger la doc de C2 (aucune licence) | retirer la catégorie, `entra-sp-unusual-signin` dite aveugle sans P1/P2 ; les trois autres règles gardent `AuditLogs` |
 | **E3** | Entra arrive en quelques minutes (lots d'environ 5 min), sous `expected_latency_s: 1800` et `ago(1h)` | latence, p95 sur 24 h | rien | relever `expected_latency_s` ; élargir la fenêtre au-delà de 45 min |

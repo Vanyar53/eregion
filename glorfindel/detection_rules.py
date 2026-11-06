@@ -27,7 +27,7 @@ from glorfindel.detectors import (  # noqa: E402  (after optional deps)
     is_identity_source,
     plane_of,
 )
-from glorfindel import auditd, correlation, expected_sudo  # noqa: E402
+from glorfindel import auditd, card_target, correlation, expected_sudo  # noqa: E402
 
 logger = logging.getLogger("glorfindel.detection_rules")
 
@@ -134,6 +134,10 @@ class DetectionConfig:
     overrides: list[str] = field(default_factory=list)
     # SEC2: the shipped rules the client's layer turns off (`disable:`, `enabled: false`).
     disabled_base: list[str] = field(default_factory=list)
+    # WL1: client rules copied from a base rule (`base_sha256`) whose shipped rule is no longer
+    # the one they were copied from — a stale copy, said loudly like an override. Set aside: the
+    # shipped rule runs instead; a copy whose base rule is gone still runs, and is said.
+    drifted: list[str] = field(default_factory=list)
 
     def backend(self, name: str) -> MonitoringBackend | None:
         return next((b for b in self.backends if b.name == name), None)
@@ -432,6 +436,16 @@ def _invalid_client_entry(key: str, entry) -> str | None:
             return f"`{field_}` n'est pas une liste de noms"
     if key != "rules":
         return None
+    if "base_query_sha256" in entry:
+        # WL1's first form (the fingerprint of the query alone), retired: a copy carrying it would
+        # load without ever being compared. Skipped, the base rule of its name loads instead — if
+        # it is not disabled; otherwise nothing, as for any invalid entry of the layer.
+        return ("`base_query_sha256` : champ retiré (WL1) — refaire la copie avec `base_sha256`, "
+                "l'empreinte de la règle livrée entière")
+    sha = entry.get("base_sha256")
+    if sha is not None and not _is_sha256(sha):
+        # Skipped, the base rule of its name loads instead, if it is not disabled (WL1).
+        return "`base_sha256` n'est pas une empreinte sha256 (64 caractères hexadécimaux)"
     if not isinstance(entry.get("enabled", True), bool):
         return "`enabled` n'est ni true ni false"
     for field_, convert in (("interval_s", float), ("expected_latency_s", int)):
@@ -450,6 +464,83 @@ def _invalid_client_entry(key: str, entry) -> str | None:
     if entry.get("enabled", True) and not entry.get("query"):
         return "n'a pas de requête"
     return None
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def _is_sha256(value) -> bool:
+    return isinstance(value, str) and _SHA256.fullmatch(value) is not None
+
+
+def base_rule_sha256(rule: dict) -> str:
+    """The fingerprint a client rule copied from a base rule keeps of the base rule it copied
+    (WL1, `base_sha256:`): sha256 of the WHOLE base rule as YAML reads it, in a canonical form —
+    JSON, keys sorted, no spaces (`separators=(",", ":")`), non-ASCII kept as is, UTF-8. Any
+    field of the shipped rule that changes (its query, its window, its interval, its TTP, its
+    description) changes it; the order of the keys or the YAML's layout does not."""
+    canonical = json.dumps(rule, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _drift(base_rules: dict[str, dict], client: dict) -> tuple[dict, list[str], list[str]]:
+    """WL1: the client's layer without its stale copies → (layer, names, notes).
+
+    A copy of a base rule (`base_sha256`, the fingerprint of the base rule it was taken from)
+    whose shipped rule changed since is set aside, before the merge: the shipped rule loads in
+    its place — more cards, never fewer. A copy keeps the old rule, and whatever the update
+    brought to the base (a fix, a new form of line) would not reach it; what the copy set aside
+    makes cards again until it is redone. A copy whose base rule is gone still runs (nothing
+    else would detect its technique), and is said; so does a stale copy whose shipped rule would
+    not load either — `enabled: false` in the base, or named in the layer's `disable` (set aside,
+    nothing would detect it) — or whose name another entry of the layer holds too (merge_layers
+    decides between them, the last one wins). A client rule without a fingerprint is no copy; a malformed
+    fingerprint is `_invalid_client_entry`'s; a disabled copy disables."""
+    rules = client.get("rules")
+    if not isinstance(rules, list):
+        return client, [], []
+    disable = client.get("disable")
+    # The names merge_layers will not load from the base (the same reading as its own).
+    off = {n for n in disable if isinstance(n, str) and n.strip()} if isinstance(disable, list) else set()
+    held = [e["name"] for e in rules if isinstance(e, dict) and isinstance(e.get("name"), str)]
+    kept: list = []
+    names: list[str] = []
+    notes: list[str] = []
+    for entry in rules:
+        if _invalid_client_entry("rules", entry) is not None:
+            kept.append(entry)          # merge_layers says it skipped, never as drift
+            continue
+        sha = entry.get("base_sha256") if isinstance(entry, dict) else None
+        if not (_is_sha256(sha) and isinstance(entry.get("name"), str) and entry.get("enabled", True) is True):
+            kept.append(entry)
+            continue
+        name = entry["name"]
+        base = base_rules.get(name)
+        if base is None:
+            notes.append(f"règle du client « {name} » : copiée d'une règle de base de ce nom, qui n'existe "
+                         "plus dans la base livrée (dérive) — la copie tourne toujours ; la relire")
+            names.append(name)
+            kept.append(entry)          # its base gone: the copy alone detects its technique
+        elif (current := base_rule_sha256(base)) != sha:
+            why = ("la règle livrée ne tournerait pas (désactivée)" if not base.get("enabled", True) or name in off
+                   else "la couche a une autre entrée de ce nom (la dernière gagne)" if held.count(name) > 1
+                   else "")
+            if why:
+                # Set aside, nothing might detect its technique: the shipped rule may not load.
+                notes.append(f"règle du client « {name} » : la règle livrée a changé depuis la copie "
+                             f"(dérive), mais {why} — la copie tourne toujours ; la relire, puis "
+                             f"base_sha256: {current}")
+                names.append(name)
+                kept.append(entry)          # the shipped rule off: the copy alone detects its technique
+                continue
+            notes.append(f"règle du client « {name} » : copie périmée ignorée — la règle livrée a changé "
+                         "depuis la copie (dérive) ; la règle livrée tourne à sa place, et ce que la copie "
+                         "écartait refait des cartes. Reprendre la copie sur la règle livrée, puis "
+                         f"base_sha256: {current}")
+            names.append(name)          # the stale copy is not kept: the shipped rule loads
+        else:
+            kept.append(entry)
+    return {**client, "rules": kept}, list(dict.fromkeys(names)), notes
 
 
 def _entry_label(entry) -> str:
@@ -585,6 +676,7 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
     notes: list[str] = []
     layer_of: dict[str, str] = {}
     client_file = ""
+    drifted: list[str] = []
     if client_layer:
         cpath = client_rules_path() if client_layer is True else Path(client_layer)
         try:
@@ -594,6 +686,10 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
             notes.append(f"couche du client illisible ({cpath}) : {exc} — base seule")
         if client:
             client_file = str(cpath)
+            # WL1: a stale copy of a base rule set aside before the merge — the shipped rule loads.
+            base_rules = {r["name"]: r for r in _named(data.get("rules"))}
+            client, drifted, more = _drift(base_rules, client)
+            notes += more
             data, more, layer_of = merge_layers(data, client)
             notes += more
     if not data:
@@ -797,7 +893,7 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
     _log_notes(notes)
     return DetectionConfig(backends=backends, assets=assets, rules=rules,
                            notes=notes, client_file=client_file, overrides=overrides,
-                           disabled_base=disabled_base)
+                           disabled_base=disabled_base, drifted=drifted)
 
 
 def load_rules(path: str | Path, glorfindel_cfg=None) -> list[DetectionRule]:
@@ -1123,6 +1219,14 @@ def _vm_id_of(resource_id: str) -> str:
     return (m.group(1) if m else resource_id).lower()
 
 
+def _names_vm_resource(row: dict) -> bool:
+    """The row's own resource (`_ResourceId`) is a VM or one of its sub-resources."""
+    if not isinstance(row, dict):
+        return False
+    rid = row.get("_ResourceId") or row.get("ResourceId")
+    return isinstance(rid, str) and "/microsoft.compute/virtualmachines/" in rid.lower()
+
+
 def _caller_ip(row: dict) -> str:
     for col in _VM_IP_COLUMNS:
         v = row.get(col)
@@ -1199,6 +1303,7 @@ class RulePoller:
         dispatch: Callable[[dict], None],
         dry_run: bool = False,
         ip_owners: Callable[[], dict] | None = None,
+        topology=None,
     ) -> None:
         RulePoller._live.add(self)
         self._rules = rules
@@ -1213,6 +1318,9 @@ class RulePoller:
         # private IP → VM resource id (lowercase), read from Azure, cached — the watch
         # hands the IpOwners its attack_started lines read too (SEC4c).
         self._ip_owners = shared_ip_owners(ip_owners)
+        # AL1c (#597): what a card of the control plane is filed on — the VMs an NSG covers, a
+        # disk's VM, a snapshot's source (glorfindel/card_target.Topology, read on Azure, cached).
+        self._topology = topology
         self._detectors: dict[str, object] = {}
         # Dedup state: self._status[rule]["dispatched"][target] = {row identity: epoch}
         # — persisted, so a restart doesn't dispatch (and act on) a detection still
@@ -1320,12 +1428,18 @@ class RulePoller:
                targets: list[tuple[str, str]]) -> dict[str, tuple]:
         """target key → ((resource_id, name) | None, rows). A row naming a VM this rule
         doesn't watch (excluded, another backend's) is dropped; one that names none is
-        keyed "unattributed". Each row read by `attribute_row`."""
+        keyed "unattributed". Each row read by `attribute_row`.
+
+        A row of the control plane or of an identity is about what it names (AL1c): dropped
+        only when its own resource is a VM this rule doesn't watch (AL1) — never because the
+        address that made the call is such a VM's (an NSG written from an excluded VM, or with
+        no VM watched): that row stays, unattributed (third review, AL1c)."""
         index = RowAttribution(targets, self._owners)
+        control = self._plane(rule) != "data"
         out: dict[str, tuple] = {}
         for row in rows:
             named, tgt = index.attribute(row)
-            if named and tgt is None:
+            if named and tgt is None and (not control or _names_vm_resource(row)):
                 continue
             key = tgt[0].lower() if tgt else "unattributed"
             out.setdefault(key, (tgt, []))[1].append(row)
@@ -1401,7 +1515,9 @@ class RulePoller:
                 rows, audit_n = auditd.settle(rule.ttp, rows, getattr(policy, "sensitive_commands", None) or ())
             except Exception as exc:  # the audit reading: every row stays a card
                 faults.append(f"auditd: {type(exc).__name__}: {exc}")
-        routed = self._route(rule, rows, targets) if targets else {}
+        # A card of the control plane or of an identity is filed on what it names (AL1c): no
+        # VM watched is no reason to leave it unsaid.
+        routed = self._route(rule, rows, targets) if targets or self._plane(rule) != "data" else {}
         try:
             judged = self._judge_expected(rule, routed)      # ADM1, outside the lock
         except Exception as exc:  # the expected sudo: none set aside
@@ -1520,23 +1636,9 @@ class RulePoller:
             _save_status(self._status)
         return signals
 
-    def _signal(self, rule: DetectionRule, row: dict, tgt, targets, now_iso: str) -> dict:
-        if tgt is not None:
-            resource_id, asset_name = tgt
-            attribution = "asset"
-        elif not rule.auto_apply:
-            # A rule bound to one asset by the operator: its rows are that asset's.
-            resource_id, asset_name = targets[0]
-            attribution = "asset"
-        else:
-            # No VM named, none whose IP made the call: never a default target — even
-            # with a single monitored VM (third review, L11). The card is anchored on
-            # one monitored VM; VM-targeted actions are held.
-            resource_id, asset_name = sorted(targets, key=lambda t: t[1])[0]
-            attribution = "unattributed"
-        ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        # Control plane (AL1), identities (C2): detection only — `plane` is what `decide`
-        # reads.
+    @staticmethod
+    def _plane(rule: DetectionRule) -> str:
+        """`data`, `control` or `identity`: the rule's source says it, and so does its query."""
         plane = plane_of(rule.source)
         # A rule of another source that reads one of Entra ID's tables (a client's, an
         # approved proposal — C2): its rows may name a user (a UPN) without any column that
@@ -1547,7 +1649,52 @@ class RulePoller:
         # that projects no OperationNameValue (`project Caller, _ResourceId`) — the query says so.
         elif plane == "data" and _reads_activity_table(rule.query):
             plane = "control"
+        return plane
+
+    def _signal(self, rule: DetectionRule, row: dict, tgt, targets, now_iso: str) -> dict:
+        # Control plane (AL1), identities (C2): detection only — `plane` is what `decide`
+        # reads.
+        plane = self._plane(rule)
         control = plane in ("control", "identity")
+        target = None
+        if control:
+            # AL1c (#597): the card is filed on what the row names — the NSG and the VMs it
+            # covers, the VM of a disk, a role's scope, the group, the identity —, never on a VM
+            # it has nothing to do with (glorfindel/card_target.py).
+            # Routed to no VM, though a VM's address made the call: a VM this rule does not
+            # watch — said, never named (third review, AL1c).
+            ip = _caller_ip(row) if tgt is None else ""
+            unwatched = bool(ip and (self._owners() or {}).get(ip))
+            try:
+                target = card_target.of_row(row, plane, tgt, targets, self._topology,
+                                            caller_unwatched=unwatched)
+            except Exception as exc:  # a card is never lost to its target: the plane, said
+                logger.warning("detection rule '%s': target unreadable (%s)", rule.name, exc)
+                target = card_target.control_plane_target(
+                    limit=f"Ce que la ligne vise n'a pas pu être lu ({type(exc).__name__}).")
+        # The VM the row was routed to is its own only when the row names it (a role on the VM):
+        # one found by the address that made the call is the caller (review, AL1c).
+        named = tgt is not None and card_target.names_vm(row, tgt[0])
+        if target is not None and (plane == "identity" or not named):
+            # An identity's name is chosen by whoever registers it: its pseudo id, never its name.
+            resource_id = target["id"]
+            asset_name = target["id"] if target["kind"] == "identity" else target["name"]
+            attribution = "unattributed"
+        elif tgt is not None:
+            resource_id, asset_name = tgt
+            attribution = "asset"
+        elif not rule.auto_apply:
+            # A rule bound to one asset by the operator: its rows are that asset's.
+            resource_id, asset_name = targets[0]
+            attribution = "asset"
+        else:
+            # No VM named, none whose IP made the call: never a default target — even
+            # with a single monitored VM (third review, L11). The card of the data plane is
+            # anchored on one monitored VM; VM-targeted actions are held (a card of the control
+            # plane or of an identity is filed on its target, above).
+            resource_id, asset_name = sorted(targets, key=lambda t: t[1])[0]
+            attribution = "unattributed"
+        ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         grave = control and _grave(row)
         # COR1: a brute force followed by a login from its address — an account compromised.
         grave = grave or row.get("Correlation") == correlation.COMPROMISED
@@ -1557,7 +1704,7 @@ class RulePoller:
             "ttp": rule.ttp,
             "severity": "critical" if grave else "high",
             "resource_id": resource_id,
-            "resource_type": "vm",
+            "resource_type": target["kind"] if target is not None else "vm",
             "provider": "azure",
             "timestamp": now_iso,
             "context": {
@@ -1568,8 +1715,10 @@ class RulePoller:
                 # Room can display the decision. watch-{rule}-{ts}: not an Annatar run.
                 "run_id": f"watch-{rule.name}-{ts_compact}",
                 "attribution": attribution,
-                **({"candidates": sorted(n for _, n in targets)} if attribution == "unattributed" else {}),
+                **({"candidates": sorted(n for _, n in targets)}
+                   if attribution == "unattributed" and not control else {}),
                 **({"plane": plane} if control else {}),
+                **({"target": target} if target is not None else {}),
             },
             "raw_signal": {
                 "detection_source": rule.source,

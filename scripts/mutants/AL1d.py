@@ -20,7 +20,7 @@ _PROJECT = ("      | project TimeGenerated, OperationNameValue, ActivityStatusVa
             "                CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId\n\n")
 _NEXT = {"nsg": "  - name: role-assignment-write\n",
          "role": "  - name: snapshot-by-unexpected-caller\n",
-         "snapshot": "  # Notre propre identité surveillée (SID1, #409)"}
+         "snapshot": "  # La sœur de la règle des instantanés (AL2, #598)"}
 
 
 def _tail(rule: str, keep: str = _KEEP, extend: str = _EXTEND) -> str:
@@ -62,7 +62,7 @@ MUTANTS = [
      "    elif False:\n"),
     ("M4389", "the KQL subset's take_anyif ignores its predicate: an empty caller taken for one "
               "(AL1d)", SUBSET,
-     '    "take_anyif": lambda members, f, pred: next((f(r) for r in members if pred(r)), None),\n',
-     '    "take_anyif": lambda members, f, pred: next((f(r) for r in members if f(r) is not None), None),\n'),
+     '        (f(r) for r in members if pred(r) and f(r) is not None), None),\n',
+     '        (f(r) for r in members if f(r) is not None), None),\n'),
 ]
 TESTS = {f"M{n}": _TESTS for n in range(4380, 4390)}

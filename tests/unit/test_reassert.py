@@ -2597,6 +2597,36 @@ def test_a_drift_better_and_worse_in_a_pass_that_writes_narrows_its_baseline(sco
     assert _gone_better_worse_gone(scoped), "the rules gone again after a pass that wrote were never said"
 
 
+def test_a_perimeter_whose_write_fails_again_narrows_its_baseline_before_a_refused_card(monkeypatch):
+    """MUT3 (#599, M3153): the first time hands a perimeter entry to the second (`pair`) only when it
+    tries its write — since L1O, a write that holds clears the drift mark first, so the narrowing of
+    an entry with its `pair` is reached only when the write fails again. Its pair and its VM's rule
+    gone, said, acknowledged; then the VM's rule back and the pair's other half gone (better and
+    worse), the write refused again and the card's write too (a full disk); then the first read
+    again: worse than what held, said. Without the narrowing, the baseline stayed the card's, and
+    the same rules gone again read « not worse », in silence."""
+    readiness.record_assessment(readiness._verdict("vm", []), _RID)
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair", scoped=False,
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg-subnet", "rule": "r-vm"}], threat_port=22)
+    c = MagicMock()
+    c.block_suspicious_ip.side_effect = RuntimeError("(AuthorizationFailed) securityRules/write")
+    first = {"verified": False, "missing_rules": ["pair", "r-vm"], "open_nics": ["nic-a"]}
+    c.verify_block_ip.return_value = first
+    reassert_active(c, _ACT)
+    assert _block_cards(), "the first disappearance was never said"
+    for e in escalations.pending():
+        escalations.resolve(e["id"])                                     # the operator acknowledges it
+    give_back = _store_full(monkeypatch)
+    c.verify_block_ip.return_value = {"verified": False, "missing_rules": ["pair", "pair-out"], "open_nics": ["nic-a"]}
+    reassert_active(c, _ACT)                                             # better and worse, its card refused
+    give_back()
+    c.verify_block_ip.return_value = first
+    n = len(escalations.all_escalations())
+    reassert_active(c, _ACT)                                             # the first read again
+    assert [e for e in escalations.all_escalations()[n:] if e.get("action") == "block_suspicious_ip"], (
+        "the rules gone again after a refused card were read « not worse » than the card, unsaid")
+
+
 def test_a_check_that_raised_is_over_once_the_first_time_reads_and_writes():
     """The entry's check raised — said on its card (V-16); next pass, the first time reads it and puts
     its pair back: the check answered, its card is closed in that pass, as for any entry read (the
@@ -2704,6 +2734,17 @@ def test_a_rule_the_cards_check_never_read_is_never_read_back():
     since, holds rules that were never said gone — nothing written again, nothing said."""
     first = {"verified": False, "missing_rules": ["r", "r-out"], "open_nics": ["nic"], "rules_seen": dict(_VM_SEEN)}
     then = {**first, "rules_seen": {**_VM_SEEN, "rg/nsg-other/r": "there", "rg/nsg-other/r-out": "there"}}
+    _, _, after = _said_then(first, then, True, merged=False)
+    assert not after, [e["reason"] for e in after]
+
+
+def test_a_rule_this_check_did_not_read_is_never_read_deleted():
+    """The other side (MUT3, #599, M3282): a rule the card's check read on Azure, left out of this
+    check — its NSG not listed now, or unreadable (`_rules_seen` leaves its rules out) — is unknown
+    now, not deleted: nothing more gone, nothing said again on an acknowledged card."""
+    first = {"verified": False, "missing_rules": ["r"], "open_nics": ["nic"],
+             "rules_seen": {"rg/nsg/r": None, "rg/nsg/r-out": "there"}}
+    then = {k: v for k, v in first.items() if k != "rules_seen"}
     _, _, after = _said_then(first, then, True, merged=False)
     assert not after, [e["reason"] for e in after]
 

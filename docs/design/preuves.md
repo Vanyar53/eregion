@@ -373,6 +373,40 @@ M3969 (le code du harnais reformulé sans réancrer ses mutants) n'était attrap
 par le méta-test : il est retiré. Après la seconde relecture, M4020 (les runs d'une copie sans la
 marque du harnais) et M4021 (le méta-test qui ne se saute plus dans une copie mutée).
 
+### Les 17 survivants de la première porte sous CI6e (MUT3)
+
+La porte de la 0.5.7 (06/11, PR #596) a été la première release mesurée sous CI6e : 3285 mutants sur
+3302 attrapés, 17 rouges. Ce n'était pas une régression : la porte de la 0.5.6 les avait déjà (2920 sur
+2941), mais elle ne demandait qu'un `--min-caught` ; la fiche de CI6e n'en traitait que six, venus d'une
+autre mesure. MUT3 (#599) les traite tous :
+
+- **Un FIXED-ONLY est attrapé par la suite** (décision de Jonathan du 06/11). La machine ne trouve pas
+  seule M10, M23, M24, M34, M35, M39, M40, M1961 et M1963, mais une séquence figée de
+  `test_invariant_regressions.py` les attrape : chacun prend cette séquence en plus de la machine
+  (`TESTS_ALSO`, `scripts/mutants/MUT3.py`). Sa cible n'est plus la machine seule, le verdict FIXED-ONLY
+  ne s'applique plus à lui ; il reste rouge pour tout autre mutant. M41 (`flaky`, un tour sur deux à la
+  machine) a aussi sa séquence figée, ajoutée de même ; M36, le test unitaire qui tenait déjà sa
+  propriété (`test_glorfindel.py`).
+- **Des tests qui ne passaient plus par le chemin du mutant.** M3153 : depuis L1O, la première passe
+  efface la marque de dérive d'un périmètre qu'elle réécrit ; son `pair` n'atteint le resserrement que
+  si l'écriture échoue encore, sous une carte refusée (disque plein). M3282 : `_back` a sa propre boucle
+  depuis L1H, `_read_both` ne sert plus que `_worse`, dont le test nommé ne lisait jamais le côté. M1552 :
+  la carte réseau d'une VM supprimée restait toujours nommée ailleurs (placements gardées, état du
+  blocage) ; `known_nics` compte quand l'état du blocage se perd aussi. Chacun a son test.
+- **M613** (le verrou d'instance d'AWS) : les courses de la machine d'AWS ne l'ont jamais montré ; sa
+  propriété est tenue directement, chaque écriture reçue par AWS faite sous le verrou de l'instance
+  (`test_aws_adapter.py`).
+- **M864 réécrit** : il appelait `_held_in_quarantine`, que `quarantine.py` n'importe plus depuis SEC4b
+  — une `NameError`, une isolation qui échouait sans danger, jamais le bug qu'il nomme. Avec le nom du
+  module (`_held_or_unreadable`), le test de régression qui le décrit l'attrape. Un mutant qui ne
+  produit qu'une exception de nom passe pour un survivant ou pour attrapé à tort : à voir avec MUT2.
+- **M1645 `EQUIVALENT`** : depuis L2C, une disparition n'est « déjà dite » qu'avec son épisode ouvert
+  dans ce processus, et la carte « ne couvre pas » n'en ouvre jamais ; la marque que pose le mutant ne
+  fait taire rien. La liste connue compte maintenant trois `EQUIVALENT` (M11, M25, M1645).
+
+**Mesures.** Mutants M4290 (une règle absente de cette lecture lue supprimée) et M4291 (un périmètre
+dont l'écriture échoue encore saute son resserrement), attrapés par les deux tests de MUT3.
+
 ### Chaque mutant mesuré, sans le travail en double (CI10a)
 
 Décision de Jonathan du 05/11 (« Tout le paquet », #580), sur l'étude CI9 : la porte confirmait sans

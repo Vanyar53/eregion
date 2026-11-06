@@ -1747,7 +1747,10 @@ MUTANTS += [
     ("M864", "an unreadable tag counts as unknown only when a state holds the NIC: the state lost, a "
              "429 writes 'none' over a valid tag (I8F, second relecture)", QUA,
      "                elif unread and recorded is _UNKNOWN:\n",
-     '                elif unread and recorded is _UNKNOWN and _held_in_quarantine(t["nic_id"]):\n'),
+     # The module's own name since SEC4b (_held_or_unreadable): _held_in_quarantine is no longer
+     # imported there, and the mutant only raised a NameError — an isolation that failed safe, never
+     # the bug it names (MUT3, #599).
+     '                elif unread and recorded is _UNKNOWN and _held_or_unreadable(t["nic_id"]):\n'),
     ("M865", "a stateless release ignores the tag of a bare NIC: left without its NSG, an old isolation "
              "there (I8F, second relecture)", REL,
      "                    if q_bare is not None:\n                        if original:\n",
@@ -5026,7 +5029,11 @@ MUTANTS += [
     ("M1645", "the uncovered card marked with the drift marker: acknowledged, the perimeter's later "
               "disappearance neither put back nor said (RB1, third review)", R,
      "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=None)\n",
-     "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=now)\n"),
+     "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=now)\n",
+     "EQUIVALENT: since L2C a disappearance reads « already said » only with its episode open in this "
+     "process (reassert_cards.drift_said, _EPISODE_OPEN), and the uncovered card never opens one — the "
+     "mark left by the mutant silences nothing, the later disappearance is put back or said; its other "
+     "readers end an episode or narrow a baseline no card holds (MUT3, #599)"),
     ("M1646", "the uncovered card checked after the drift marker: an episode before it silences it, and the "
               "next disappearance (RB1, third review)", R,
      '        if b.get("uncovered_said") != nics or b.get("drift_alerted_at"):\n',

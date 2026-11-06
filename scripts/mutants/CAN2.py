@@ -2,7 +2,7 @@
 layer (infra/glorfindel-host/client_rules.bench.yaml), by its group and its principal together; its
 appid taken from the watch's environment (`env_guids`, glorfindel/detection_rules.py `_env_guids`),
 a GUID or the shipped rule runs. One mutant per property, M4360–M4364, measured by
-tests/unit/test_canary_exclusion.py."""
+tests/unit/test_canary_exclusion.py; M4508–M4509, the exclusion read on the row as AL1d completes it."""
 BENCH = "infra/glorfindel-host/client_rules.bench.yaml"
 RULES = "glorfindel/detection_rules.py"
 _TESTS = "tests/unit/test_canary_exclusion.py"
@@ -30,6 +30,14 @@ MUTANTS = [
      RULES,
      "    return value.lower() if _GUID.fullmatch(value) else None\n",
      "    return value.lower() if value else None\n"),
+    ("M4508", "the exclusion reads the caller any line names, not the row's: among two callers, a bare "
+     "latest line set aside when one of them is the canary (CAN2, AL1d)", BENCH,
+     "            and (CallerAppId =~ \"${EREGION_RULE_CANARY_APPID}\"",
+     "            and (NamedCallerAppId =~ \"${EREGION_RULE_CANARY_APPID}\""),
+    ("M4509", "the exclusion reads the latest line before its caller is completed: the canary's bare "
+     "latest line makes a card (CAN2, AL1d)", BENCH,
+     "      | extend Fill = not(Named) and Callers == 1\n",
+     "      | extend Fill = false\n"),
 ]
 TESTS = {
     "M4360": f"{_TESTS}::test_the_canary_in_its_group_makes_no_card",
@@ -37,4 +45,6 @@ TESTS = {
     "M4362": f"{_TESTS}::test_the_canary_elsewhere_makes_a_card",
     "M4363": f"{_TESTS}::test_the_variable_absent_or_invalid_sets_the_copy_aside_and_the_shipped_rule_runs",
     "M4364": f"{_TESTS}::test_the_variable_absent_or_invalid_sets_the_copy_aside_and_the_shipped_rule_runs",
+    "M4508": f"{_TESTS}::test_a_bare_latest_line_among_two_callers_is_never_set_aside",
+    "M4509": f"{_TESTS}::test_a_bare_latest_line_of_the_canary_alone_is_set_aside",
 }

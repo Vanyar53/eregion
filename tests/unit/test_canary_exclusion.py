@@ -154,6 +154,9 @@ def test_the_bench_rule_is_the_shipped_query_plus_the_exclusion_block_alone():
     # After the operation's latest line is chosen, before `project`: the line the card shows.
     assert block.index("| where not(") < block.index("| project")
     assert client["query"].index("| summarize arg_max") < client["query"].index(_BLOCK_START)
+    # AL1d: after the row's caller is completed from its operation's lines, never before — the
+    # exclusion reads the columns the card shows.
+    assert client["query"].index("| extend Caller = iif(Fill") < client["query"].index(_BLOCK_START)
 
 
 def test_no_identifier_of_the_canary_in_the_repository():
@@ -229,6 +232,45 @@ def test_another_caller_in_the_group_makes_a_card(caller, app, oid):
 ])
 def test_the_canary_elsewhere_makes_a_card(rg, resource):
     rows = _operation(rg=rg, resource=resource)
+    assert len(_bench(rows)) == 1 == len(_base(rows))
+
+
+# ── The row as AL1d completes it: a bare latest line ────────────────────────────────
+
+def _bare_last(lines: list[dict]) -> list[dict]:
+    """The operation's latest line naming no caller (no Caller, no Claims), as the Activity Log
+    sometimes writes it (AL1d)."""
+    return lines[:-1] + [{**lines[-1], "Caller": "", "Claims": ""}]
+
+
+def test_a_bare_latest_line_of_the_canary_alone_is_set_aside():
+    """Its operation's lines name the canary alone: the row takes its caller, then the exclusion
+    reads it — no card, where the shipped rule makes one."""
+    rows = _bare_last(_operation())
+    [card] = _base(rows)
+    assert card["Callers"] == 1 and card["CallerAppId"] == CANARY_APP
+    assert _bench(rows) == []
+
+
+def test_a_bare_latest_line_among_two_callers_is_never_set_aside():
+    """The canary's lines and another caller's under one CorrelationId, the latest naming no
+    one: the row names no caller (AL1d), nothing to compare — a card, as with the shipped rule."""
+    canary = _operation(statuses=("Start", "Accept"))
+    other = [{**line, "Caller": "someone@example.org", "Claims": _claims(OTHER_APP, OTHER_OID),
+              "TimeGenerated": line["TimeGenerated"] + timedelta(seconds=10)}
+             for line in _operation(statuses=("Accept", "Success"))]
+    rows = canary + _bare_last(other)
+    [card] = _base(rows)
+    assert card["Callers"] == 2 and card["Caller"] == "" and card["CallerAppId"] == ""
+    assert len(_bench(rows)) == 1
+
+
+def test_an_operation_of_the_canary_that_succeeded_then_failed_is_set_aside():
+    """AL1d: an operation that succeeded is read whatever its latest line — the canary's still
+    set aside, and anyone else's still a card."""
+    rows = _operation(statuses=("Start", "Success", "Failure"))
+    assert len(_base(rows)) == 1 and _bench(rows) == []
+    rows = _operation(caller=OTHER_OID, app=OTHER_APP, oid=OTHER_OID, statuses=("Start", "Success", "Failure"))
     assert len(_bench(rows)) == 1 == len(_base(rows))
 
 

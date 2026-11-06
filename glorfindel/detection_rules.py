@@ -134,8 +134,9 @@ class DetectionConfig:
     overrides: list[str] = field(default_factory=list)
     # SEC2: the shipped rules the client's layer turns off (`disable:`, `enabled: false`).
     disabled_base: list[str] = field(default_factory=list)
-    # WL1: client rules copied from a base rule (`base_query_sha256`) whose shipped query is no
-    # longer the one they were copied from — a stale copy, said loudly like an override.
+    # WL1: client rules copied from a base rule (`base_sha256`) whose shipped rule is no longer
+    # the one they were copied from — a stale copy, said loudly like an override. Set aside: the
+    # shipped rule runs instead; a copy whose base rule is gone still runs, and is said.
     drifted: list[str] = field(default_factory=list)
 
     def backend(self, name: str) -> MonitoringBackend | None:
@@ -435,10 +436,10 @@ def _invalid_client_entry(key: str, entry) -> str | None:
             return f"`{field_}` n'est pas une liste de noms"
     if key != "rules":
         return None
-    sha = entry.get("base_query_sha256")
-    if sha is not None and not (isinstance(sha, str) and _SHA256.fullmatch(sha)):
+    sha = entry.get("base_sha256")
+    if sha is not None and not _is_sha256(sha):
         # Skipped, the base rule of its name loads instead: more cards, never fewer (WL1).
-        return "`base_query_sha256` n'est pas une empreinte sha256 (64 caractères hexadécimaux)"
+        return "`base_sha256` n'est pas une empreinte sha256 (64 caractères hexadécimaux)"
     if not isinstance(entry.get("enabled", True), bool):
         return "`enabled` n'est ni true ni false"
     for field_, convert in (("interval_s", float), ("expected_latency_s", int)):
@@ -462,35 +463,57 @@ def _invalid_client_entry(key: str, entry) -> str | None:
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
-def base_query_sha256(query) -> str:
-    """The fingerprint a client rule copied from a base rule keeps of the base query it copied
-    (WL1, `base_query_sha256:`): sha256 of the query's text as YAML reads it, UTF-8."""
-    return hashlib.sha256(str(query or "").encode("utf-8")).hexdigest()
+def _is_sha256(value) -> bool:
+    return isinstance(value, str) and _SHA256.fullmatch(value) is not None
 
 
-def _drift(base_rules: dict[str, dict], rules: list[dict], layer_of: dict[str, str]) -> tuple[list[str], list[str]]:
-    """WL1: the client rules copied from a base rule whose shipped query changed since → (names,
-    notes). A copy keeps the old query: whatever the update brought to the base rule (a fix, a
-    new form of line) does not reach it. Read from `base_query_sha256`, the fingerprint of the
-    base query the copy was taken from; a client rule without it is not a copy, nothing is said."""
+def base_rule_sha256(rule: dict) -> str:
+    """The fingerprint a client rule copied from a base rule keeps of the base rule it copied
+    (WL1, `base_sha256:`): sha256 of the WHOLE base rule as YAML reads it, in a canonical form —
+    JSON, keys sorted, no spaces (`separators=(",", ":")`), non-ASCII kept as is, UTF-8. Any
+    field of the shipped rule that changes (its query, its window, its interval, its TTP, its
+    description) changes it; the order of the keys or the YAML's layout does not."""
+    canonical = json.dumps(rule, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _drift(base_rules: dict[str, dict], client: dict) -> tuple[dict, list[str], list[str]]:
+    """WL1: the client's layer without its stale copies → (layer, names, notes).
+
+    A copy of a base rule (`base_sha256`, the fingerprint of the base rule it was taken from)
+    whose shipped rule changed since is set aside, before the merge: the shipped rule loads in
+    its place — more cards, never fewer. A copy keeps the old rule, and whatever the update
+    brought to the base (a fix, a new form of line) would not reach it; what the copy set aside
+    makes cards again until it is redone. A copy whose base rule is gone still runs (nothing
+    else would detect its technique), and is said. A client rule without a fingerprint is no
+    copy; a malformed fingerprint is `_invalid_client_entry`'s; a disabled copy disables."""
+    rules = client.get("rules")
+    if not isinstance(rules, list):
+        return client, [], []
+    kept: list = []
     names: list[str] = []
     notes: list[str] = []
-    for r in rules:
-        sha = r.get("base_query_sha256")
-        if not sha or layer_of.get(r["name"]) != "client" or not r.get("enabled", True):
+    for entry in rules:
+        sha = entry.get("base_sha256") if isinstance(entry, dict) else None
+        if not (_is_sha256(sha) and isinstance(entry.get("name"), str) and entry.get("enabled", True) is True):
+            kept.append(entry)
             continue
-        base = base_rules.get(r["name"])
+        name = entry["name"]
+        base = base_rules.get(name)
         if base is None:
-            notes.append(f"règle du client « {r['name']} » : copiée d'une règle de base de ce nom, qui "
-                         "n'existe plus dans la base livrée (dérive) — la copie tourne toujours ; la relire")
-        elif (current := base_query_sha256(base.get("query"))) != sha:
-            notes.append(f"règle du client « {r['name']} » : la requête de la base livrée a changé depuis "
-                         "la copie (dérive) — la copie tourne toujours sur l'ancienne ; reporter le "
-                         f"changement de la base, puis base_query_sha256: {current}")
+            notes.append(f"règle du client « {name} » : copiée d'une règle de base de ce nom, qui n'existe "
+                         "plus dans la base livrée (dérive) — la copie tourne toujours ; la relire")
+            names.append(name)
+            kept.append(entry)          # its base gone: the copy alone detects its technique
+        elif (current := base_rule_sha256(base)) != sha:
+            notes.append(f"règle du client « {name} » : copie périmée ignorée — la règle livrée a changé "
+                         "depuis la copie (dérive) ; la règle livrée tourne à sa place, et ce que la copie "
+                         "écartait refait des cartes. Reprendre la copie sur la règle livrée, puis "
+                         f"base_sha256: {current}")
+            names.append(name)          # the stale copy is not kept: the shipped rule loads
         else:
-            continue
-        names.append(r["name"])
-    return names, notes
+            kept.append(entry)
+    return {**client, "rules": kept}, names, notes
 
 
 def _entry_label(entry) -> str:
@@ -636,10 +659,11 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
             notes.append(f"couche du client illisible ({cpath}) : {exc} — base seule")
         if client:
             client_file = str(cpath)
+            # WL1: a stale copy of a base rule set aside before the merge — the shipped rule loads.
             base_rules = {r["name"]: r for r in _named(data.get("rules"))}
-            data, more, layer_of = merge_layers(data, client)
+            client, drifted, more = _drift(base_rules, client)
             notes += more
-            drifted, more = _drift(base_rules, _named(data.get("rules")), layer_of)
+            data, more, layer_of = merge_layers(data, client)
             notes += more
     if not data:
         _log_notes(notes)

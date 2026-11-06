@@ -16,8 +16,9 @@ take to write it).
 - **Refused, nothing written** (exit 1): H0's layer unreadable (``rule_layers.read_client_layer``:
   a layer we cannot read is never written over); ``RULES.yaml`` unreadable, with a key other than
   ``rules``, or a rule without a name; a rule of ``RULES.yaml`` the watch would skip (invalid), or a
-  copy of a base rule whose base query changed since (``base_query_sha256``: drift) — both read
-  against the base of this checkout, the one the watch of the same release ships.
+  copy of a base rule whose shipped rule changed since, or is gone (``base_sha256``: drift; the
+  watch would set the copy aside and run the shipped rule) — read against the base of this
+  checkout, the one the watch of the same release ships.
 
 Runs on the operator's machine, from the checkout: the glorfindel of this checkout is imported,
 whatever is installed in the environment.
@@ -71,9 +72,12 @@ def merge(rules_path: Path, h0_layer: Path, out: Path, base: Path | None = None)
         staged.unlink(missing_ok=True)
     loaded = {r.name for r in cfg.rules if r.layer == "client"}
     names = [r["name"] for r in rules]
-    wrong = [f"« {n} » serait ignorée par la watch (voir la note)" for n in names
-             if n not in loaded and any(r.get("name") == n and r.get("enabled", True) for r in rules)]
-    wrong += [f"« {n} » est une copie périmée de la base (dérive, voir la note)" for n in names if n in cfg.drifted]
+    wrong = []
+    for n in names:
+        if n in cfg.drifted:            # set aside by the watch (or its base gone): never pushed
+            wrong.append(f"« {n} » est une copie périmée de la base (dérive, voir la note)")
+        elif n not in loaded and any(r.get("name") == n and r.get("enabled", True) for r in rules):
+            wrong.append(f"« {n} » serait ignorée par la watch (voir la note)")
     if wrong:
         raise rule_layers.ClientLayerError("rien d'envoyé : " + " ; ".join(wrong)
                                            + "".join(f"\n  · {note}" for note in cfg.notes))

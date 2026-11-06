@@ -1,9 +1,14 @@
 """WL1 (#595): bree's scheduled maintenance set aside from `sudo-privilege-escalation` in the bench's
 client layer (infra/glorfindel-host/client_rules.bench.yaml) — one mutant per property the exclusion
 holds: the command, its arguments, the account, no terminal, bree alone. Each one widens the
-exclusion, and a sudo that must stay a card no longer makes one.
-M4265–M4269, measured by tests/unit/test_bench_routine.py."""
+exclusion, and a sudo that must stay a card no longer makes one. M4265–M4269, measured by
+tests/unit/test_bench_routine.py.
+
+The drift of a copy (`base_sha256`, glorfindel/detection_rules.py `_drift`), after the review: a
+stale copy set aside, the shipped rule in its place — more cards, never fewer. M4300–M4304, each
+measured by the test of its property."""
 BENCH = "infra/glorfindel-host/client_rules.bench.yaml"
+RULES = "glorfindel/detection_rules.py"
 _TESTS = "tests/unit/test_bench_routine.py"
 
 MUTANTS = [
@@ -26,4 +31,28 @@ MUTANTS = [
      "            and SyslogMessage matches regex",
      "      | where not(SyslogMessage matches regex"),
 ]
+MUTANTS += [
+    ("M4300", "the drift no longer read: a stale copy runs, unsaid (WL1)", RULES,
+     "        elif (current := base_rule_sha256(base)) != sha:\n",
+     "        elif False and (current := base_rule_sha256(base)) != sha:\n"),
+    ("M4301", "a malformed fingerprint accepted: the copy loads, never compared (WL1)", RULES,
+     "    if sha is not None and not _is_sha256(sha):\n", "    if False:\n"),
+    ("M4302", "a stale copy said, but kept in place of the shipped rule: fewer cards (WL1)", RULES,
+     "            names.append(name)          # the stale copy is not kept: the shipped rule loads\n",
+     "            names.append(name)\n            kept.append(entry)\n"),
+    ("M4303", "a copy whose base rule is gone dropped too: its technique no longer detected (WL1)", RULES,
+     "            kept.append(entry)          # its base gone: the copy alone detects its technique\n",
+     "            pass\n"),
+    ("M4304", "the fingerprint of the base query alone: a change of the rule's other fields unseen (WL1)",
+     RULES,
+     "    canonical = json.dumps(rule, sort_keys=True,",
+     "    canonical = json.dumps(rule.get(\"query\"), sort_keys=True,"),
+]
 TESTS = {f"M{n}": _TESTS for n in range(4265, 4270)}
+TESTS.update({
+    "M4300": f"{_TESTS}::test_a_shipped_rule_changed_since_the_copy_sets_the_copy_aside_and_runs",
+    "M4301": f"{_TESTS}::test_a_fingerprint_that_is_not_one_skips_the_copy_and_the_shipped_rule_loads",
+    "M4302": f"{_TESTS}::test_a_shipped_rule_changed_since_the_copy_sets_the_copy_aside_and_runs",
+    "M4303": f"{_TESTS}::test_a_base_rule_gone_since_the_copy_keeps_the_copy_and_says_it",
+    "M4304": f"{_TESTS}::test_the_fingerprint_is_the_rule_not_its_layout",
+})

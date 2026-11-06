@@ -11,8 +11,9 @@ bree alone. Any other sudo still makes a card.
 
 The rules run as written (`tests/unit/kql_subset.py`) on lines in sudo's form, the fields separated
 by « ; » or, as the agent (AMA) writes them, by spaces. The copy is held to the base: the same query
-plus the exclusion block, and the fingerprint of the base query it came from (`base_query_sha256`)
-— a base that changes without the copy fails here, and the watch says it (drift).
+plus the exclusion block, and the fingerprint of the whole base rule it came from (`base_sha256`)
+— a base that changes without the copy fails here; where it runs, the watch sets the stale copy
+aside, the shipped rule loads in its place, and it says so (drift): more cards, never fewer.
 
 Every identifier is the bench's own (`vm-celebrimbor-bree`, `rg-celebrimbor`, `celebrimbor`, already
 in the repository) or made up: 00000000-… GUIDs. No Azure, no model.
@@ -29,7 +30,7 @@ from click.testing import CliRunner
 from glorfindel.detection_rules import (
     DetectionRule,
     RulePoller,
-    base_query_sha256,
+    base_rule_sha256,
     client_rules_path,
     load_config,
     shipped_rules_path,
@@ -111,11 +112,11 @@ def test_the_bench_rule_is_the_shipped_query_plus_the_exclusion_block_alone():
     pull request that changes the base. Redo the copy (the base's query, then the block)."""
     client, base = CLIENT[NAME], SHIPPED[NAME]
     assert _without_block(client["query"]) == base["query"]
-    assert client["base_query_sha256"] == base_query_sha256(base["query"])
+    assert client["base_sha256"] == base_rule_sha256(base)
     for key in ("ttp", "assets", "interval_s", "expected_latency_s", "enabled"):
         assert client[key] == base[key], key
     assert client["description"].startswith(base["description"])
-    assert set(client) - set(base) == {"base_query_sha256"}
+    assert set(client) - set(base) == {"base_sha256"}
     # The block sits before `project`, so it reads the line as the shipped filters left it.
     block = client["query"][client["query"].index(_BLOCK_START):]
     assert block.index("| where not(") < block.index("| project")
@@ -272,7 +273,7 @@ def test_the_same_line_on_gondolin_is_a_signal_on_gondolin():
     assert GONDOLIN in str(signal)
 
 
-# ── Drift: the base changes, the copy stays — the watch says it ─────────────────────
+# ── Drift: the base changes, the stale copy is set aside — said, the shipped rule runs ─
 
 def _layer(tmp_path, **changes) -> Path:
     rule = {**CLIENT[NAME], **changes}
@@ -281,61 +282,86 @@ def _layer(tmp_path, **changes) -> Path:
     return path
 
 
-def _base_with(tmp_path, query: str | None) -> Path:
+def _base_with(tmp_path, gone: bool = False, **changes) -> tuple[Path, dict | None]:
+    """The shipped base, its rule NAME changed (`gone=True`: removed) → (path, that rule)."""
     data = yaml.safe_load(shipped_rules_path().read_text())
-    if query is None:
-        data["rules"] = [r for r in data["rules"] if r["name"] != NAME]
+    rule = next(r for r in data["rules"] if r["name"] == NAME)
+    if gone:
+        data["rules"].remove(rule)
+        rule = None
     else:
-        next(r for r in data["rules"] if r["name"] == NAME)["query"] = query
+        rule.update(changes)
     path = tmp_path / "base.yaml"
     path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
-    return path
+    return path, rule
 
 
-def test_a_base_query_changed_since_the_copy_is_said_as_drift(tmp_path):
-    changed = SHIPPED[NAME]["query"].replace("ago(10m)", "ago(15m)")
-    cfg = load_config(_base_with(tmp_path, changed), client_layer=_layer(tmp_path))
+CHANGED_QUERY = SHIPPED[NAME]["query"].replace("ago(10m)", "ago(15m)")
+
+
+@pytest.mark.parametrize("change", [
+    {"query": CHANGED_QUERY},                                   # a fix of the query
+    {"interval_s": 60}, {"expected_latency_s": 600},            # not the query alone
+    {"description": SHIPPED[NAME]["description"] + " (v2)"},
+])
+def test_a_shipped_rule_changed_since_the_copy_sets_the_copy_aside_and_runs(tmp_path, change):
+    base, rule = _base_with(tmp_path, **change)
+    cfg = load_config(base, client_layer=_layer(tmp_path))
     assert cfg.drifted == [NAME]
     [note] = [n for n in cfg.notes if "dérive" in n]
-    assert f"« {NAME} »" in note and base_query_sha256(changed) in note
-    # The copy still runs: drift is said, the rule is not dropped (its exclusion stays).
-    assert next(r for r in cfg.rules if r.name == NAME).query == CLIENT[NAME]["query"]
+    assert f"« {NAME} »" in note and "copie périmée ignorée" in note and "la règle livrée tourne" in note
+    assert base_rule_sha256(rule) in note
+    # The shipped rule loads in the copy's place: more cards, never fewer.
+    loaded = next(r for r in cfg.rules if r.name == NAME)
+    assert loaded.layer == "base" and loaded.query == rule["query"] and cfg.overrides == []
+    # …so bree's maintenance makes its card again, until the copy is redone.
+    assert kql_subset.run(loaded.query, [_line(_sudo("celebrimbor", CRON[0]))], now=NOW) != []
 
 
-def test_a_base_rule_gone_since_the_copy_is_said_as_drift(tmp_path):
-    cfg = load_config(_base_with(tmp_path, None), client_layer=_layer(tmp_path))
-    assert cfg.drifted == [NAME] and any("n'existe plus" in n for n in cfg.notes)
+def test_the_fingerprint_is_the_rule_not_its_layout():
+    rule = SHIPPED[NAME]
+    assert base_rule_sha256(dict(reversed(list(rule.items())))) == base_rule_sha256(rule)
+    flow = yaml.safe_load(yaml.safe_dump(rule, default_flow_style=True, width=10_000))
+    assert base_rule_sha256(flow) == base_rule_sha256(rule)
+    assert base_rule_sha256({**rule, "ttp": "T1548"}) != base_rule_sha256(rule)
+
+
+def test_a_base_rule_gone_since_the_copy_keeps_the_copy_and_says_it(tmp_path):
+    base, _ = _base_with(tmp_path, gone=True)
+    cfg = load_config(base, client_layer=_layer(tmp_path))
+    assert cfg.drifted == [NAME] and any("n'existe plus" in n and "tourne toujours" in n for n in cfg.notes)
+    # Nothing else detects its technique: the copy runs.
+    loaded = next(r for r in cfg.rules if r.name == NAME)
+    assert loaded.layer == "client" and loaded.query == CLIENT[NAME]["query"]
 
 
 def test_a_client_rule_that_is_no_copy_says_no_drift(tmp_path):
-    rule = {k: v for k, v in CLIENT[NAME].items() if k != "base_query_sha256"}
+    rule = {k: v for k, v in CLIENT[NAME].items() if k != "base_sha256"}
     path = tmp_path / "client_rules.yaml"
     path.write_text(yaml.safe_dump({"rules": [rule]}, sort_keys=False))
-    changed = SHIPPED[NAME]["query"].replace("ago(10m)", "ago(15m)")
-    cfg = load_config(_base_with(tmp_path, changed), client_layer=path)
+    cfg = load_config(_base_with(tmp_path, query=CHANGED_QUERY)[0], client_layer=path)
     assert cfg.drifted == [] and cfg.overrides == [NAME]
 
 
 @pytest.mark.parametrize("sha", ["abc", "F" * 64, 12, ["x"], "g" * 64])
 def test_a_fingerprint_that_is_not_one_skips_the_copy_and_the_shipped_rule_loads(tmp_path, sha):
-    cfg = load_config(shipped_rules_path(), client_layer=_layer(tmp_path, base_query_sha256=sha))
+    cfg = load_config(shipped_rules_path(), client_layer=_layer(tmp_path, base_sha256=sha))
     rule = next(r for r in cfg.rules if r.name == NAME)
     assert rule.layer == "base" and rule.query == SHIPPED[NAME]["query"]
-    assert any("base_query_sha256" in n and "ignorée" in n for n in cfg.notes)
+    assert any("base_sha256" in n and "ignorée" in n for n in cfg.notes)
 
 
-def test_a_disabled_copy_says_no_drift(tmp_path):
-    cfg = load_config(_base_with(tmp_path, "Syslog | take 1\n"),
+def test_a_disabled_copy_says_no_drift_and_still_disables(tmp_path):
+    cfg = load_config(_base_with(tmp_path, query="Syslog | take 1\n")[0],
                       client_layer=_layer(tmp_path, enabled=False))
-    assert cfg.drifted == []
+    assert cfg.drifted == [] and cfg.disabled_base == [NAME]
 
 
 def test_glorfindel_rules_and_the_banner_say_the_drift_loudly(tmp_path):
     from glorfindel.cli import cli
-    changed = SHIPPED[NAME]["query"].replace("ago(10m)", "ago(15m)")
     client_rules_path().parent.mkdir(parents=True, exist_ok=True)
     client_rules_path().write_text(_layer(tmp_path).read_text())
-    res = CliRunner().invoke(cli, ["rules", "--rules", str(_base_with(tmp_path, changed))])
+    res = CliRunner().invoke(cli, ["rules", "--rules", str(_base_with(tmp_path, query=CHANGED_QUERY)[0])])
     assert res.exit_code == 0, res.output
     assert "copie périmée" in res.output and NAME in res.output
     text = (ROOT / "glorfindel" / "cli.py").read_text()

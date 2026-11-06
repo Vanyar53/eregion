@@ -8,9 +8,11 @@
 #
 # sudo-privilege-escalation : la règle livrée (glorfindel/rules/azure/detection_rules.yaml),
 # recopiée à l'identique, plus une exclusion — la maintenance programmée de bree
-# (infra/terraform/scripts/workload.sh). Décision de Jonathan, 06/11. `base_query_sha256` est
-# l'empreinte de la requête livrée d'où vient la copie : quand la base change, la watch le dit
-# (dérive), et tests/unit/test_bench_routine.py échoue tant que la copie n'est pas refaite.
+# (infra/terraform/scripts/workload.sh). Décision de Jonathan, 06/11. `base_sha256` est
+# l'empreinte de la règle livrée entière d'où vient la copie (detection_rules.base_rule_sha256) :
+# quand la base change, la watch écarte la copie et dit la dérive — la règle livrée tourne, et la
+# carte de la maintenance de bree revient ; tests/unit/test_bench_routine.py échoue tant que la
+# copie n'est pas refaite.
 # Aucun identifiant réel : le nom de bree et de son groupe sont ceux du banc, déjà dans le dépôt.
 
 rules:
@@ -21,7 +23,7 @@ rules:
     assets: [auto]
     interval_s: 30
     expected_latency_s: 480
-    base_query_sha256: fca99003ad27c3dde872239a84e21accef841e01a7d5a52d8252c01e3e7f5198
+    base_sha256: 16dadd6722068e4a77c64b6f7e431f63db2a5cdf198887bea82f8a4bf829dd0a
     query: |
       Syslog
       // sudo logs to authpriv (measured under AMA); auth kept for the hosts that route it there.

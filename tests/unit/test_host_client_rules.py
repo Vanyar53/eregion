@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "infra" / "glorfindel-host"))
 import host_client_rules  # noqa: E402
 
-from glorfindel.detection_rules import base_query_sha256, shipped_rules_path  # noqa: E402
+from glorfindel.detection_rules import shipped_rules_path  # noqa: E402
 
 BENCH = ROOT / "infra" / "glorfindel-host" / "client_rules.bench.yaml"
 NAME = "sudo-privilege-escalation"
@@ -138,7 +138,7 @@ def test_an_unreadable_layer_on_h0_is_refused_before_anything_is_sent(tmp_path):
 @needs_tools
 def test_a_stale_copy_of_the_base_is_refused_before_anything_is_sent(tmp_path):
     data = yaml.safe_load(BENCH.read_text())
-    data["rules"][0]["base_query_sha256"] = base_query_sha256("Syslog | take 1\n")
+    data["rules"][0]["base_sha256"] = "0" * 64      # the fingerprint of no shipped rule
     stale = tmp_path / "stale.yaml"
     stale.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
     res, calls, home = _make(tmp_path, f"CLIENT_RULES={stale}")

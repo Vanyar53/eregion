@@ -4,7 +4,8 @@ said, a role's scope, an unknown resource's group, an identity by its object id;
 answer said, never read as « nothing »; the card keeps its target; the Discord card names it and
 says its paragraph once. M4270–M4279, and M4310–M4314 (the review: no VM watched, a limit that
 says only what was read, the VMs of an NSG capped, a tile of its own), M4355–M4359 (the second:
-the VM that made the call is the caller, a VM the rule does not watch, a field under 1024), measured by
+the VM that made the call is the caller, a VM the rule does not watch, a field under 1024) and
+M4418–M4419 (the third: a call from a VM the rule does not watch, never unsaid), measured by
 tests/unit/test_card_target.py."""
 POLLER = "glorfindel/detection_rules.py"
 TARGET = "glorfindel/card_target.py"
@@ -70,13 +71,21 @@ MUTANTS = [
      "        named = tgt is not None and card_target.names_vm(row, tgt[0])\n",
      "        named = tgt is not None\n"),
     ("M4357", "a VM excluded from the rule said unknown to the discovery (AL1c)", TARGET,
-     '_UNWATCHED = "que la règle ne surveille pas (absente de la découverte, exclue de la règle, ou d\'un autre backend)"\n',
-     '_UNWATCHED = "que la découverte ne connaît pas"\n'),
+     '_UNWATCHED_SHORT = "que la règle ne surveille pas"\n',
+     '_UNWATCHED_SHORT = "que la découverte ne connaît pas"\n'),
     ("M4358", "the « Ressource visée » field past Discord's 1024: the embed refused (AL1c)", BOT,
-     "{via}{covers}\"[:1024], False)]\n",
-     "{via}{covers}\", False)]\n"),
+     "            if len(value) <= 1024:\n",
+     "            if True:\n"),
     ("M4359", "the VM that made the call left unsaid on a card filed on what it wrote (AL1c)", TARGET,
-     "        t[\"via\"] = \", \".join(filter(None, [t.get(\"via\"), f\"appel depuis {tgt[1] or _short(tgt[0])}\"]))\n",
-     "        pass\n"),
+     "    caller = (f\"appel depuis {tgt[1] or _short(tgt[0])}\" if tgt is not None else\n",
+     "    caller = (\"\" if tgt is not None else\n"),
+    # The third review (3949289f): a row of the control plane routed by its caller's address to a
+    # VM the rule does not watch is a card on what it names; one naming such a VM, dropped (AL1).
+    ("M4418", "an NSG written from a VM the rule does not watch dropped, unsaid (AL1c)", POLLER,
+     "            if named and tgt is None and (not control or _names_vm_resource(row)):\n",
+     "            if named and tgt is None:\n"),
+    ("M4419", "a row of the control plane on a VM the rule does not watch kept: an exclusion ignored (AL1c)", POLLER,
+     "            if named and tgt is None and (not control or _names_vm_resource(row)):\n",
+     "            if named and tgt is None and not control:\n"),
 ]
-TESTS = {f"M{n}": _TESTS for n in [*range(4270, 4280), *range(4310, 4315), *range(4355, 4360)]}
+TESTS = {f"M{n}": _TESTS for n in [*range(4270, 4280), *range(4310, 4315), *range(4355, 4360), 4418, 4419]}

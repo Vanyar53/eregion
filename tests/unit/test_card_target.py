@@ -276,6 +276,42 @@ def test_a_write_made_from_a_watched_vm_is_filed_on_what_it_writes_the_vm_named_
     assert not card_target.names_vm({"_ResourceId": f"{GONDOLIN}-old"}, GONDOLIN)
 
 
+def test_a_write_made_from_a_vm_the_rule_does_not_watch_is_still_a_card():
+    """The address that made the call is a VM's the rule does not watch (excluded, another
+    backend's, no VM watched at all): the row was dropped, unsaid — an NSG covering gondolin,
+    written from bree, made no card when only gondolin was watched. It is a card on what it
+    names, unattributed, the caller said without its name (third review, AL1c). A row whose own
+    resource is a VM the rule does not watch is still dropped (AL1)."""
+    row = _activity(NSG_OP, f"{NSG}/securityRules/allow-ssh-admin", CallerIpAddress=BREE_IP)
+    for vms in ((GONDOLIN,), ()):
+        sent = _poll("nsg-change-outside-glorfindel", [row], vms=vms, owners=_bree_owns_its_ip)
+        assert len(sent) == 1 and sent[0]["resource_id"] == NSG
+        t = sent[0]["context"]["target"]
+        assert t["kind"] == "nsg" and t["vm_names"] == (["vm-celebrimbor-gondolin"] if vms else [])
+        assert t["via"] == "règle allow-ssh-admin, appel depuis une VM que la règle ne surveille pas"
+        assert "bree" not in json.dumps(t) and sent[0]["context"]["attribution"] == "unattributed"
+    # Its own resource a VM the rule does not watch: dropped, from any address (AL1, unchanged).
+    on_bree = f"{BREE}/providers/Microsoft.Authorization/roleAssignments/abc"
+    assert _poll("role-assignment-write", [_activity(ROLE_OP, on_bree, CallerIpAddress=BREE_IP)],
+                 vms=(GONDOLIN,), owners=_bree_owns_its_ip) == []
+    # The data plane: a row routed to a VM the rule does not watch, by its address, still dropped.
+    rule = _shipped("data-exfiltration-blob")
+
+    def blob(owners):
+        sent = []
+        p = RulePoller([rule], sent.append, topology=Topology(lambda: AZURE), ip_owners=owners)
+        p._status = {}
+        p._detector = lambda _rule: _Workspace([{"CallerIpAddress": f"{BREE_IP}:50374", "OperationName": "PutBlob",
+                                                 "TimeGenerated": "2026-11-05T10:00:00Z"}])
+        p._registry = _Registry(GONDOLIN)
+        p.poll_once(rule)
+        p.stop()
+        return sent
+    assert blob(_bree_owns_its_ip) == []
+    # The same row from an address no VM holds: a card, anchored (L11) — the drop above is bree's.
+    assert len(blob(lambda: {})) == 1
+
+
 def test_a_rule_of_the_control_plane_or_of_an_identity_speaks_with_no_vm_watched():
     """No VM watched — every VM excluded from the rule, or the discovery still empty just after
     a start — is no reason to leave a card of the control plane or of an identity unsaid: it is
@@ -525,7 +561,11 @@ def test_the_discord_card_names_eight_vms_an_nsg_covers_and_counts_the_rest():
     # Long names: the field stays under Discord's 1024, or the whole embed is refused.
     long = {"kind": "nsg", "id": NSG, "name": "n" * 300, "via": "v" * 300, "vm_names": ["x" * 300] * 10}
     shown = dict((n, v) for n, v, _ in _embed_body({**_card(sig), "target": long})[1])["Ressource visée"]
-    assert len(shown) == 1024 and shown.startswith("NSG `" + "n" * 120)
+    # The VMs named whole, never one cut in its escape (an open backtick), the rest counted.
+    assert len(shown) <= 1024 and shown.startswith("NSG `" + "n" * 120)
+    named = shown.count("`" + "x" * 120 + "`")
+    assert 0 < named < 8 and shown.count("`") == 2 * (named + 1)
+    assert shown.endswith(f" et {10 - named} autre(s)")
 
 
 def test_a_card_filed_before_al1c_says_it_may_not_be_about_its_vm():

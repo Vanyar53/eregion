@@ -1123,6 +1123,14 @@ def _vm_id_of(resource_id: str) -> str:
     return (m.group(1) if m else resource_id).lower()
 
 
+def _names_vm_resource(row: dict) -> bool:
+    """The row's own resource (`_ResourceId`) is a VM or one of its sub-resources."""
+    if not isinstance(row, dict):
+        return False
+    rid = row.get("_ResourceId") or row.get("ResourceId")
+    return isinstance(rid, str) and "/microsoft.compute/virtualmachines/" in rid.lower()
+
+
 def _caller_ip(row: dict) -> str:
     for col in _VM_IP_COLUMNS:
         v = row.get(col)
@@ -1324,12 +1332,18 @@ class RulePoller:
                targets: list[tuple[str, str]]) -> dict[str, tuple]:
         """target key → ((resource_id, name) | None, rows). A row naming a VM this rule
         doesn't watch (excluded, another backend's) is dropped; one that names none is
-        keyed "unattributed". Each row read by `attribute_row`."""
+        keyed "unattributed". Each row read by `attribute_row`.
+
+        A row of the control plane or of an identity is about what it names (AL1c): dropped
+        only when its own resource is a VM this rule doesn't watch (AL1) — never because the
+        address that made the call is such a VM's (an NSG written from an excluded VM, or with
+        no VM watched): that row stays, unattributed (third review, AL1c)."""
         index = RowAttribution(targets, self._owners)
+        control = self._plane(rule) != "data"
         out: dict[str, tuple] = {}
         for row in rows:
             named, tgt = index.attribute(row)
-            if named and tgt is None:
+            if named and tgt is None and (not control or _names_vm_resource(row)):
                 continue
             key = tgt[0].lower() if tgt else "unattributed"
             out.setdefault(key, (tgt, []))[1].append(row)
@@ -1551,8 +1565,13 @@ class RulePoller:
             # AL1c (#597): the card is filed on what the row names — the NSG and the VMs it
             # covers, the VM of a disk, a role's scope, the group, the identity —, never on a VM
             # it has nothing to do with (glorfindel/card_target.py).
+            # Routed to no VM, though a VM's address made the call: a VM this rule does not
+            # watch — said, never named (third review, AL1c).
+            ip = _caller_ip(row) if tgt is None else ""
+            unwatched = bool(ip and (self._owners() or {}).get(ip))
             try:
-                target = card_target.of_row(row, plane, tgt, targets, self._topology)
+                target = card_target.of_row(row, plane, tgt, targets, self._topology,
+                                            caller_unwatched=unwatched)
             except Exception as exc:  # a card is never lost to its target: the plane, said
                 logger.warning("detection rule '%s': target unreadable (%s)", rule.name, exc)
                 target = card_target.control_plane_target(

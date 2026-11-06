@@ -184,12 +184,20 @@ def _target_fields(esc: dict) -> list[tuple[str, str, bool]]:
         out = [("Identité visée", what, False)]
     elif kind in _TARGET_KINDS:
         vms = [str(v) for v in (t.get("vm_names") or [])]
-        covers = ""
-        if vms:
-            more = f" et {len(vms) - _VMS_SHOWN} autre(s)" if len(vms) > _VMS_SHOWN else ""
-            covers = f" ; couvre {', '.join(name(v) for v in vms[:_VMS_SHOWN])}{more}"
-        # A field Discord refuses past 1024 characters: the whole embed would not be sent.
-        out = [("Ressource visée", f"{_TARGET_KINDS[kind]} {name(t.get('name'))}{via}{covers}"[:1024], False)]
+        head = f"{_TARGET_KINDS[kind]} {name(t.get('name'))}{via}"
+        value = head
+        # A field Discord refuses past 1024 characters (the whole embed would not be sent): the
+        # VMs named up to _VMS_SHOWN while the field holds them, whole — never a cut escape —,
+        # the rest counted.
+        for n in range(min(len(vms), _VMS_SHOWN), -1, -1):
+            if n:
+                more = f" et {len(vms) - n} autre(s)" if len(vms) > n else ""
+                value = f"{head} ; couvre {', '.join(name(v) for v in vms[:n])}{more}"
+            else:
+                value = f"{head} ; couvre {len(vms)} VM" if vms else head
+            if len(value) <= 1024:
+                break
+        out = [("Ressource visée", value, False)]
     else:
         out = [("Ressource visée", f"le plan de contrôle{via}", False)]
     if t.get("limit"):

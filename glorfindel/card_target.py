@@ -72,7 +72,8 @@ UNREAD = object()      # a section of the topology Azure did not answer
 _GONE_OR_HIDDEN = "supprimé, ou hors des droits de la watch"
 # What a VM missing from `targets` may be: `targets` are the rule's (RulePoller._targets), not the
 # whole discovery — never « unknown to the discovery » on that alone (second review, AL1c).
-_UNWATCHED = "que la règle ne surveille pas (absente de la découverte, exclue de la règle, ou d'un autre backend)"
+_UNWATCHED_SHORT = "que la règle ne surveille pas"
+_UNWATCHED = f"{_UNWATCHED_SHORT} (absente de la découverte, exclue de la règle, ou d'un autre backend)"
 
 
 class Topology:
@@ -305,18 +306,22 @@ def names_vm(row: dict, vm_id: str) -> bool:
     return bool(m) and rid[:m.end()].rstrip("/").lower() == str(vm_id or "").rstrip("/").lower()
 
 
-def of_row(row: dict, plane: str, tgt=None, targets=(), topology=None) -> dict:
+def of_row(row: dict, plane: str, tgt=None, targets=(), topology=None,
+           caller_unwatched: bool = False) -> dict:
     """The card's target for a row of the control plane or of an identity: the VM the RulePoller
     routed it to (`tgt`) when the row itself names it (a role on the VM), else what the row names.
     A VM the row was routed to by the address that made the call (`CallerIpAddress`: an NSG
-    written from bree) is the caller, never the target: said in `via` (review, AL1c)."""
+    written from bree) is the caller, never the target: said in `via` (review, AL1c); a call
+    from a VM the rule does not watch (`caller_unwatched`), said without its name."""
     if plane == "identity":
         return identity_target(row)
     if tgt is not None and names_vm(row, tgt[0]):
         return vm_target(tgt[0], tgt[1])
     t = control_target(row, targets, topology)
-    if tgt is not None:
-        t["via"] = ", ".join(filter(None, [t.get("via"), f"appel depuis {tgt[1] or _short(tgt[0])}"]))
+    caller = (f"appel depuis {tgt[1] or _short(tgt[0])}" if tgt is not None else
+              f"appel depuis une VM {_UNWATCHED_SHORT}" if caller_unwatched else "")
+    if caller:
+        t["via"] = ", ".join(filter(None, [t.get("via"), caller]))
     return t
 
 

@@ -4,12 +4,13 @@ as written, on lines the test writes (SEC2). No Log Analytics, no Azure.
 Only what the Syslog and AzureActivity rules use: a table, then `where`, `extend`, `summarize`
 (`arg_max(col, *)`, alone or among named aggregations in any order — AL2, AL1d —, `name = count()`,
 `countif(p)`, `min(col)`, `max(col)`, `take_any(col)`, `take_anyif(col, p)` — AL2, AL1d —,
-`make_set_if(col, p, n)` — AUD1 —, several of them), `project`, `order by`, `limit`; predicates
+`make_set_if(col, p, n)` — AUD1 —, `dcountif(col, p)` — AL1d, exact here, an estimate in Log
+Analytics, exact at the few values a rule counts —, several of them), `project`, `order by`, `limit`; predicates
 `==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`, `!has`, `in (…)`, `!in (…)`, `in~ (…)`, `!in~ (…)`
 (case-insensitive on strings — AL2, AL1d), `matches regex`, `startswith`, `endswith` (both
 case-insensitive, as in KQL — WL1), `and`, `or`, `not(…)`; functions `ago()`, `extract()`,
-`iif()` (or `iff()`), `isempty()`, `isnotempty()`, `isnotnull()`, `toint()`, `tolong()`,
-`tostring()`, `parse_json()`; a member (`.appid`) or an index (`["…"]`) on a column or on what a
+`iif()` (or `iff()`), `isempty()`, `isnotempty()`, `isnotnull()`, `strcat()`, `toint()`,
+`tolong()`, `tostring()`, `parse_json()`; a member (`.appid`) or an index (`["…"]`) on a column or on what a
 function returns — the Activity Log's `Claims`, AL2, AL1d. Anything
 else raises NotImplementedError: a rule this reader cannot follow fails its test, never
 passes it by accident. `has` is KQL's term match (case-insensitive, at term boundaries);
@@ -264,6 +265,11 @@ class _Parser:
                 except (TypeError, ValueError):
                     return None
             return toint
+        if name == "strcat":
+            # KQL's strcat: its arguments as strings, a null as "" (AL1d: an operation's caller,
+            # its three ids as one value).
+            fs = [f for _, f in args]
+            return lambda r: "".join("" if f(r) is None else str(f(r)) for f in fs)
         if name == "tostring":
             (_, f), = args
             return lambda r: "" if f(r) is None else str(f(r))
@@ -396,6 +402,9 @@ _AGGREGATES = {
     "min": _min,
     "max": _max,
     "take_any": lambda members, f: next((f(r) for r in members if f(r) is not None), None),
+    # KQL's dcountif: how many distinct values (nulls left out) on the rows the predicate keeps
+    # (AL1d: how many callers an operation's lines name).
+    "dcountif": lambda members, f, pred: len({f(r) for r in members if pred(r) and f(r) is not None}),
     "make_set_if": _make_set_if,
     # Log Analytics picks any row the predicate keeps (no order): this reader takes the first.
     # A rule that reads it holds for any choice — its predicate keeps only what may be taken

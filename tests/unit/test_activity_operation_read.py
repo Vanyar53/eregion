@@ -11,7 +11,7 @@ the real AzureActivityDetector and RulePoller. What is held, for each rule:
   - the ordinary operation (Start, Success) is one row, one card; one at its Start only too;
   - what each rule already leaves out stays out: another operation, a line older than its
     window, Glorfindel's own isolation; one row per operation; the same columns, plus
-    `Succeeded`; the dedup of an operation across polls is unchanged.
+    `Succeeded` and `Callers`; the dedup of an operation across polls is unchanged.
 The Run Command rule (SID1) keeps failures by design: every operation is read already. The
 restore point rule (AL2) reads what succeeded in its own form — held here with the others, and
 in tests/unit/test_restore_points.py. And in the first four rules, a latest line that names
@@ -70,7 +70,7 @@ RESTOREPOINT = "restorepoint-by-unexpected-caller"
 RESTOREPOINT_OP = ("MICROSOFT.COMPUTE/RESTOREPOINTCOLLECTIONS/RESTOREPOINTS/RETRIEVESASURIS/ACTION",
                    f"{RG}/Microsoft.Compute/restorePointCollections/rpc-vm1/restorePoints/rp-1")
 OPS = {**RULES, RESTOREPOINT: RESTOREPOINT_OP}
-COLUMNS = ["TimeGenerated", "OperationNameValue", "ActivityStatusValue", "Succeeded", "Caller",
+COLUMNS = ["TimeGenerated", "OperationNameValue", "ActivityStatusValue", "Succeeded", "Callers", "Caller",
            "CallerIpAddress", "CallerAppId", "CallerObjectId", "_ResourceId", "ResourceGroup",
            "CorrelationId"]
 
@@ -395,3 +395,153 @@ def test_its_run_command_with_a_bare_latest_line_is_read_as_its_own(workspace):
     assert len(sent) == 1 and sent[0]["severity"] == "critical"
     row = sent[0]["raw_signal"]["first_result_row"]
     assert (row["CorrelationId"], row["GlorfindelRunCommand"]) == ("c-own", "no_isolation")
+
+
+# ── two callers under one CorrelationId: never mixed (AL1d, relecture 5.5) ─────
+#
+# A CorrelationId is the client's to choose (`x-ms-correlation-request-id`): someone who reads
+# the log can write under Glorfindel's. Its ids, borrowed by a row that names the other caller
+# (or no one), would set that write aside as Glorfindel's own. A latest line that names no one
+# takes its operation's caller only when the operation's lines name one; else it stays bare,
+# as before AL1d. Each case is run with the lines in both orders: `take_anyif` picks any line
+# in Log Analytics, the answer must not depend on which.
+
+def _both_orders(lines):
+    return [list(lines), list(reversed(lines))]
+
+
+def _each_order(build):
+    """The lines `build(corr)` writes, in both orders, each under its own CorrelationId (a
+    poller remembers what it sent)."""
+    return [lines if i == 0 else list(reversed(lines))
+            for i, lines in enumerate((build("c-own-a"), build("c-own-b")))]
+
+
+def _own(rule, status, minutes_ago, corr="c-own", target=None):
+    return _line(rule, status, minutes_ago, corr=corr, caller=OWN_OID, oid=OWN_OID, app=OWN_APP,
+                 target=target)
+
+
+def _outsider_lines(rule, latest, corr="c-own", target=None):
+    """Another caller's lines under the same CorrelationId, the latest after Glorfindel's:
+    `bare` (its latest line names no one) or `caller_only` (Caller, no Claims)."""
+    if latest == "bare":
+        return [_line(rule, "Start", 4, corr=corr, target=target),
+                _line(rule, "Success", 3, corr=corr, target=target, bare=True)]
+    return [{**_line(rule, "Start", 4, corr=corr, target=target), "Claims": ""},
+            {**_line(rule, "Success", 3, corr=corr, target=target), "Claims": ""}]
+
+
+@pytest.mark.parametrize("latest", ["bare", "caller_only"])
+@pytest.mark.parametrize("rule", [*RULES, RUN_COMMAND])
+def test_two_callers_ids_are_never_mixed_on_a_row(rule, latest):
+    """The row names one caller, or none — never another's Caller with Glorfindel's ids."""
+    lines = [_own(rule, "Start", 6), _own(rule, "Success", 5), *_outsider_lines(rule, latest)]
+    for order in _both_orders(lines):
+        [row] = _run(rule, order)
+        assert row["Callers"] == 2
+        ids = (row["Caller"], row["CallerAppId"], row["CallerObjectId"])
+        assert ids == (("", "", "") if latest == "bare" else (OUTSIDER, "", "")), ids
+
+
+@pytest.mark.parametrize("latest", ["bare", "caller_only"])
+def test_another_caller_under_glorfindel_s_correlation_id_on_its_rule_is_critical(
+        workspace, _vm1_isolated, latest):
+    """Glorfindel isolates vm1 (its rule, under c-own); someone rewrites that rule under the
+    same id: the gravest card, never set aside as Glorfindel's own."""
+    rule_name = "nsg-change-outside-glorfindel"
+
+    def build(corr):
+        return [_own(rule_name, "Start", 6, corr=corr, target=GL_RULE),
+                _own(rule_name, "Success", 5, corr=corr, target=GL_RULE),
+                *_outsider_lines(rule_name, latest, corr=corr, target=GL_RULE)]
+    for order in _each_order(build):
+        p, rule, sent = _poller(rule_name)
+        workspace[:] = order
+        p.poll_once(rule)
+        assert len(sent) == 1 and sent[0]["severity"] == "critical"
+        assert sent[0]["raw_signal"]["normalized_signal"]["glorfindel_managed"] is True
+
+
+@pytest.mark.parametrize("rule_name", ["role-assignment-write", "snapshot-by-unexpected-caller"])
+def test_another_caller_under_glorfindel_s_correlation_id_has_its_card(workspace, rule_name):
+    """Here nothing of Glorfindel's is set aside: the card is there, naming no one (its latest
+    line bare) and saying the operation's lines name two callers."""
+    from glorfindel.agent import _control_plane_text
+    def build(corr):
+        return [_own(rule_name, "Start", 6, corr=corr), _own(rule_name, "Success", 5, corr=corr),
+                *_outsider_lines(rule_name, "bare", corr=corr)]
+    for order in _each_order(build):
+        p, rule, sent = _poller(rule_name)
+        workspace[:] = order
+        p.poll_once(rule)
+        assert len(sent) == 1
+        what, steps = _control_plane_text(sent[0])
+        assert "nomment 2 appelants" in what
+        assert any("plusieurs appelants" in s for s in steps)
+
+
+def test_another_s_run_command_under_glorfindel_s_drain_is_critical(workspace):
+    """Glorfindel's drain (recorded, under c-own), then another caller's Run Command under the
+    same id, its latest line bare: never taken for the drain — critical, its caller unread."""
+    import glorfindel.actions as actions
+    d = actions._ISOLATION_STATE_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "vm1.json").write_text(json.dumps({"resource_id": VM1, "placements": [],
+                                            "drains_at": [(NOW - timedelta(minutes=6)).isoformat()]}))
+    def build(corr):
+        return [_own(RUN_COMMAND, "Start", 6, corr=corr), _own(RUN_COMMAND, "Success", 5, corr=corr),
+                *_outsider_lines(RUN_COMMAND, "bare", corr=corr)]
+    for order in _each_order(build):
+        p, rule, sent = _poller(RUN_COMMAND)
+        workspace[:] = order
+        p.poll_once(rule)
+        assert len(sent) == 1 and sent[0]["severity"] == "critical"
+        assert sent[0]["raw_signal"]["first_result_row"]["GlorfindelRunCommand"] == "caller_unreadable"
+    # Glorfindel's drain alone, its latest line bare: one caller — its own, set aside.
+    p, rule, sent = _poller(RUN_COMMAND)
+    workspace[:] = [_own(RUN_COMMAND, "Start", 6),
+                    _line(RUN_COMMAND, "Success", 5, corr="c-own", bare=True)]
+    p.poll_once(rule)
+    assert sent == []
+
+
+def test_a_success_under_two_callers_does_not_say_it_took_effect(workspace):
+    """Glorfindel's success, then another caller's failure under the same id: a card (its
+    latest line, the failure) that never says the other's write took effect."""
+    from glorfindel.agent import _control_plane_text
+    rule_name = "role-assignment-write"
+    p, rule, sent = _poller(rule_name)
+    workspace += [_own(rule_name, "Start", 6), _own(rule_name, "Success", 5),
+                  _line(rule_name, "Start", 4, corr="c-own"), _line(rule_name, "Failure", 3, corr="c-own")]
+    p.poll_once(rule)
+    [sig] = sent
+    row = sig["raw_signal"]["first_result_row"]
+    assert (row["ActivityStatusValue"], row["Succeeded"], row["Callers"], row["Caller"]) == (
+        "Failure", 1, 2, OUTSIDER)
+    what, _ = _control_plane_text(sig)
+    assert "a pris effet" not in what
+    assert "peut être celle d'un autre appelant" in what
+
+
+def test_one_caller_named_in_one_form_is_carried_whatever_the_order():
+    """One caller, the same ids on each line that names it: the bare latest line takes them,
+    the four columns from that caller — whichever of its lines Log Analytics picks."""
+    rule = "role-assignment-write"
+    lines = [_line(rule, "Start", 7), _line(rule, "Accept", 6), _line(rule, "Success", 5, bare=True)]
+    for order in _both_orders(lines):
+        [row] = _run(rule, order)
+        assert (row["Callers"], row["Caller"], row["CallerIpAddress"], row["CallerObjectId"]) == (
+            1, OUTSIDER, "203.0.113.7", OUTSIDER_OID)
+
+
+def test_the_reader_s_dcountif_and_strcat():
+    """kql_subset: dcountif counts the distinct values of the rows its predicate keeps (nulls
+    left out); strcat reads a null as ""."""
+    rows = [{"Type": "T", "k": 1, "a": "x", "b": None, "p": True},
+            {"Type": "T", "k": 1, "a": "x", "b": "", "p": True},
+            {"Type": "T", "k": 1, "a": "y", "b": "z", "p": False},
+            {"Type": "T", "k": 1, "a": None, "b": "w", "p": True}]
+    [out] = kql_subset.run('T | extend K = strcat(a, "|", b) | summarize N = dcountif(K, p), '
+                           'M = dcountif(a, p) by k', rows)
+    assert (out["N"], out["M"]) == (2, 1)

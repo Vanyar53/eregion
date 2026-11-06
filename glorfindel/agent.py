@@ -950,12 +950,22 @@ def _control_plane_row(signal: dict) -> dict:
     return raw.get("first_result_row") or raw.get("detected_data") or {}
 
 
-def _succeeded_lines(row: dict) -> int:
-    """How many of an operation's lines succeeded (`Succeeded`, AL1d); 0 when unread."""
+def _count(row: dict, column: str) -> int:
+    """A count the row carries (AL1d: `Succeeded`, `Callers`); 0 when absent or unread."""
     try:
-        return int(row.get("Succeeded") or 0)
+        return int(row.get(column) or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _succeeded_lines(row: dict) -> int:
+    """How many of an operation's lines succeeded (`Succeeded`, AL1d); 0 when unread."""
+    return _count(row, "Succeeded")
+
+
+def _named_callers(row: dict) -> int:
+    """How many callers an operation's lines name (`Callers`, AL1d); 0 when unread."""
+    return _count(row, "Callers")
 
 
 def _control_plane_text(signal: dict) -> tuple[str, list[str]]:
@@ -977,10 +987,22 @@ def _control_plane_text(signal: dict) -> tuple[str, list[str]]:
     # AL1d: an operation that succeeded is read whatever its latest line — a latest line
     # in failure does not say the operation failed when one of its lines succeeded.
     elif status.lower() in ("failure", "failed") and _succeeded_lines(row) > 0:
-        what += (" Statut lu à sa dernière ligne, mais une de ses lignes a réussi : "
-                 "l'opération a pris effet.")
+        # Unless its lines name several callers: the success may be another's (AL1d).
+        if _named_callers(row) > 1:
+            what += (" Statut lu à sa dernière ligne ; une de ses lignes a réussi, mais elle "
+                     "peut être celle d'un autre appelant.")
+        else:
+            what += (" Statut lu à sa dernière ligne, mais une de ses lignes a réussi : "
+                     "l'opération a pris effet.")
+    # AL1d: one CorrelationId (the client's to choose), several callers named on its lines:
+    # the card says so, and to read each line.
+    if _named_callers(row) > 1:
+        what += (f" Ses lignes nomment {_named_callers(row)} appelants (un CorrelationId repris ?) : "
+                 "lire chacune avant de conclure sur l'appelant.")
     steps = ["Vérifier dans le journal d'activité qui a fait cette opération, et pourquoi"
              + (f" (CorrelationId {row['CorrelationId']})" if row.get("CorrelationId") else "") + "."]
+    if _named_callers(row) > 1:
+        steps.append("Lire chacune de ses lignes : plusieurs appelants sous ce CorrelationId.")
     if norm.get("glorfindel_managed"):
         what += (" Une règle gérée par Glorfindel (isolation, quarantaine ou blocage) a été "
                  "écrite par un autre appelant : une isolation ou un blocage a pu être levé. "

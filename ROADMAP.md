@@ -78,10 +78,8 @@ Tenue par l'Orchestre (RM1, 02/11). Une ligne par release qui se prépare : sa v
 
 | Version | Titre | Contenu | État |
 |---|---|---|---|
-| 0.5.5 | la preuve de bout en bout | CI5, CI6 (une CI plus rapide, une porte de release), H1c (le CD sur les checks requis) ; SEC21 (les détections signées), WC1 (sans H0), OI3 (Orodruin à jour au démarrage), OL1 ; GS1 (les guides de démarrage), AV1 ; DG-e, L1O, I11g ; CI6b (la porte au premier run) | publiée (05/11) |
-| 0.5.6 | qui est qui | SEC21b (le battement dit ce qu'il couvre), CON-S (la console marque les détections signées) ; CI6c, CI6d (la porte en ~45 min) ; FL1, H1d (le CD juge le battement par son identité) ; RW1 (la repose lit le statut du fournisseur) ; FS1a (le format de la file signée) ; IDI1 (une identité d'Entra ID inscrite au banc, jamais privilégiée) | brouillon |
-| 0.5.7 | le plan sur la carte | IR1a (le plan d'une identité volée, lu dans Graph, et « Vérifier »), IR1b (le contrat de l'exécuteur, désactivé), IDI1b et IDI1s (l'utilisateur de test, la garantie graph stricte), NT1 (la liste never_target jusqu'à la watch) ; FS1b et FS1c (la file signée, défaut faux) ; RW2 et RW3 (la repose relue) ; VM3 et VM3b ; CI6e, CI7, CI8, CI10a et CI10b (la porte en ~30 min), REL3 ; DEP2 (oauthlib 4.0.1) | brouillon |
-| 0.5.x | — | G1 au banc ; MUT2, MAK2, OI4 | plus tard |
+| 0.5.7 | le plan sur la carte | IR1a (le plan d'une identité volée, lu dans Graph, et « Vérifier »), IR1b (le contrat de l'exécuteur, désactivé), IDI1b et IDI1s (l'utilisateur de test, la garantie graph stricte), NT1 (la liste never_target jusqu'à la watch) ; FS1b et FS1c (la file signée, défaut faux) ; RW2 et RW3 (la repose relue) ; VM3 et VM3b ; CI6e, CI7, CI8, CI10a et CI10b (la porte en ~30 min), REL3 ; DEP2 (oauthlib 4.0.1) ; MUT3 (les 17 survivants de la porte) | publiée (06/11) |
+| 0.5.x | — | G1 au banc ; WL1 (la maintenance de bree), CAN2 (le canari azurerm), I3K ; MUT2, MAK2, OI4 | plus tard |
 | 0.6.0 | l'identité défendue | ID1 allumé et mesuré, IDI1 appliqué, R2 (une technique Stratus sur l'identité de test) vue par Glorfindel, IR1a (le plan et « Vérifier » sur la carte) — décidé par Jonathan le 05/11 | plus tard |
 
 ### Les lots

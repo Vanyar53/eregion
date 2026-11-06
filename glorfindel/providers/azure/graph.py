@@ -17,7 +17,7 @@ What a read answers:
     a token that cannot be had), a delay (no connection, no answer in time), or a list
     longer than `MAX_PAGES` (an absence in it could not be told).
     When Graph answered, it says its status and its error code (`error.code`, filtered by
-    `eregion_core.inscription.graph_error_code`: letters only, never copied raw), and the page of
+    `eregion_core.inscription.graph_error_code`: letters and `_` only, never copied raw), and the page of
     a list that answered so — a caller may read one exact answer of the first page as « none »
     (IDI1p: a tenant without PIM, `no_pim_license`), never another.
 

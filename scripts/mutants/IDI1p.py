@@ -3,7 +3,7 @@ answers the read of eligible role instances 400, ``AadPremiumLicenseRequired``: 
 or ID Governance, no eligible role can exist. That exact answer — that status, that code compared
 exactly, on that one read, on its first page — is « none », said in the verdict
 (``eregion_core.inscription.no_pim_license``, shared by IDI1's and IDI1b's guard and IR1b's
-contract); any other refuses, and says Graph's error code, filtered (letters only, at most 64).
+contract); any other refuses, and says Graph's error code, filtered (ASCII letters and `_`, at most 64).
 
 M4470–M4479, caught on fake Graphs by tests/unit/test_identity_inscription.py,
 tests/unit/test_user_inscription.py and tests/unit/test_identity_contract.py (GraphReader's own
@@ -42,7 +42,7 @@ MUTANTS = [
     ("M4478", "Graph's reader says its status only: the error code of a refusal lost (IDI1p)", GRAPH,
      "        said = f\"{status}{' ' + code if code else ''}\"\n", "        said = f\"{status}\"\n"),
     ("M4479", "Graph's error code copied raw: data from outside, a forged line or markup, in a verdict (IDI1p)",
-     INS, '_GRAPH_CODE = re.compile(r"[A-Za-z]{1,64}")', '_GRAPH_CODE = re.compile(r"(?s).{1,200}")'),
+     INS, '_GRAPH_CODE = re.compile(r"[A-Za-z_]{1,64}")', '_GRAPH_CODE = re.compile(r"(?s).{1,200}")'),
 ]
 TESTS = {
     **{f"M{n}": _ALL for n in (4470, 4471, 4472, 4473, 4479)},

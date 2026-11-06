@@ -676,14 +676,20 @@ def test_a_next_page_that_answers_so_after_a_first_page_read_refuses(nxt):
     ("InvalidAuthenticationToken", "HTTP 401 InvalidAuthenticationToken reading"),
     ("A" * 64, "HTTP 401 " + "A" * 64 + " reading"),
     ("A" * 65, "HTTP 401 reading"),                                   # too long: nothing (M4479)
-    ("Authorization_RequestDenied", "HTTP 401 reading"),              # not letters only: nothing
+    ("Authorization_RequestDenied", "HTTP 401 Authorization_RequestDenied reading"),   # « _ » said
+    ("_" * 64, "HTTP 401 " + "_" * 64 + " reading"),
+    ("Authorization RequestDenied", "HTTP 401 reading"),              # a space: nothing
+    ("Authorization-RequestDenied", "HTTP 401 reading"),              # a dash: nothing
+    ("Authorization_RequestDenied_" + "x" * 37, "HTTP 401 reading"),  # 65: nothing
     ("Bad<script>alert(1)</script>", "HTTP 401 reading"),
     ("Bad\nForged: line", "HTTP 401 reading"),
     ("Ünicode", "HTTP 401 reading"),
+    ("Accès_refusé", "HTTP 401 reading"),                             # an accent: nothing
     (42, "HTTP 401 reading"),
 ])
 def test_a_refused_read_says_its_code_filtered(code, said):
-    """Graph's error code is said (M4477) — data from outside, letters only, never copied raw."""
+    """Graph's error code is said (M4477) — data from outside, ASCII letters and « _ » only, at most
+    64, never copied raw (M4479)."""
     graph = _answering(FakeGraph(), f"{G}/servicePrincipals/{SP}/ownedObjects", 401, {"error": {"code": code}})
     v = _reader(graph).check(APP, kind="technique", destructive=False)
     assert not v.allowed and said in v.reason

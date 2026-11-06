@@ -753,12 +753,13 @@ NO_PIM_LICENSE = "AadPremiumLicenseRequired"
 NO_PIM_LICENSE_NOTE = (f"eligible roles: none can exist, the tenant has no PIM license "
                        f"(Graph: {NO_PIM_LICENSE})")
 READ_NOTES = frozenset({NO_PIM_LICENSE_NOTE})
-_GRAPH_CODE = re.compile(r"[A-Za-z]{1,64}")
+_GRAPH_CODE = re.compile(r"[A-Za-z_]{1,64}")
 
 
 def graph_error_code(response) -> str:
     """The error code an answer of Graph names (``error.code`` of its JSON body), or "": data from
-    outside, never copied raw — letters only, at most 64 of them, else nothing."""
+    outside, never copied raw — ASCII letters and ``_`` only (``Authorization_RequestDenied``), at most
+    64 of them, else nothing."""
     try:
         body = response.json()
     except Exception:

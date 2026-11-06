@@ -667,11 +667,14 @@ def test_graph_s_reader_says_the_status_the_code_and_the_page_of_a_refusal():
 @pytest.mark.parametrize("body, code", [
     (ValueError("no JSON"), ""), (["x"], ""), ({"error": "AadPremiumLicenseRequired"}, ""),
     ({"error": {"code": "Bad<script>"}}, ""), ({"error": {"code": "A" * 65}}, ""),
-    ({"error": {"code": "Authorization_RequestDenied"}}, ""), ({"error": {"code": 400}}, ""),
-    ({"error": {"code": "Bad\nForged"}}, ""), ({"error": {"code": "A" * 64}}, "A" * 64),
+    ({"error": {"code": 400}}, ""), ({"error": {"code": "Bad\nForged"}}, ""),
+    ({"error": {"code": "Authorization RequestDenied"}}, ""), ({"error": {"code": "Request-Denied"}}, ""),
+    ({"error": {"code": "Accès_refusé"}}, ""), ({"error": {"code": "_" * 65}}, ""),
+    ({"error": {"code": "A" * 64}}, "A" * 64),
+    ({"error": {"code": "Authorization_RequestDenied"}}, "Authorization_RequestDenied"),
 ])
 def test_graph_s_reader_says_a_code_filtered_never_raw(body, code):
-    """Data from outside: letters only, at most 64, else nothing (M4479)."""
+    """Data from outside: ASCII letters and « _ » only, at most 64, else nothing (M4479)."""
     with pytest.raises(Unreadable) as exc:
         _reader(_Resp(400, body)).list(ELIGIBLE)
     assert exc.value.code == code and str(exc.value) == f"Graph a répondu 400{' ' + code if code else ''}"

@@ -615,7 +615,7 @@ liste vide, **dite** dans le verdict (`GuardResult.notes` : « eligible roles: n
 has no PIM license (Graph: AadPremiumLicenseRequired) ») ; la garde juge le reste comme avant, et la
 note n'admet jamais rien. Tout autre échec reste un refus — un autre code (comparé à l'identique), un
 autre statut, un corps illisible, la même réponse sur une autre lecture ou sur une page suivante après
-une première lue —, et dit le code d'erreur de Graph, filtré (lettres seules, 64 au plus, sinon rien :
+une première lue —, et dit le code d'erreur de Graph, filtré (lettres ASCII et `_` seuls, 64 au plus, sinon rien :
 une donnée du dehors). Une seule règle (`eregion_core.inscription.no_pim_license`) pour les trois
 lecteurs : la garde d'une identité, celle d'un utilisateur de test (IDI1b), et le contrat de
 l'exécuteur d'identité (IR1b). Mutants M4470–M4479 (`scripts/mutants/IDI1p.py`).

@@ -3522,7 +3522,7 @@ d'Entra sont retirées). **Décision de Jonathan** (IDI1p) : cette réponse exac
 éligible », et le verdict le dit (`note — eligible roles: none can exist, the tenant has no PIM license
 (Graph: AadPremiumLicenseRequired)`). Tout autre échec reste un refus : un autre code, un autre statut, un
 corps illisible, la même réponse sur une autre lecture, ou sur une page suivante après une première lue.
-Un refus dit désormais le code d'erreur de Graph (`error.code`, filtré : lettres seules, 64 au plus, sinon
+Un refus dit désormais le code d'erreur de Graph (`error.code`, filtré : lettres ASCII et `_` seuls, 64 au plus, sinon
 rien). La même lecture vaut pour un utilisateur de test (`eregion_core.inscription user`) et pour le
 contrat de l'exécuteur d'identité (`glorfindel identity-contract`, « L'exécuteur d'identité »). Il faut une
 release qui porte IDI1p, puis `make orodruin-push REF=<cette release>` pour qu'Orodruin l'ait ; H0 l'a par

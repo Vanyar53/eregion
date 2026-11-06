@@ -1926,10 +1926,10 @@ par cas contre ce qui tourne (`infra/glorfindel-host/README.md`, « L'attestatio
 Il refuse une régression, jamais une variation : le modèle par défaut refuse une température
 fixée, et le même verrou a donné 51/51, puis 50/51 (29/10).
 
-**Le coût : deux fois celui d'un passage.** Un passage, c'est 17 cas × 3 runs = 51 décisions.
+**Le coût : deux fois celui d'un passage.** Un passage, c'est 18 cas × 3 runs = 54 décisions (le cas `floor` de B3a compris).
 Une action disruptive est tirée 3 fois (`GLORFINDEL_DECISION_DRAWS`, D-1), une décision prudente
-une fois. Cela fait environ 130 appels au modèle par passage, 153 au plus, et environ 260 pour
-les deux, 306 au plus. La première fois, l'installation du venv de référence prend en plus
+une fois. Cela fait environ 140 appels au modèle par passage, 162 au plus, et environ 280 pour
+les deux, 324 au plus. La première fois, l'installation du venv de référence prend en plus
 quelques minutes (un `pip install` du verrou).
 
 **Une PR de verrou ne porte pas de code qui exige ses nouvelles dépendances.** La référence fait

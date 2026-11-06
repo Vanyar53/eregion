@@ -143,7 +143,15 @@ commence par « Connexion après brute force non vérifiée ». Les comptes port
 Décision de Jonathan (06/11), issue #609 : quand la corrélation a confirmé, **sur une même VM**, un
 brute force qui a réussi puis une élévation vers root, `decide` propose **au moins `isolate_vm`**,
 quel que soit le choix du modèle. Le harnais du CD de H0 tirait `block_suspicious_ip` une fois sur
-trois sur ce cas, au-dessus de la porte : l'attaquant bloqué, la VM où il a pris root laissée debout.
+trois sur son cas apparié (2/2, « brute force après un sudo vers root sur la même VM »), au-dessus de
+la porte : l'attaquant bloqué, la VM où il a pris root laissée debout.
+
+**Ce cas 2/2 ne porte que des échecs** : ni la marque de COR1, ni de fait confirmé dans son
+incident. Le plancher n'y joue pas : le cas reste la mesure du modèle seul, gardé tel quel en
+témoin. Le plancher couvre le même scénario quand COR1 a vu la connexion réussir : c'est le cas
+`floor` ajouté au harnais (décision de Jonathan, 06/11), le même brute force marqué
+`ssh-login-after-brute-force`, son incident tenant le sudo confirmé — `isolate_vm` attendu, 3/3 quel
+que soit le tirage du modèle, la preuve de bout en bout du plancher dans le CD.
 
 - **Les faits, pas le modèle.** Chaque détection résolue dit ce qu'elle confirme sur sa VM
   (`confirmed_facts`, nœud `confirm_facts` après `poll_detection`), gardé par l'incident de la VM
@@ -156,12 +164,22 @@ trois sur ce cas, au-dessus de la porte : l'attaquant bloqué, la VM où il a pr
   réussi), un sudo seul, deux VM, des échecs sans connexion vue, une vérification impossible
   (`LoginCheck: unchecked`) : pas de plancher, le choix du modèle reste.
 - **Les gardes et le mode s'appliquent ensuite.** En `human_only`, rien ne s'exécute, la carte propose
-  `isolate_vm` et dit pourquoi (« Plancher déterministe (B3a) : … »). Le détail : `docs/glorfindel.md`,
-  les gardes de `decide`.
-- **Limites.** L'ordre des deux faits n'est pas vérifié, seulement leur présence dans l'incident en
-  cours (TTL de l'incident). Une commande sensible en root lue par auditd (AUD1, T1059.004) ne compte
-  pas encore comme élévation. Une ligne forgée sur la VM peut faire isoler la VM (jamais l'inverse ;
-  l'isolation est réversible).
+  `isolate_vm` et dit pourquoi (« Plancher déterministe (B3a) : … »). Une action que seul un humain
+  approuve (une restauration) n'est jamais perdue : la VM est contenue d'abord, puis une carte la
+  propose. Seulement sur une détection : un `recovery_complete` ou un `detection_timeout` gardent le
+  choix du modèle. Le détail : `docs/glorfindel.md`, les gardes de `decide`.
+- **Limites.**
+  - L'ordre des deux faits n'est pas vérifié, seulement leur présence dans l'incident en cours.
+  - **Le TTL de l'incident est glissant** : tout signal de la VM le prolonge (300 s depuis le
+    dernier). Et **`confirmed` n'est jamais vidé** : une levée d'isolation par un humain ne l'efface
+    pas. Tant que l'incident vit, toute détection suivante de la VM est relevée à `isolate_vm`.
+  - **En `respond`**, un poll plus long que le TTL (480 s de latence attendue pour Syslog, contre
+    300 s) peut laisser l'incident expirer entre deux détections : un fait est alors perdu pour la
+    suivante, et le plancher ne joue pas.
+  - Une commande sensible en root lue par auditd (AUD1, T1059.004) ne compte pas encore comme
+    élévation.
+  - Une ligne forgée sur la VM peut faire isoler la VM (jamais l'inverse ; l'isolation est
+    réversible).
 
 ## Ses limites, assumées
 

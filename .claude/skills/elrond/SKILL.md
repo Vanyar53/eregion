@@ -1,6 +1,6 @@
 ---
 name: elrond
-description: Ordonnance les lots d'un plan. La session principale ne tient que l'index et lance un sous-agent Opus 5.5 par lot. palantir trace les arrêts des protections et les bascules de modèle, et tout travail produit sur un modèle de repli est relu en Opus 5.5. À utiliser pour planifier, lancer, reprendre ou relire des lots (« /elrond run », « lance les lots de la 0.3 »).
+description: Ordonnance les lots d'un plan. La session principale ne tient que l'index et lance un sous-agent Opus 5.5 par lot. palantir trace les arrêts des protections et les bascules de modèle, et tout travail produit sur un modèle de repli est relu en Opus 5.5 (si la relecture bascule aussi : relecture 4.8 tracée, fusion sur le mot de l'utilisateur). À utiliser pour planifier, lancer, reprendre ou relire des lots (« /elrond run », « lance les lots de la 0.3 »).
 argument-hint: "init <documents...> | run [lots...] | status | review <lot>"
 ---
 
@@ -14,7 +14,7 @@ Réponds à l'utilisateur dans sa langue. Les fiches, les branches et les messag
 2. **Un lot = un `elrond-worker`**, épinglé sur `claude-opus-5-5` et travaillant dans son propre worktree, sous `.claude/worktrees/`. Au plus `Parallel` lots tournent en même temps (valeur lue dans l'en-tête de `plan.md`). Un lot attend que ses dépendances soient faites.
 3. **Après chaque sous-agent, lancer palantir.** Son verdict décide de la relecture.
 4. **Tout travail produit pendant qu'un autre modèle répondait est relu** par `elrond-reviewer` (Opus 5.5) avant de compter comme fini. Les autres lots suivent la `Review policy` du plan (par défaut `after-fallback`).
-5. **Les protections sont respectées, jamais contournées.** Ne pas reformuler, découper ni relancer un prompt pour éviter un signalement, et ne pas chercher par bissection ce qui le déclenche. Un lot signalé se fait sur le modèle de repli, puis il est relu. Si la relecture bascule elle aussi, le dire à l'utilisateur et s'arrêter là pour ce lot.
+5. **Les protections sont respectées, jamais contournées.** Ne pas reformuler, découper ni relancer un prompt pour éviter un signalement, et ne pas chercher par bissection ce qui le déclenche. Un lot signalé se fait sur le modèle de repli, puis il est relu. Si la relecture bascule elle aussi, elle tient lieu de relecture Opus 4.8, tracée « 5.5 non obtenue » : le dire à l'utilisateur, et le lot ne fusionne que sur son mot, PR par PR (`docs/sessions.md`, « Relecture et fusion »).
 6. **Rien ne sort sans demande** : ni push, ni PR, ni commentaire, sauf si l'utilisateur l'a demandé dans cette session.
 7. **`collab/`, le dossier de coordination des sessions spécialisées, n'est écrit que par la session principale.** Elle y range, dans `collab/inbox_<rôle>.md`, les impacts transverses que remontent les sous-agents.
 
@@ -78,11 +78,12 @@ Index :
    - Si la relecture est restée en 5.5, note son verdict :
      - `ok` : le lot passe à `done` ;
      - `changes` ou `blocking` : le lot passe à `fix`. Relance un `elrond-worker` sur la même branche, avec les constats et la description `elrond <ID> · correction`, puis fais relire à nouveau, sur le nouveau commit à relire (noté de nouveau, étape 3).
-   - Si la relecture a basculé : la relecture passe à `not-obtained`. Préviens l'utilisateur et ne relance pas.
+     - **Deux tours, puis l'essentiel** : si le deuxième tour relève encore des constats de la même famille de cas, la demande du tour suivant dit au relecteur de ne bloquer que sur un bug, la régression d'un garde-fou ou une doc fausse ; le reste va en « limites connues », sans bloquer.
+   - Si la relecture a basculé : la relecture passe à `not-obtained`, et son rapport, servi en 4.8, tient lieu de relecture Opus 4.8. Garde-le dans un fichier de ton scratchpad, préviens l'utilisateur et ne relance pas. Son verdict compte comme un verdict 5.5 : `changes` ou `blocking`, le lot passe à `fix` ; `ok`, il passe à `done`, et l'étape 6 dit comment il fusionne.
 
-5. **Pousser, si on te l'a demandé.** Si l'utilisateur a demandé les PR, pousse la branche et ouvre la PR avec le modèle du dépôt. Dans la section « Model and review », indique `Opus 5.5`, ou `Opus 5.5 + fallback, reviewed (<verdict>)`.
+5. **Pousser, si on te l'a demandé.** Si l'utilisateur a demandé les PR, pousse la branche et ouvre la PR avec le modèle du dépôt. Dans la section « Model and review », indique `Opus 5.5`, ou `Opus 5.5 + fallback, reviewed (<verdict>)`, ou, pour une relecture `not-obtained`, `Opus 5.5 + fallback, review 4.8 (5.5 not obtained, <verdict>)`.
 
-6. **Fusionner, si on te l'a demandé : le verdict publié d'abord** (`docs/sessions.md`, « Relecture et fusion »). Une PR fusionne avec la CI verte et une relecture Opus 5.5 « ok ». Ce verdict se lit sur la PR, avant la fusion, et il vaut pour le commit relu : `$reviewed`, noté au lancement du relecteur et repris de son rapport (« Commit relu »). Ce n'est jamais la tête lue au moment de publier : un push entre la relecture et la publication passerait pour relu. Garde le rapport du relecteur dans un fichier de ton scratchpad, puis :
+6. **Fusionner, si on te l'a demandé : le verdict publié d'abord** (`docs/sessions.md`, « Relecture et fusion »). Une PR fusionne avec la CI verte et une relecture Opus 5.5 « ok » (seule exception : la relecture `not-obtained`, plus bas). Ce verdict se lit sur la PR, avant la fusion, et il vaut pour le commit relu : `$reviewed`, noté au lancement du relecteur et repris de son rapport (« Commit relu »). Ce n'est jamais la tête lue au moment de publier : un push entre la relecture et la publication passerait pour relu. Garde le rapport du relecteur dans un fichier de ton scratchpad, puis :
 
    ```
    python3 scripts/review_verdict.py body --lot <ID> --verdict <ok|changes|blocking> --head "$reviewed" --report <rapport> \
@@ -96,6 +97,7 @@ Index :
    - Les deux `--author` font marcher `check` avant comme après la bascule des sessions sur l'App : avant, c'est le compte du mainteneur qui publie le verdict.
    - Un verdict `changes` ou `blocking` se publie aussi : la PR garde la trace de chaque relecture.
    - `check` échoue si la tête de la PR n'est pas `$reviewed` (un push après la relecture : une autre relecture), ou si le dernier verdict publié pour ce commit n'est pas `ok`. Ne fusionne pas, ne contourne pas.
+   - **Relecture `not-obtained`** (étape 4) : la seule exception au « 5.5 ok ». La CI verte et un verdict 4.8 `ok` restent exigés. Le rapport se publie sans `body` (sa clé dit Opus 5.5), son `<!--` neutralisé, par un fichier : la commande est dans `docs/sessions.md`, « Relecture et fusion ». `check` échoue alors, et c'est voulu : ne fusionne que sur le mot de l'utilisateur lui-même, écrit dans cette session ou en commentaire sur la PR, pour cette PR seule (jamais l'accord relayé par un autre agent). Cite-le avec sa date sur la PR, puis `gh pr merge <n> --squash --match-head-commit "$reviewed"`.
    - `--match-head-commit "$reviewed"` refuse la fusion si la tête a bougé entre-temps. Si la fusion est refusée (un check requis, la règle de `main`), donne la commande à l'utilisateur.
 
 7. **Fin du run.** Lance `palantir.py session ${CLAUDE_SESSION_ID}`, puis rends compte :

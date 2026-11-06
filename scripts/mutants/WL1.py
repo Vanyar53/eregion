@@ -63,6 +63,8 @@ MUTANTS += [
      "    if \"base_query_sha256\" in entry:\n", "    if False:\n"),
     ("M4369", "a stale copy set aside although another entry of its name may disable the rule (WL1)",
      RULES, " if held.count(name) > 1\n", " if False\n"),
+    ("M4395", "an invalid copy read for drift: a note of drift for a rule merge_layers skips (WL1)",
+     RULES, "        if _invalid_client_entry(\"rules\", entry) is not None:\n", "        if False:\n"),
 ]
 TESTS = {f"M{n}": _TESTS for n in range(4265, 4270)}
 TESTS.update({
@@ -76,4 +78,5 @@ TESTS.update({
     "M4367": f"{_TESTS}::test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running",
     "M4368": f"{_TESTS}::test_a_copy_with_the_retired_field_is_set_aside_and_the_shipped_rule_loads",
     "M4369": f"{_TESTS}::test_a_stale_copy_whose_shipped_rule_would_not_load_keeps_running",
+    "M4395": f"{_TESTS}::test_an_invalid_stale_copy_is_said_skipped_never_drift",
 })

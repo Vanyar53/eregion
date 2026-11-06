@@ -506,6 +506,9 @@ def _drift(base_rules: dict[str, dict], client: dict) -> tuple[dict, list[str], 
     names: list[str] = []
     notes: list[str] = []
     for entry in rules:
+        if _invalid_client_entry("rules", entry) is not None:
+            kept.append(entry)          # merge_layers says it skipped, never as drift
+            continue
         sha = entry.get("base_sha256") if isinstance(entry, dict) else None
         if not (_is_sha256(sha) and isinstance(entry.get("name"), str) and entry.get("enabled", True) is True):
             kept.append(entry)

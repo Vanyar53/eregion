@@ -374,6 +374,14 @@ def test_a_copy_with_the_retired_field_is_set_aside_and_the_shipped_rule_loads(t
                for n in cfg.notes)
 
 
+def test_an_invalid_stale_copy_is_said_skipped_never_drift(tmp_path):
+    cfg = load_config(_base_with(tmp_path, query=CHANGED_QUERY)[0],
+                      client_layer=_layer(tmp_path, interval_s="30s"))
+    assert cfg.drifted == [] and not any("dérive" in n for n in cfg.notes)
+    assert any("interval_s" in n and "ignorée" in n for n in cfg.notes)
+    assert next(r for r in cfg.rules if r.name == NAME).layer == "base"
+
+
 def test_a_client_rule_that_is_no_copy_says_no_drift(tmp_path):
     rule = {k: v for k, v in CLIENT[NAME].items() if k != "base_sha256"}
     path = tmp_path / "client_rules.yaml"

@@ -1747,7 +1747,10 @@ MUTANTS += [
     ("M864", "an unreadable tag counts as unknown only when a state holds the NIC: the state lost, a "
              "429 writes 'none' over a valid tag (I8F, second relecture)", QUA,
      "                elif unread and recorded is _UNKNOWN:\n",
-     '                elif unread and recorded is _UNKNOWN and _held_in_quarantine(t["nic_id"]):\n'),
+     # The module's own name since SEC4b (_held_or_unreadable): _held_in_quarantine is no longer
+     # imported there, and the mutant only raised a NameError — an isolation that failed safe, never
+     # the bug it names (MUT3, #599).
+     '                elif unread and recorded is _UNKNOWN and _held_or_unreadable(t["nic_id"]):\n'),
     ("M865", "a stateless release ignores the tag of a bare NIC: left without its NSG, an old isolation "
              "there (I8F, second relecture)", REL,
      "                    if q_bare is not None:\n                        if original:\n",

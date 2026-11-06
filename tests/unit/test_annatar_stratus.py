@@ -338,7 +338,8 @@ def _scenario(**over) -> Scenario:
 
 def _fake_executor(tmp_path, *, before=True, after=True, rg_tags=None,
                    detonate_raises=False, warmup_raises=False,
-                   before_raises=False, after_raises=False):
+                   before_raises=False, after_raises=False,
+                   warmup_interrupt=False, detonate_interrupt=False):
     binary, digest = _fake_binary(tmp_path)
     r = resolve(TID, binary_path=binary, stratus_dir=_stratus_dir(tmp_path, digest),
                 catalog=_catalog())
@@ -354,11 +355,15 @@ def _fake_executor(tmp_path, *, before=True, after=True, rg_tags=None,
 
         def warmup(self):
             calls.append("warmup")
+            if warmup_interrupt:
+                raise KeyboardInterrupt("interrupted during warmup")
             if warmup_raises:
                 raise RuntimeError("warmup failed")
 
         def detonate(self):
             calls.append("detonate")
+            if detonate_interrupt:
+                raise KeyboardInterrupt("interrupted during detonate")
             if detonate_raises:
                 raise RuntimeError("detonate failed")
 
@@ -453,6 +458,40 @@ def test_run_stratus_cycle_after_probe_error_surfaces_an_error(tmp_path, monkeyp
     assert out.error == "initial state not verified after cleanup"   # not a silent unknown
     rpt = _report(tmp_path)
     assert rpt["checks"]["initial_state_after"] == "ERROR"
+
+
+def test_run_stratus_cycle_interrupt_in_warmup_is_not_a_pass(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    fake, r, calls = _fake_executor(tmp_path, warmup_interrupt=True)
+    with pytest.raises(KeyboardInterrupt):
+        Engine()._run_stratus_cycle(_scenario(), fake, "20260101T000018Z", r)
+    assert "cleanup" in calls and "detonate" not in calls   # cleaned even on an interrupt
+    assert _report(tmp_path)["result"] == "FAIL"             # a BaseException is never a PASS
+
+
+def test_run_stratus_cycle_interrupt_in_detonate_is_not_a_pass(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    fake, r, calls = _fake_executor(tmp_path, detonate_interrupt=True)
+    with pytest.raises(KeyboardInterrupt):
+        Engine()._run_stratus_cycle(_scenario(), fake, "20260101T000019Z", r)
+    # Every labelled phase is PASS here (warmup/before/cleanup/after) — only the missing
+    # detonation keeps the report FAIL.
+    assert _report(tmp_path)["result"] == "FAIL"
+    assert "cleanup" in calls and "revert" not in calls
+
+
+def test_run_stratus_cycle_error_after_detonation_is_not_before_probe(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    fake, r, calls = _fake_executor(tmp_path)
+    # A bad detonation timeout raises AFTER a successful detonate (in the attack_started emit).
+    sc = _scenario(detection={"timeout": "not-a-duration"})
+    with pytest.raises(ValueError):
+        Engine()._run_stratus_cycle(sc, fake, "20260101T000020Z", r)
+    rpt = _report(tmp_path)
+    assert rpt["checks"]["detonate"] == "PASS"             # the detonation itself succeeded
+    assert rpt["checks"]["attack_started"] == "ERROR"      # the failure is labelled after it
+    assert "initial_state_before" not in rpt["checks"] or \
+        rpt["checks"]["initial_state_before"] != "ERROR"   # never mislabelled as the before-probe
 
 
 def test_run_stratus_cycle_does_not_detonate_on_a_dirty_initial_state(tmp_path, monkeypatch):

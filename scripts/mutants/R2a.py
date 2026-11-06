@@ -1,7 +1,7 @@
 """R2a (Partie de #79): the Stratus Red Team adapter — a technique id resolved against a CLOSED
 allow-list, the pinned binary checked at run time, the warmup/detonate/revert/cleanup cycle run
 from an armed Orodruin with every phase journaled, and a read-only Graph probe of the initial
-state. M4315–M4349 (M4335–M4344: first review — control-plane guard, bench-only zone, warmup
+state. M4315–M4351 (M4335–M4344: first review — control-plane guard, bench-only zone, warmup
 cleanup, per-phase binary check; M4345–M4349: second review — a report never PASSes without a
 real detonation, legacy tag refused), measured by tests/unit/test_annatar_stratus.py."""
 ENG = "annatar/engines/stratus.py"
@@ -107,13 +107,11 @@ MUTANTS = [
      " phase",
      "        pass   # re-check removed (mutant)"),
     # ── Review round 2 (Opus 5.5): a report never PASSes without a real detonation ──────
-    ("M4345", "a before-probe that raised still reports PASS (no detonation)", RUN,
-     '            else:\n'
-     '                checks["initial_state_before"] = "ERROR"   # warmup ok, failed before'
-     ' detonating',
+    ("M4345", "a before-probe that raised is mislabelled, not initial_state_before=ERROR", RUN,
+     '            elif not tried_detonate:\n'
+     '                checks["initial_state_before"] = "ERROR"   # the before-probe raised',
      '            elif False:\n'
-     '                checks["initial_state_before"] = "ERROR"   # warmup ok, failed before'
-     ' detonating'),
+     '                checks["initial_state_before"] = "ERROR"   # the before-probe raised'),
     ("M4346", "a watch lost after warmup still reports PASS (no detonation)", RUN,
      '                    checks["detonate"] = "SKIPPED"   # watch lost after warmup: no'
      ' detonation',
@@ -135,6 +133,17 @@ MUTANTS = [
      "        if guard.legacy and False:\n"
      "            # Stratus is a new engine (R2): the migration tag 'annatar-test=true' alone,"
      " from"),
+    # ── Review round 3 (Opus 5.5): an interruption never reports PASS ───────────────────
+    ("M4350", "a report PASSes without a detonation (a Basea/interrupt mid-run)", RUN,
+     '            overall = ("PASS" if detonated and checks\n'
+     '                       and all("PASS" in v for v in checks.values()) else "FAIL")',
+     '            overall = ("PASS" if checks\n'
+     '                       and all("PASS" in v for v in checks.values()) else "FAIL")'),
+    ("M4351", "a failure after a successful detonation is mislabelled the before-probe", RUN,
+     '            elif not tried_detonate:\n'
+     '                checks["initial_state_before"] = "ERROR"   # the before-probe raised',
+     '            elif True:\n'
+     '                checks["initial_state_before"] = "ERROR"   # the before-probe raised'),
 ]
 
 TESTS = {
@@ -173,4 +182,6 @@ TESTS = {
     "M4347": f"{_T}::test_run_stratus_cycle_cleans_up_even_when_detonate_fails",
     "M4348": f"{_T}::test_run_stratus_cycle_after_probe_error_surfaces_an_error",
     "M4349": f"{_T}::test_run_stratus_refuses_a_legacy_enrolled_group",
+    "M4350": f"{_T}::test_run_stratus_cycle_interrupt_in_detonate_is_not_a_pass",
+    "M4351": f"{_T}::test_run_stratus_cycle_error_after_detonation_is_not_before_probe",
 }

@@ -830,13 +830,15 @@ class Engine:
                     console.print("[cyan]->[/cyan] Signal 'attack_started' emitted.")
         except Exception as e:
             # Label the phase that actually failed — never a bogus detonate=ERROR for a warmup
-            # that raised, and never a PASS with no detonation when the before-probe raised.
+            # that raised, never initial_state_before=ERROR for a failure after a detonation.
             if checks.get("warmup") != "PASS":
                 checks["warmup"] = "ERROR"
             elif tried_detonate and not detonated:
                 checks["detonate"] = "ERROR"
+            elif not tried_detonate:
+                checks["initial_state_before"] = "ERROR"   # the before-probe raised
             else:
-                checks["initial_state_before"] = "ERROR"   # warmup ok, failed before detonating
+                checks["attack_started"] = "ERROR"          # failed after a successful detonation
             console.print(f"[red]Stratus phase failed:[/red] {type(e).__name__}: {e}")
             raise
         finally:
@@ -877,7 +879,12 @@ class Engine:
             metrics["detection"] = "unknown"
             metrics["detection_note"] = \
                 "control-plane detection (azure_activity) measured at ID1 (#281)"
-            overall = "PASS" if checks and all("PASS" in v for v in checks.values()) else "FAIL"
+            # A report is PASS only after a real detonation: a BaseException (Ctrl-C, SystemExit)
+            # during warmup or detonate is not caught by `except Exception` above and labels
+            # nothing, but the cleanup and after-probe in this finally would otherwise leave an
+            # all-PASS report — `detonated` keeps it FAIL.
+            overall = ("PASS" if detonated and checks
+                       and all("PASS" in v for v in checks.values()) else "FAIL")
             report = RunReport(scenario=scenario.name, run_id=run_id, mitre=scenario.mitre,
                                result=overall, metrics=metrics, thresholds={}, checks=checks)
             path = report.save()

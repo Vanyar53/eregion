@@ -14,9 +14,11 @@ console = Console()
 REQUIRED_FIELDS = ["name", "description", "mitre", "target", "steps"]
 DEFAULT_ENGINE = "local-script"
 # The engines Annatar can actually run today. Anything else (a typo, or a future engine
-# like stratus/chaos-studio not wired here yet) is refused at authoring and at run time —
-# never a run with zero steps followed by a bogus attack_started (review R1, point 2).
-KNOWN_ENGINES = frozenset({"local-script", "atomic"})
+# like chaos-studio not wired here yet) is refused at authoring and at run time — never a run
+# with zero steps followed by a bogus attack_started (review R1, point 2). ``stratus`` (R2):
+# the Stratus Red Team adapter (annatar/engines/stratus.py) drives its warmup/detonate/revert/
+# cleanup cycle on the Azure control plane; the runner dispatches it (Engine._run_stratus).
+KNOWN_ENGINES = frozenset({"local-script", "atomic", "stratus"})
 
 
 @dataclass

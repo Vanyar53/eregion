@@ -370,3 +370,45 @@ def test_the_fake_evaluates_an_acl_without_state(world):
     assert ("in", INTERNET, 22) not in flows
     f.acls["acl-app"]["entries"][(True, 110)] = acl_entry(110, True, "allow", "0.0.0.0/0", "tcp", 1024, 65535)
     assert ("in", INTERNET, 22) in {(fl[2], fl[3], fl[4]) for fl in open_flows(f.world(), "i-web1")}
+
+
+def test_every_write_of_an_operation_holds_the_instances_lock(world, monkeypatch):
+    """MUT3 (#599, M613): an isolation, a release, a block and an unblock hold the instance's lock
+    (`_vm_lock`, as Azure's) for the whole of their writes — every write AWS receives is made inside
+    it, named for that instance. The machine's races never showed the lock gone (0/2 at 500
+    sequences): without it, two operations on one instance interleave their writes."""
+    from contextlib import contextmanager
+
+    from glorfindel.response import locks
+
+    f, c, _ = world
+    held: list[str] = []
+    real = locks._vm_lock
+
+    @contextmanager
+    def watched(vm_name, *args, **kwargs):
+        with real(vm_name, *args, **kwargs):
+            held.append(vm_name)
+            try:
+                yield
+            finally:
+                held.remove(vm_name)
+    monkeypatch.setattr(locks, "_vm_lock", watched)
+    writes: list[tuple[str, tuple]] = []
+    for op in ("delete_sg", "modify_network_interface_attribute", "create_security_group",
+               "authorize_security_group_ingress", "authorize_security_group_egress",
+               "revoke_security_group_ingress", "revoke_security_group_egress", "create_tags", "delete_tags",
+               "create_network_acl_entry", "delete_network_acl_entry"):
+        method = getattr(f, op)
+
+        def recorded(*args, _op=op, _method=method, **kwargs):
+            writes.append((_op, tuple(held)))
+            return _method(*args, **kwargs)
+        monkeypatch.setattr(f, op, recorded)
+    assert c.isolate_vm(arn("i-db"))["status"] == "isolated"
+    assert c.release_isolation(arn("i-db"))["status"] == "released"
+    assert c.block_suspicious_ip(ATTACKER, arn("i-db"), threat_port=22)["status"] == "blocked"
+    assert c.unblock_ip(ATTACKER, arn("i-db"))["status"] in ("unblocked", "removed")
+    assert writes, "no write reached AWS"
+    outside = [op for op, locked in writes if "i-db" not in locked]
+    assert not outside, f"written outside the instance's lock: {outside}"

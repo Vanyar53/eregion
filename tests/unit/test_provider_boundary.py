@@ -26,6 +26,7 @@ SDK_ROOTS = {"azure": "azure", "boto3": "aws", "botocore": "aws", "google.cloud"
 # Outside glorfindel/: the one file through which a component reaches its cloud.
 ADAPTERS = {
     "annatar/executors/azure_vm.py": "azure",          # Annatar's injector (Run Command)
+    "annatar/executors/stratus_host.py": "azure",      # Annatar's Stratus injector (R2)
     "annatar/collectors/azure_monitor.py": "azure",    # Annatar's detection watcher
     "gothmog/engines/chaos_studio.py": "azure",        # Gothmog's fault engine
     "infra/orodruin/kill.py": "azure",                 # Orodruin's emergency stop

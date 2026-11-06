@@ -468,3 +468,70 @@ resource_types:
         requires_testdata: false
         reference_script: null
         setup_scripts: []
+
+  # ───────────────────────────────────────────────────────────────────────────────
+  # Plan de contrôle Azure via Stratus Red Team (R2, #79). LISTE FERMÉE : l'adaptateur
+  # (annatar/engines/stratus.py) ne résout QUE les `engine: stratus` ci-dessous — un id que
+  # Stratus connaît mais que le catalogue n'a pas est refusé (fail-closed). `engine_ref` est
+  # l'identifiant Stratus (azure.<tactique>.<nom>), `ttp` l'identifiant ATT&CK. Binaire épinglé
+  # (annatar/stratus/PIN), cycle warmup/detonate/revert/cleanup depuis un Orodruin armé, journalisé.
+  # Ces techniques se voient dans le journal d'activité (azure_activity, détection AL1) ; la
+  # remontée réelle au banc est ID1 (#281), d'où `status: planned` (le synthétiseur ne les
+  # matérialise pas encore). `graph_probe` : sonde Graph LECTURE SEULE de l'état initial.
+  azure_control_plane:
+    techniques:
+
+      - ttp: T1651
+        name: "Cloud Administration Command (VM Run Command)"
+        tactic: execution
+        status: planned
+        engine: stratus
+        engine_ref: azure.execution.vm-run-command
+        # blue : l'opération Run Command sur une VM apparaît dans le journal d'activité.
+        log_source: azure_activity
+        indicator_key: ""
+        indicator_columns: [OperationName, Caller]
+        expected_latency_s: 600
+        destructive: false
+        requires_testdata: false
+        reference_script: null
+        setup_scripts: []
+
+      - ttp: T1133
+        name: "External Remote Services (Bastion Shareable Link)"
+        tactic: persistence
+        status: planned
+        engine: stratus
+        engine_ref: azure.persistence.create-bastion-shareable-link
+        log_source: azure_activity
+        indicator_key: ""
+        indicator_columns: [OperationName, Caller]
+        expected_latency_s: 600
+        destructive: false
+        requires_testdata: false
+        reference_script: null
+        setup_scripts: []
+
+      - ttp: T1098
+        name: "Account Manipulation (Backdoor Managed Identity via Federated Credential)"
+        tactic: persistence
+        status: planned
+        engine: stratus
+        engine_ref: azure.persistence.backdoor-managed-identity-fic
+        # Entra ID : la technique ajoute un federated identity credential (FIC) de porte dérobée.
+        log_source: azure_activity
+        indicator_key: ""
+        indicator_columns: [OperationName, InitiatedBy]
+        expected_latency_s: 600
+        # Sonde Graph LECTURE SEULE (annatar/engines/stratus.py) : avant detonate et après
+        # cleanup, on lit l'annuaire pour vérifier que les applications créées par la technique
+        # sont absentes. GET d'un chemin Graph v1.0 — ne modifie jamais l'annuaire. Séquencement
+        # réel (avant/après) éprouvé à ID1.
+        graph_probe:
+          name: stratus-fic-app-absent
+          read: "/v1.0/applications?$filter=startswith(displayName,'stratus-red-team')&$select=id"
+          expect_absent: true
+        destructive: false
+        requires_testdata: false
+        reference_script: null
+        setup_scripts: []

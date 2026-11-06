@@ -1608,6 +1608,46 @@ def test_a_deleted_vms_rules_go_with_its_release_or_are_said(monkeypatch, listin
         shutil.rmtree(m.home, ignore_errors=True)
 
 
+def test_a_failed_release_of_a_deleted_vm_keeps_its_nics_for_the_retry(monkeypatch):
+    """MUT3 (#599, M1552), I7S: web blocked, then isolated by rules on the tier NSG, its isolation's
+    state lost — only its block's names the NIC. web is deleted; its release can't list the NSGs:
+    said, never `released`, a state kept that names the NIC (`known_nics`). Then the block's state
+    is lost too: the retry knows the NIC from that kept state alone, finds the rules named for it
+    and takes them off. Without it, the retry looked for nothing and said `released`, the rules
+    left on the tier NSG, aimed at an address Azure hands to the next VM."""
+    import shutil
+
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(web_nic={"own": "tier"}, subnet_nsg=[]))
+        f, c, nic = m.fake, m.connector, _nic("rg-app1", "web-nic")
+        tier = f.nics[nic]["nsg"]
+        assert c.block_suspicious_ip(ATTACKER, WEB1, scope="vm", threat_port=22)["status"] == "blocked"
+        assert c.isolate_vm(WEB1)["status"] == "isolated"                 # by rules, on the tier NSG
+        ours = sorted(n for n in f.nsgs[key(tier)]["rules"] if n.startswith("glorfindel-iso-"))
+        assert len(ours) == 2, ours
+        for p in actions._ISOLATION_STATE_DIR.glob("*.json"):
+            p.unlink()                                                    # the isolation's state lost
+        m._delete_vm(WEB1)
+        m.chaos.arm(("nsg.list", "always-429"))
+        try:
+            out = c.release_isolation(WEB1)
+        finally:
+            m.chaos.plan = None
+        assert out["status"] == "release_partial", out
+        for p in actions._BLOCK_STATE_DIR.glob("*.json"):
+            p.unlink()                                                    # the block's state lost too
+        out = c.release_isolation(WEB1)
+        assert out["status"] == "released", out
+        assert not [n for n in f.nsgs[key(tier)]["rules"] if n in ours], (
+            "the retry looked for nothing: the rules named for the deleted VM's NIC stayed", f.nsgs[key(tier)]["rules"])
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
 @pytest.mark.parametrize("nic_is", ["detached", "on another name", "on a namesake", "unreadable"])
 def test_a_deleted_vms_nic_that_azure_kept_is_read_first(monkeypatch, nic_is):
     """The review's probe (I7S): `az vm delete` and Terraform keep a VM's NIC by default,

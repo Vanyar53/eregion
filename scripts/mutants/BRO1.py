@@ -3,7 +3,7 @@ its principal, a certificate whose private key never enters Terraform, Log Analy
 bench's workspace alone (infra/terraform/bench_reader.tf), and the script the session signs in and
 queries with (scripts/bench_reader.py): a code session refused, the Banc session's variable wanted,
 a short certificate whose end is posed, the operator's Azure identity never mixed in, the
-certificate never shown by a failed plan. M4420–M4424, M4495–M4498, measured by
+certificate never shown by a failed plan. M4420–M4424, M4495–M4499, measured by
 tests/unit/test_bench_reader.py (the Terraform plan itself: infra/terraform/tests/bench_reader.tftest.hcl).
 """
 SCRIPT = "scripts/bench_reader.py"
@@ -37,5 +37,8 @@ MUTANTS = [
      "  end_date       = local.bench_reader_certificate_end\n", ""),
     ("M4498", "keygen writes no end: Terraform's plan stops, or poses an older one (BRO1)", SCRIPT,
      '        _write_private(d / "reader.end", f"{when}\\n".encode())\n', ""),
+    ("M4499", "the Banc session launched from a shell where .envrc was sourced: its inherited secrets, ARM_* "
+     "and GH_TOKEN left for a terraform, an SDK or a gh of the session (BRO1)", SCRIPT,
+     "    if leaked:\n", "    if False:\n"),
 ]
-TESTS = {**{f"M{n}": _TESTS for n in range(4420, 4425)}, **{f"M{n}": _TESTS for n in range(4495, 4499)}}
+TESTS = {**{f"M{n}": _TESTS for n in range(4420, 4425)}, **{f"M{n}": _TESTS for n in range(4495, 4500)}}

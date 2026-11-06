@@ -3804,12 +3804,18 @@ az role assignment list --assignee <client_id> --all --subscription <abonnement 
 for sub in $(az account list --query "[].id" -o tsv); do  # puis chaque abonnement que ton compte voit
   echo "$sub"; az role assignment list --assignee <client_id> --all --subscription "$sub" -o tsv
 done                                   # rien, sauf la ligne ci-dessus sous l'abonnement du banc
-# 6b. Entra (Graph, en lecture) : aucun rôle d'application, aucun groupe ni rôle d'annuaire, aucun consentement.
+# 6b. Entra (Graph, en lecture) : ce que ces six lectures montrent, et rien de plus — aucun rôle
+#     d'application, aucune appartenance, aucun consentement délégué, aucun rôle d'annuaire, aucun
+#     objet possédé, un seul identifiant.
 SP=$(az ad sp show --id <client_id> --query id -o tsv)
 az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignments" --query "value" -o json
 az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/transitiveMemberOf" --query "value" -o json
 az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/oauth2PermissionGrants" --query "value" -o json
-                                       # trois fois [] : une liste vide
+az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?\$filter=principalId eq '$SP'" --query "value" -o json
+az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/ownedObjects" --query "value" -o json
+                                       # cinq fois [] : une liste vide
+az ad app credential list --id <client_id> --cert -o table   # une ligne : le certificat posé, aucun secret
+az ad app credential list --id <client_id> -o table          # aucune ligne : aucun mot de passe
 # 6c. La fin de l'identifiant : celle du certificat, au jour près.
 openssl x509 -enddate -noout -in ~/.config/eregion-banc/reader.crt   # notAfter=<…> GMT
 cat ~/.config/eregion-banc/reader.end                                 # la même date, en RFC 3339 (Z)
@@ -3855,8 +3861,13 @@ Le script refuse un dossier ou un fichier lisible par d'autres.
 sessions (SEC12). **Elle n'est pas pour autant sans identité** : hors de ce bloc `env`, l'aiguilleur
 `~/.local/bin/gh` retombe sur le `gh` du système, et `git` garde ta config globale (`docs/sessions.md`,
 « Ce que la bascule ne ferme pas seule ») ; un `az` nu lit `~/.azure`, ton `az login`. **Sans les
-variables ci-dessous, elle a tes identifiants** (GitHub, Azure) tant qu'ils sont sur le poste ;
-**avec elles, aucun** : ni pour pousser, ni pour ouvrir une PR, ni pour un `az` hors du script.
+variables ci-dessous, elle a tes identifiants** (GitHub, Azure) tant qu'ils sont sur le poste.
+**Elle hérite aussi de l'environnement du shell qui la lance** : si `.envrc` y a été sourcé, elle a
+`GLORFINDEL_AZURE_CLIENT_SECRET` et les autres secrets, des `ARM_*` (un `terraform` ou un SDK de la
+session les emploie : le script ne les retire que pour son propre `az`), et un `GH_TOKEN` ou
+`GITHUB_TOKEN` exporté passe outre `GH_CONFIG_DIR`. **Lance-la donc d'un terminal neuf, où `.envrc`
+n'a jamais été sourcé** (ni `direnv` actif sur `~/eregion-banc/`). Avec les variables ci-dessous et
+ce terminal neuf, elle n'a aucun de tes identifiants, hors ce qui reste ouvert (plus bas).
 
 Le dossier contient un `.claude/settings.local.json` à lui. C'est **ton fichier** : une session ne
 l'écrit pas, ce dépôt non plus. Remplace `<toi>` par ton utilisateur (des chemins absolus : le bloc
@@ -3890,13 +3901,33 @@ l'écrit pas, ce dépôt non plus. Remplace `<toi>` par ton utilisateur (des che
 - les `deny`, en option : `git push` et `gh` refusés avant même de partir. Une ceinture : la session
   n'a rien à pousser.
 
-Ce qui reste ouvert : une clé SSH chargée dans un agent (`SSH_AUTH_SOCK`) sert encore à `git push` en
-SSH. Le retrait de tes identifiants du poste (`docs/sessions.md`, « Retirer tes identifiants du poste
-des sessions ») le ferme ; la règle `deny` ci-dessus, en attendant. La session lit le dépôt (les
-règles, les docs) par `--add-dir`. Son premier message :
+**Au premier geste de la session**, vérifier les seuls noms (jamais les valeurs) :
+
+```bash
+env | cut -d= -f1 | grep -E '^(ARM_|AZURE_|GH_|GITHUB_)|SECRET|TOKEN'
+                                       # AZURE_CONFIG_DIR et GH_CONFIG_DIR, rien d'autre
+                                       # (CLAUDE_CODE_OAUTH_TOKEN, si tu t'en sers : l'accès au modèle de la session)
+```
+
+Le script fait la même vérification : `login`, `query` et `verify` refusent une session qui a hérité
+d'une variable `ARM_*`, `AZURE_*` (hors `AZURE_CONFIG_DIR`), `GH_*` (hors `GH_CONFIG_DIR`),
+`GITHUB_*`, ou dont le nom contient `SECRET` ou `TOKEN` (hors `CLAUDE_CODE_*` et `ANTHROPIC_*`,
+l'accès au modèle). Il en dit les noms, jamais les valeurs. `logout` reste permis : effacer les
+jetons de la lecture ne coûte rien.
+
+Ce qui reste ouvert :
+- **un secret hérité du shell de lancement** sous un nom que ni le script ni la vérification ne
+  reconnaissent (un `PASSWORD`, une `*_KEY`) : d'où le terminal neuf, plutôt que la liste ;
+- **une clé SSH chargée dans un agent** (`SSH_AUTH_SOCK`) sert encore à `git push` en SSH. Le retrait
+  de tes identifiants du poste (`docs/sessions.md`, « Retirer tes identifiants du poste des
+  sessions ») le ferme ; la règle `deny` ci-dessus, en attendant.
+
+La session lit le dépôt (les règles, les docs) par `--add-dir`. Son premier message :
 
 > Tu es la session Banc d'Eregion. Lis ~/eregion/CLAUDE.md, puis ~/eregion/docs/operations.md,
-> « L'identité de lecture du banc (BRO1) ». Tu lis les détections et les rapports du banc par
+> « L'identité de lecture du banc (BRO1) ». Ton premier geste : la vérification des noms de ton
+> environnement (« La remise à la session Banc ») ; autre chose qu'`AZURE_CONFIG_DIR` et
+> `GH_CONFIG_DIR`, tu t'arrêtes et tu le dis. Tu lis les détections et les rapports du banc par
 > `python3 ~/eregion/scripts/bench_reader.py` seul. Tu n'écris rien, nulle part ; une action sur le banc
 > ou sur H0 reste à Jonathan.
 
@@ -3943,6 +3974,8 @@ Le workspace est celui du profil, jamais un argument.
 
 ### La rotation et le retrait
 
+- **Une fin déjà passée ne bloque pas le plan** (pas de borne basse dans la précondition : des plans
+  stables). L'identité ne se connecte simplement plus, et `status` dit la fin posée « PASSÉE ».
 - **La rotation**, avant la fin du certificat (`status` la dit) : `make celebrimbor-reader-key`, puis
   `make celebrimbor-reader-plan`. Le plan doit montrer le seul certificat remplacé (`1 to add, 0 to
   change, 1 to destroy`). Ensuite `make celebrimbor-reader-up YES=1`, et un nouveau `login` de la
@@ -3959,12 +3992,13 @@ Le workspace est celui du profil, jamais un argument.
 
 - **La règle** : aucune session de code ne lit ni n'utilise `~/.config/eregion-banc/` ou
   `scripts/bench_reader.py` (`docs/sessions.md`, « Ce qui reste à Jonathan »).
-- **Le garde-fou** : `scripts/bench_reader.py` refuse avant tout appel dans trois cas : quand
+- **Le garde-fou** : `scripts/bench_reader.py` refuse avant tout appel : quand
   `EREGION_AGENT_SESSION` est posé (les sessions du dépôt, SEC12), quand le dossier courant est un
   worktree de lot (`.claude/worktrees/`), et, pour `login`, `query`, `verify` et `logout`, quand
   `EREGION_BANC_SESSION` n'est pas `1` ou qu'`AZURE_CONFIG_DIR` ne nomme pas
-  `~/.config/eregion-banc/az`. Le `az` d'un lot garde `~/.azure` : il n'y trouve jamais le jeton de
-  la session Banc.
+  `~/.config/eregion-banc/az` ; pour `login`, `query` et `verify`, quand la session a hérité d'un
+  identifiant du shell qui l'a lancée (ci-dessus). Le `az` d'un lot garde `~/.azure` : il n'y trouve
+  jamais le jeton de la session Banc.
 - **Ce que le garde-fou ne ferme pas** : toutes les sessions tournent sous le même utilisateur Unix.
   Une session qui le veut lit la clé. Ce qui la borne alors, c'est le droit lui-même : une lecture,
   sur un seul workspace, pour 90 jours au plus. Pour fermer davantage (ton fichier) : une règle de
@@ -3987,7 +4021,10 @@ Le workspace est celui du profil, jamais un argument.
 - que `verify` reçoive bien `AuthorizationFailed` ;
 - qu'Entra accepte la fin posée (`end_date`, la fin du certificat au format RFC 3339) et la rende
   telle quelle : `certificate_end_date` après l'apply, `reader.end` et `openssl x509 -enddate`
-  donnent la même date (geste 6c).
+  donnent la même date (geste 6c) ;
+- qu'un second `make celebrimbor-reader-plan`, juste après l'apply, ne montre **aucun changement**.
+  Si Graph rend `end_date` sous une autre forme (des millisecondes, un autre fuseau), le certificat
+  serait remplacé à chaque plan : s'arrêter, et le dire avant le prochain apply.
 
 ---
 

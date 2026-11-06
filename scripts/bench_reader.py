@@ -25,7 +25,9 @@ A code session never uses it (docs/sessions.md): every command but `status` refu
 EREGION_AGENT_SESSION set (the sessions of the repository, SEC12), or a lot's worktree
 (.claude/worktrees/) as the current directory; `login`, `query`, `verify` and `logout` also want
 EREGION_BANC_SESSION=1 and AZURE_CONFIG_DIR set to the reader's az/, which only the Banc session's
-own settings set (without the latter, a bare `az` in the session reads the operator's ~/.azure). A
+own settings set (without the latter, a bare `az` in the session reads the operator's ~/.azure);
+`login`, `query` and `verify` refuse a session that inherited a credential from the shell that
+launched it (ARM_*, AZURE_*, GH_*, GITHUB_*, *SECRET*, *TOKEN*: the names said, never the values). A
 guard against a mistake,
 not against a session that means harm: every session runs as the same Unix user
 (docs/design/modele-de-menace.md, frontière 8).
@@ -45,7 +47,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 GUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -208,6 +210,21 @@ def end_date(enddate: str) -> str:
     return when.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def posed_end_said(path: Path, now: datetime | None = None) -> str:
+    """What `status` says of reader.end: the date, and PASSÉE once past — the plan does not stop on a
+    past end (no lower bound: stable plans), the identity just no longer signs in."""
+    if not path.is_file():
+        return "absente"
+    text = path.read_text(encoding="utf-8").strip()
+    try:
+        when = datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return f"illisible ({text[:40]!r})"
+    if when <= (now or datetime.now(timezone.utc)):
+        return f"{text} — PASSÉE : une paire neuve, make celebrimbor-reader-key, puis make celebrimbor-reader-plan"
+    return text
+
+
 def keygen(d: Path, days: int, openssl: str = "openssl") -> None:
     """A fresh RSA key, its self-signed certificate and the certificate's end; the key never leaves `d`."""
     _ensure_dir(d)
@@ -275,10 +292,37 @@ def write_args(profile: dict[str, str]) -> list[str]:
             "--operation", "merge", "--tags", f"{VERIFY_TAG}=1", "--output", "none"]
 
 
+# What the Banc session may hold of the kind: its own az and gh directories. The model's own
+# credentials (CLAUDE_CODE_*, ANTHROPIC_*) are the session's, never a cloud's nor GitHub's.
+_KEPT = ("AZURE_CONFIG_DIR", "GH_CONFIG_DIR")
+_MODEL = ("CLAUDE_CODE_", "ANTHROPIC_")
+
+
+def inherited_credentials(env: dict[str, str] | None = None) -> list[str]:
+    """The names, never the values, of the credentials the session inherited from the shell that
+    launched it (.envrc sourced there: GLORFINDEL_AZURE_CLIENT_SECRET, ARM_*; an exported GH_TOKEN
+    passes over GH_CONFIG_DIR). The script strips them from its own az; a terraform, an SDK or a gh
+    of the session would use them."""
+    env = os.environ if env is None else env
+    names = []
+    for name in env:
+        if name in _KEPT or name.startswith(_MODEL):
+            continue
+        upper = name.upper()
+        if upper.startswith(("ARM_", "AZURE_", "GH_", "GITHUB_")) or "SECRET" in upper or "TOKEN" in upper:
+            names.append(name)
+    return sorted(names)
+
+
 def _session(d: Path) -> dict[str, str]:
     refusal = banc_session_refusal()
     if refusal:
         raise ReaderError(refusal)
+    leaked = inherited_credentials()
+    if leaked:
+        raise ReaderError(f"la session a hérité de {', '.join(leaked)} (le shell qui l'a lancée) : la relancer "
+                          "d'un terminal neuf, où .envrc n'a jamais été sourcé (docs/operations.md, « La remise "
+                          "à la session Banc »)")
     profile = load_profile(d)
     _private(d / "reader.pem", directory=False)
     _ensure_dir(d / "az")
@@ -323,8 +367,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"application {p['EREGION_BANC_CLIENT_ID']}, workspace {p['EREGION_BANC_WORKSPACE_ID']} ({ROLE})")
             print(f"certificat : {end.stdout.strip() or 'illisible'}")
             posed = d / "reader.end"
-            print(f"fin posée sur l'identifiant (reader.end) : "
-                  f"{posed.read_text(encoding='utf-8').strip() if posed.is_file() else 'absente'}")
+            print(f"fin posée sur l'identifiant (reader.end) : {posed_end_said(posed)}")
         elif a.cmd == "login":
             p = _session(d)
             res = _az(d, login_args(p, d))

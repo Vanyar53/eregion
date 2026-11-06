@@ -154,7 +154,8 @@ def test_a_private_key_beside_the_certificate_is_never_shown_by_the_plan(tmp_pat
     value was made sensitive: the whole file, in clear): the module copied to tmp (never the
     operator's tfvars nor state), its providers linked, a mock plan."""
     mod = tmp_path / "mod"
-    shutil.copytree(TF, mod, ignore=shutil.ignore_patterns(".terraform", "tests", "*.tfvars", "*.tfstate*"))
+    shutil.copytree(TF, mod, ignore=shutil.ignore_patterns(".terraform", "tests", "*.tfvars", "*.tfvars.json",
+                                                             "*.tfstate*"))
     (mod / ".terraform").symlink_to(TF / ".terraform", target_is_directory=True)
     (mod / "tests").mkdir()
     marker = "bm90IGEga2V5LCBhIG1hcmtlciB0aGF0IG11c3QgbmV2ZXIgYmUgc2hvd24"
@@ -378,10 +379,12 @@ def banc(tmp_path, monkeypatch):
     home.mkdir()
     work = tmp_path / "eregion-banc"
     work.mkdir()
-    env = {k: v for k, v in os.environ.items() if k not in ("EREGION_AGENT_SESSION", "EREGION_BANC_DAYS")}
+    # The Banc session launched from a fresh terminal: nothing inherited of the kind (the runner's own
+    # GITHUB_* and the like stripped).
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("EREGION_AGENT_SESSION", "EREGION_BANC_DAYS") and not br.inherited_credentials({k: v})}
     env.update({"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "HOME": str(home), "EREGION_BANC_DIR": str(d),
-                "EREGION_BANC_SESSION": "1", "AZURE_CONFIG_DIR": str(d / "az"), "FAKE_AZ_LOG": str(log),
-                "AZURE_CLIENT_SECRET": "the-operator-s", "ARM_SUBSCRIPTION_ID": "00000000-0000-0000-0000-000000000000"})
+                "EREGION_BANC_SESSION": "1", "AZURE_CONFIG_DIR": str(d / "az"), "FAKE_AZ_LOG": str(log)})
 
     def run(*args, extra=None, cwd=work, stdin=""):
         res = subprocess.run([sys.executable, str(SCRIPT), *args], env={**env, **(extra or {})}, cwd=cwd,
@@ -424,6 +427,35 @@ def test_a_code_session_is_refused_before_any_call(banc, tmp_path, extra, cwd_lo
     cwd.mkdir(parents=True, exist_ok=True)
     code, out, calls = banc(*cmd, extra=extra, cwd=cwd if cwd_lot else tmp_path / "eregion-banc")
     assert code == 1 and said in out and calls == []
+
+
+def test_az_runs_without_the_caller_s_azure_identity(tmp_path):
+    """Whatever reaches the script, its az never sees the caller's AZURE_* nor ARM_*."""
+    d = tmp_path / "banc"
+    env = br.az_env(d, {"PATH": "/usr/bin", "AZURE_CLIENT_SECRET": "the-operator-s", "AZURE_CONFIG_DIR": "/elsewhere",
+                        "ARM_SUBSCRIPTION_ID": "00000000-0000-0000-0000-000000000000"})
+    assert env == {"PATH": "/usr/bin", "AZURE_CONFIG_DIR": str(d / "az"), "AZURE_CORE_COLLECT_TELEMETRY": "no"}
+
+
+@pytest.mark.parametrize("name", ["GLORFINDEL_AZURE_CLIENT_SECRET", "ARM_CLIENT_ID", "AZURE_CLIENT_SECRET",
+                                  "AZURE_SUBSCRIPTION_ID", "GH_TOKEN", "GITHUB_TOKEN", "EREGION_DISCORD_TOKEN"])
+@pytest.mark.parametrize("cmd", [("login",), ("query", "Syslog"), ("verify",)])
+def test_a_credential_inherited_from_the_launching_shell_is_refused_before_any_call(banc, name, cmd):
+    """.envrc sourced in the shell that launched the session: a terraform, an SDK or a gh of the
+    session would use what the script strips from its own az. Refused, the name said, never the value."""
+    code, out, calls = banc(*cmd, extra={name: "the-operator-s-value"})
+    assert code == 1 and name in out and "terminal neuf" in out and calls == []
+    assert "the-operator-s-value" not in out
+
+
+def test_its_own_directories_and_the_model_s_credentials_are_not_inherited_ones(banc):
+    assert br.inherited_credentials({"AZURE_CONFIG_DIR": "x", "GH_CONFIG_DIR": "y", "CLAUDE_CODE_OAUTH_TOKEN": "z",
+                                     "ANTHROPIC_API_KEY": "w", "GIT_TERMINAL_PROMPT": "0", "PATH": "/bin"}) == []
+    code, out, calls = banc("login", extra={"GH_CONFIG_DIR": "/tmp/empty", "CLAUDE_CODE_OAUTH_TOKEN": "z"})
+    assert code == 0, out
+    # logout clears the reader's tokens, inherited credentials or not.
+    code, out, _ = banc("logout", extra={"GH_TOKEN": "x"})
+    assert code == 0, out
 
 
 def test_profile_writes_identifiers_alone_private(banc):
@@ -524,6 +556,20 @@ def test_keygen_a_short_pair_the_key_private_the_certificate_alone_for_terraform
 ])
 def test_the_certificate_s_end_in_rfc_3339(raw, rfc):
     assert br.end_date(raw) == rfc
+
+
+def test_status_says_a_posed_end_already_past(tmp_path):
+    """The plan does not stop on a past end (no lower bound, stable plans): status says it."""
+    from datetime import datetime, timezone
+    now = datetime(2026, 11, 6, tzinfo=timezone.utc)
+    end = tmp_path / "reader.end"
+    assert br.posed_end_said(end, now) == "absente"
+    end.write_text("2026-12-06T00:00:00Z\n")
+    assert br.posed_end_said(end, now) == "2026-12-06T00:00:00Z"
+    end.write_text("2026-11-01T00:00:00Z\n")
+    assert "PASSÉE" in br.posed_end_said(end, now) and "celebrimbor-reader-key" in br.posed_end_said(end, now)
+    end.write_text("demain\n")
+    assert "illisible" in br.posed_end_said(end, now)
 
 
 @pytest.mark.parametrize("raw", ["", "notAfter=Dec  6 12:00:00 2026", "notAfter=6/12/2026 GMT", "garbage GMT"])

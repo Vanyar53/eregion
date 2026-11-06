@@ -112,7 +112,9 @@ resource "azuread_application_certificate" "bench_reader" {
       error_message = "bench_reader_certificate_file : un seul bloc CERTIFICATE (PEM), et rien d'autre — absent, ou une clé privée à côté. Tirer la paire d'abord (make celebrimbor-reader-key) ; jamais la clé privée dans Terraform."
     }
     # Une identité à durée courte : la fin du certificat, 91 jours au plus après le plan (90, et un
-    # jour de marge pour l'heure du keygen).
+    # jour de marge pour l'heure du keygen). Pas de borne basse, ni de bloc check : une fin déjà
+    # passée passe le plan (des plans stables, des tests qui ne vieillissent pas) ; c'est
+    # `bench_reader.py status` qui la dit passée.
     precondition {
       condition     = can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", local.bench_reader_certificate_end)) && try(timecmp(local.bench_reader_certificate_end, timeadd(plantimestamp(), "2184h")) <= 0, false)
       error_message = "bench_reader_certificate_end_file : la fin du certificat en RFC 3339 (UTC), 91 jours au plus après le plan — absente, illisible ou trop lointaine. Tirer la paire (make celebrimbor-reader-key) : elle l'écrit."
